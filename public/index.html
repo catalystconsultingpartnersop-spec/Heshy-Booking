@@ -1,0 +1,748 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Heshy</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Source+Serif+4:wght@400;500;600&family=Inter:wght@400;500;600&display=swap" rel="stylesheet">
+<style>
+  :root{
+    --ink:#111111;
+    --muted:#6E6E6E;
+    --line:#DEDEDE;
+    --line-strong:#B8B8B8;
+    --paper:#FFFFFF;
+    --bg:#FBFBFA;
+  }
+  *{box-sizing:border-box;}
+  body{
+    margin:0;background:var(--bg);color:var(--ink);
+    font-family:'Inter',sans-serif;-webkit-font-smoothing:antialiased;
+  }
+  .wrap{max-width:640px;margin:0 auto;padding:0 24px 120px;}
+  .topbar{
+    display:flex;align-items:center;justify-content:space-between;
+    padding:32px 0 40px;border-bottom:1px solid var(--line);margin-bottom:40px;
+  }
+  .brand{font-family:'Source Serif 4',serif;font-size:20px;font-weight:500;}
+  .manage-link{
+    font-size:13px;color:var(--muted);background:none;border:none;cursor:pointer;
+    font-family:'Inter',sans-serif;padding:0;text-decoration:underline;text-underline-offset:3px;
+  }
+  .manage-link:hover{color:var(--ink);}
+
+  .step-label{font-size:13px;color:var(--muted);margin-bottom:8px;}
+  .step-line{height:2px;background:var(--line);margin-bottom:40px;position:relative;}
+  .step-line::after{
+    content:'';position:absolute;left:0;top:0;height:2px;background:var(--ink);
+    width:var(--pct,0%);transition:width .3s ease;
+  }
+
+  h1{font-family:'Source Serif 4',serif;font-weight:500;font-size:26px;margin:0 0 28px;}
+  .intro{font-size:15px;line-height:1.65;color:var(--ink);max-width:520px;margin:0 0 32px;}
+
+  .type-toggle{display:flex;gap:8px;margin-bottom:24px;}
+  .type-btn{
+    flex:1;padding:13px 0;border:1px solid var(--line-strong);border-radius:6px;text-align:center;
+    cursor:pointer;font-size:14px;font-weight:500;background:var(--paper);
+  }
+  .type-btn:hover{border-color:var(--ink);}
+  .type-btn.active{background:var(--ink);color:#fff;border-color:var(--ink);}
+
+  .day-strip{display:flex;gap:8px;margin-bottom:24px;overflow-x:auto;padding-bottom:2px;}
+  .day-cell{
+    flex:0 0 auto;width:64px;padding:12px 0;border:1px solid var(--line-strong);border-radius:6px;
+    text-align:center;cursor:pointer;background:var(--paper);
+  }
+  .day-cell:hover{border-color:var(--ink);}
+  .day-cell.active{background:var(--ink);border-color:var(--ink);}
+  .day-cell .dow{font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:.04em;}
+  .day-cell.active .dow{color:#BEBEBE;}
+  .day-cell .dnum{font-family:'Source Serif 4',serif;font-size:19px;margin-top:2px;}
+  .day-cell.active .dnum{color:#fff;}
+  .day-cell .dcount{font-size:10.5px;color:var(--muted);margin-top:2px;}
+  .day-cell.active .dcount{color:#BEBEBE;}
+  .time-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:8px;}
+  .time-cell{
+    border:1px solid var(--line-strong);border-radius:6px;padding:12px 10px;cursor:pointer;text-align:center;
+  }
+  .time-cell:hover{border-color:var(--ink);}
+  .time-cell.selected{background:var(--ink);border-color:var(--ink);}
+  .time-cell .time{font-size:14px;font-weight:500;}
+  .time-cell.selected .time{color:#fff;}
+  .time-cell .format{font-size:11px;color:var(--muted);margin-top:2px;}
+  .time-cell.selected .format{color:#BEBEBE;}
+
+  .day-title{font-size:14px;font-weight:600;margin:24px 0 10px;}
+  .day-title:first-child{margin-top:0;}
+  .slot-list{border-top:1px solid var(--line);}
+  .slot{
+    display:flex;align-items:center;justify-content:space-between;padding:16px 4px;
+    border-bottom:1px solid var(--line);cursor:pointer;
+  }
+  .slot:hover{background:#F4F4F2;}
+  .slot.selected{background:#EFEFED;}
+  .slot .time{font-size:15px;font-weight:500;}
+  .slot .format{font-size:13px;color:var(--muted);}
+  .slot .radio{
+    width:16px;height:16px;border-radius:50%;border:1.5px solid var(--line-strong);flex-shrink:0;
+  }
+  .slot.selected .radio{border-color:var(--ink);background:var(--ink);box-shadow:inset 0 0 0 3px #fff;}
+  .empty{color:var(--muted);font-size:14px;padding:24px 0;}
+
+  label{display:block;font-size:13px;font-weight:600;margin:20px 0 6px;}
+  label:first-of-type{margin-top:0;}
+  input[type=text],input[type=email],input[type=tel]{
+    width:100%;padding:11px 12px;border:1px solid var(--line-strong);border-radius:4px;font-size:14.5px;
+    font-family:'Inter',sans-serif;background:var(--paper);color:var(--ink);
+  }
+  .stripe-el{
+    padding:11px 12px;border:1px solid var(--line-strong);border-radius:4px;background:var(--paper);
+  }
+  .card-error{color:#A5433A;font-size:12.5px;margin-top:6px;min-height:16px;}
+  input:focus{outline:none;border-color:var(--ink);}
+  .row2{display:grid;grid-template-columns:1fr 1fr;gap:14px;}
+
+  .form-section{border-top:1px solid var(--line);padding-top:18px;margin-top:24px;}
+  .form-section.last{margin-bottom:8px;}
+  .section-title{font-size:12px;font-weight:600;text-transform:uppercase;letter-spacing:.05em;color:var(--muted);margin-bottom:14px;}
+
+  .fact{border-top:1px solid var(--line);padding-top:4px;margin:24px 0 8px;}
+  .fact-row{display:flex;justify-content:space-between;gap:16px;font-size:13.5px;padding:9px 0;border-bottom:1px solid var(--line);}
+  .fact-row:last-child{border-bottom:none;}
+  .fact-row span:first-child{color:var(--muted);flex:0 0 auto;}
+  .fact-row span:last-child{text-align:right;}
+
+  button.primary{
+    background:var(--ink);color:#fff;border:none;padding:14px 24px;font-size:14.5px;
+    font-weight:500;cursor:pointer;font-family:'Inter',sans-serif;border-radius:4px;
+  }
+  button.primary:hover{background:#2E2E2E;}
+  button.primary:disabled{background:#C7C7C7;cursor:not-allowed;}
+  button.ghost{
+    background:none;border:1px solid var(--line-strong);padding:13px 20px;font-size:14px;
+    cursor:pointer;color:var(--ink);font-family:'Inter',sans-serif;border-radius:4px;
+  }
+  button.ghost:hover{border-color:var(--ink);}
+  button.small{padding:7px 12px;font-size:12.5px;}
+  .btn-row{display:flex;gap:10px;margin-top:28px;}
+
+  .confirm{padding:56px 0 40px;}
+  .confirm-mark{
+    width:40px;height:40px;border-radius:50%;background:var(--ink);color:#fff;
+    display:flex;align-items:center;justify-content:center;font-size:18px;margin-bottom:20px;
+  }
+  .confirm h1{margin-bottom:8px;}
+  .confirm p{color:var(--muted);font-size:14.5px;line-height:1.6;margin:0 0 32px;}
+  .join-block{margin-top:24px;}
+  .join-block .section-title{margin-bottom:8px;}
+  .join-link{color:var(--ink);font-size:14.5px;text-decoration:underline;text-underline-offset:3px;word-break:break-all;}
+  .location-text{font-size:14.5px;line-height:1.6;color:var(--ink);}
+
+  /* Admin */
+  h2.sect{font-family:'Source Serif 4',serif;font-weight:500;font-size:17px;margin:0 0 14px;}
+  .admin-block{margin-bottom:44px;padding-bottom:44px;border-bottom:1px solid var(--line);}
+  .admin-block:last-child{border-bottom:none;}
+  .admin-grid{display:grid;grid-template-columns:1fr 1fr 1fr;gap:10px;align-items:end;}
+  select{
+    width:100%;padding:10px;border:1px solid var(--line-strong);border-radius:4px;font-size:14px;
+    font-family:'Inter',sans-serif;background:var(--paper);
+  }
+  .row{
+    display:flex;align-items:center;justify-content:space-between;padding:14px 0;
+    border-bottom:1px solid var(--line);font-size:14px;
+  }
+  .slot-list-wrap{margin-top:24px;border-top:1px solid var(--line);}
+  .day-toggle-row{display:flex;gap:6px;}
+  .day-toggle{
+    width:34px;height:34px;border:1px solid var(--line-strong);border-radius:6px;display:flex;
+    align-items:center;justify-content:center;font-size:12.5px;font-weight:600;cursor:pointer;
+  }
+  .day-toggle:hover{border-color:var(--ink);}
+  .day-toggle.active{background:var(--ink);color:#fff;border-color:var(--ink);}
+  .row .main{font-weight:500;}
+  .row .sub{color:var(--muted);font-size:12.5px;margin-top:2px;}
+  .tag{font-size:11px;color:var(--muted);border:1px solid var(--line-strong);border-radius:3px;padding:2px 7px;text-transform:capitalize;}
+  .tag.status-scheduled{color:var(--muted);border-color:var(--line-strong);}
+  .tag.status-completed{color:var(--ink);border-color:var(--ink);}
+  .tag.status-charged{background:var(--ink);color:#fff;border-color:var(--ink);}
+  .session{border-bottom:1px solid var(--line);padding:20px 0;}
+  .session:last-child{border-bottom:none;}
+  .session-top{display:flex;justify-content:space-between;align-items:flex-start;}
+  .session-name{font-weight:600;font-size:14.5px;}
+  .session-meta{font-size:12.5px;color:var(--muted);margin-top:2px;}
+  .session-format{font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:.04em;margin-top:4px;}
+  .session-controls{margin-top:14px;padding:14px;background:#F7F7F5;border-radius:6px;}
+  .session-controls label:first-of-type{margin-top:0;}
+  .session-actions{margin-top:14px;}
+  textarea{
+    width:100%;padding:10px 11px;border:1px solid var(--line-strong);border-radius:4px;font-size:14px;
+    font-family:'Inter',sans-serif;min-height:56px;resize:vertical;
+  }
+  .timer{font-family:'Source Serif 4',serif;font-size:20px;}
+  .note{font-size:12px;color:var(--muted);margin-top:6px;}
+  .client-block{border-bottom:1px solid var(--line);padding:20px 0;}
+  .client-block:last-child{border-bottom:none;}
+  .client-top{display:flex;justify-content:space-between;align-items:baseline;margin-bottom:10px;}
+  .client-name{font-weight:600;font-size:14.5px;}
+  .client-total{font-size:12.5px;color:var(--muted);}
+  .hist-line{display:flex;justify-content:space-between;font-size:13.5px;padding:6px 0;color:var(--ink);}
+  .hist-line span:last-child{color:var(--muted);}
+</style>
+</head>
+<body>
+<div class="wrap" id="app"></div>
+
+<script src="https://js.stripe.com/v3/"></script>
+<script>
+const STRIPE_PUBLISHABLE_KEY = 'pk_test_51TsrEPPAxQObgqV7hZVPsalUZBxzvxEN4ToWKzsNobT91PIOzG7w4FdTpopUvFcaNB7eb1v03bZeUjhtdYdDyijO00wNAKksoG';
+const stripe = Stripe(STRIPE_PUBLISHABLE_KEY);
+const elements = stripe.elements();
+const cardElement = elements.create('card', {
+  style: { base: { fontSize: '14.5px', fontFamily: 'Inter, sans-serif', color: '#111111' } }
+});
+let cardMounted = false;
+let cardComplete = false;
+let cardErrorMsg = '';
+cardElement.on('change', (e)=>{
+  cardComplete = e.complete;
+  cardErrorMsg = e.error ? e.error.message : '';
+  const errEl = document.getElementById('card-error');
+  if(errEl) errEl.textContent = cardErrorMsg;
+  const btn = document.getElementById('confirmBtn');
+  if(btn) btn.disabled = !(clientForm.name && clientForm.email && clientForm.phone && cardComplete) || submitting;
+});
+
+let state = { slots: [], bookings: [], settings: { meetLink: '', location: '' }, availability: {
+  virtual: [
+    { id:'r1', days:[1,2,3,4], start:'11:00', end:'13:00' },
+    { id:'r2', days:[5], start:'10:30', end:'12:30' },
+    { id:'r3', days:[0], start:'10:30', end:'11:30' }
+  ],
+  'in-person': [
+    { id:'r4', days:[1,2,3,4], start:'11:00', end:'13:00' }
+  ]
+} };
+const DOW = ['Sun','Mon','Tue','Wed','Thu','Fri','Sat'];
+function timeToMin(t){ const [h,m] = t.split(':').map(Number); return h*60+m; }
+function pad2(n){ return String(n).padStart(2,'0'); }
+function dateStr(d){ return d.getFullYear()+'-'+pad2(d.getMonth()+1)+'-'+pad2(d.getDate()); }
+function generateSlotsFromRules(weeksAhead){
+  const existing = new Set(state.slots.map(s=>s.date+'|'+s.time+'|'+s.type));
+  const today = new Date(); today.setHours(0,0,0,0);
+  const added = [];
+  for(let i=0;i<weeksAhead*7;i++){
+    const d = new Date(today); d.setDate(d.getDate()+i);
+    const dow = d.getDay();
+    ['virtual','in-person'].forEach(type=>{
+      (state.availability[type]||[]).forEach(rule=>{
+        if(rule.days.includes(dow)){
+          const ds = dateStr(d);
+          const key = ds+'|'+rule.start+'|'+type;
+          if(!existing.has(key)){
+            const dur = timeToMin(rule.end) - timeToMin(rule.start);
+            if(dur > 0){
+              const slot = { id: uid(), date: ds, time: rule.start, duration: dur, type };
+              state.slots.push(slot);
+              existing.add(key);
+              added.push(slot);
+            }
+          }
+        }
+      });
+    });
+  }
+  return added;
+}
+let view = 'client';
+let bookingStep = 1;
+let selectedSlot = null;
+let selectedDay = null;
+let selectedType = 'virtual';
+let clientForm = { name:'', email:'', phone:'' };
+let submitting = false;
+let runningTimer = {};
+let timerDisplay = {};
+let newSlot = { date:'', time:'', duration:60, type:'virtual' };
+let adminType = 'virtual';
+function selectAdminType(t){ adminType = t; newSlot.type = t; render(); }
+
+function uid(){ return Math.random().toString(36).slice(2,10); }
+
+async function loadState(){
+  try{
+    const r = await fetch('/api/state');
+    const data = await r.json();
+    if(data){ state = data; }
+    if(!state.settings) state.settings = { meetLink:'', location:'' };
+    if(!state.availability) state.availability = { virtual: [], 'in-person': [] };
+    const newlyAdded = generateSlotsFromRules(8);
+    if(newlyAdded.length > 0) await saveState();
+  }catch(e){ console.error('load failed', e); }
+  render();
+}
+async function saveState(){
+  try{
+    await fetch('/api/state', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(state)
+    });
+  }catch(e){ console.error('save failed', e); }
+}
+
+function fmtDate(d){
+  const dt = new Date(d+'T00:00:00');
+  return dt.toLocaleDateString('en-US',{weekday:'short', month:'short', day:'numeric'});
+}
+function fmtTime(t){
+  const [h,m] = t.split(':').map(Number);
+  const ampm = h>=12?'PM':'AM';
+  const h12 = h%12===0?12:h%12;
+  return h12+':'+String(m).padStart(2,'0')+' '+ampm;
+}
+function money(n){ return '$'+n.toFixed(2); }
+
+function openSlots(){
+  const bookedIds = new Set(state.bookings.map(b=>b.slotId));
+  return state.slots.filter(s=>!bookedIds.has(s.id) && s.type===selectedType).sort((a,b)=>(a.date+a.time).localeCompare(b.date+b.time));
+}
+function groupByDate(slots){
+  const g = {};
+  slots.forEach(s=>{ (g[s.date]=g[s.date]||[]).push(s); });
+  return g;
+}
+
+function selectSlot(id){ selectedSlot = state.slots.find(s=>s.id===id); render(); }
+function selectDay(d){ selectedDay = d; selectedSlot = null; render(); }
+function selectType(t){ selectedType = t; selectedDay = null; selectedSlot = null; render(); }
+function goStep(n){ bookingStep = n; render(); }
+function toggleView(){
+  view = view==='client' ? 'admin' : 'client';
+  if(view==='client'){
+    bookingStep=1; selectedSlot=null; clientForm={name:'',email:'',phone:''};
+    cardComplete=false; cardErrorMsg=''; if(cardElement) cardElement.clear();
+  }
+  render();
+}
+
+async function confirmBooking(){
+  if(!clientForm.name || !clientForm.email || !clientForm.phone || !cardComplete || submitting) return;
+  submitting = true; render();
+
+  try{
+    const setupRes = await fetch('/api/create-setup-intent', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name: clientForm.name, email: clientForm.email, phone: clientForm.phone })
+    });
+    const setupData = await setupRes.json();
+    if(setupData.error){ throw new Error(setupData.error); }
+
+    const result = await stripe.confirmCardSetup(setupData.clientSecret, {
+      payment_method: {
+        card: cardElement,
+        billing_details: { name: clientForm.name, email: clientForm.email, phone: clientForm.phone }
+      }
+    });
+    if(result.error){ throw new Error(result.error.message); }
+
+    state.bookings.push({
+      id: uid(), slotId: selectedSlot.id, date: selectedSlot.date, time: selectedSlot.time,
+      durationMin: selectedSlot.duration, type: selectedSlot.type,
+      clientName: clientForm.name, clientEmail: clientForm.email, clientPhone: clientForm.phone,
+      stripeCustomerId: setupData.customerId, status: 'scheduled',
+      meetLink:'', summary:'', actualMinutes: null, amount: null, createdAt: Date.now()
+    });
+    await saveState();
+    submitting = false;
+    bookingStep = 3; render();
+  }catch(err){
+    submitting = false;
+    cardErrorMsg = err.message || 'Something went wrong. Please try again.';
+    render();
+  }
+}
+
+let newRule = { days: [], start:'', end:'' };
+function toggleRuleDay(d){
+  const i = newRule.days.indexOf(d);
+  if(i>-1) newRule.days.splice(i,1); else newRule.days.push(d);
+  render();
+}
+async function addRule(){
+  if(newRule.days.length===0 || !newRule.start || !newRule.end) return;
+  state.availability[adminType].push({ id: uid(), days: newRule.days.slice(), start: newRule.start, end: newRule.end });
+  newRule = { days: [], start:'', end:'' };
+  generateSlotsFromRules(8);
+  await saveState(); render();
+}
+async function removeRule(id){
+  state.availability[adminType] = state.availability[adminType].filter(r=>r.id!==id);
+  await saveState(); render();
+}
+function daysLabel(days){
+  const sorted = days.slice().sort();
+  return sorted.map(d=>DOW[d]).join(', ');
+}
+function fmtTimeShort(t){ return fmtTime(t); }
+
+async function addSlot(){
+  if(!newSlot.date || !newSlot.time) return;
+  state.slots.push({ id: uid(), date:newSlot.date, time:newSlot.time, duration:Number(newSlot.duration), type:adminType });
+  newSlot = { date:'', time:'', duration:60, type:adminType };
+  await saveState(); render();
+}
+async function updateSettings(field, val){
+  state.settings[field] = val;
+  await saveState();
+}
+async function removeSlot(id){ state.slots = state.slots.filter(s=>s.id!==id); await saveState(); render(); }
+async function updateBooking(id, patch){
+  const b = state.bookings.find(x=>x.id===id); if(!b) return;
+  Object.assign(b, patch); await saveState(); render();
+}
+function startTimer(id){
+  if(runningTimer[id]) return;
+  timerDisplay[id] = timerDisplay[id] || 0;
+  runningTimer[id] = setInterval(()=>{ timerDisplay[id]++; renderTimerOnly(id); }, 1000);
+  render();
+}
+function stopTimer(id){
+  clearInterval(runningTimer[id]); delete runningTimer[id];
+  const mins = Math.max(1, Math.round((timerDisplay[id]||0)/60));
+  updateBooking(id, { actualMinutes: mins });
+}
+function renderTimerOnly(id){
+  const el = document.getElementById('timer-'+id);
+  if(el){
+    const s = timerDisplay[id]||0;
+    el.textContent = String(Math.floor(s/60)).padStart(2,'0')+':'+String(s%60).padStart(2,'0');
+  }
+}
+async function chargeAndReceipt(id){
+  const btn = document.querySelector(`[data-charge="${id}"]`);
+  if(btn){ btn.disabled = true; btn.textContent = 'Charging…'; }
+  try{
+    const res = await fetch('/api/charge-booking', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ bookingId: id })
+    });
+    const data = await res.json();
+    if(data.error){ alert('Charge failed: ' + data.error); if(btn){ btn.disabled=false; } return; }
+    const r = await fetch('/api/state');
+    state = await r.json();
+    render();
+  }catch(e){
+    alert('Charge failed: ' + e.message);
+    if(btn){ btn.disabled = false; }
+  }
+}
+async function markComplete(id){ await updateBooking(id, { status:'completed' }); }
+
+function render(){
+  const app = document.getElementById('app');
+  app.innerHTML = view==='client' ? renderClient() : renderAdmin();
+  attachHandlers();
+}
+
+function renderClient(){
+  const pct = bookingStep===1 ? 10 : bookingStep===2 ? 55 : 100;
+  const slots = openSlots();
+  const grouped = groupByDate(slots);
+  const dates = Object.keys(grouped).sort();
+
+  let inner = '';
+  if(bookingStep===1){
+    inner += `<h1>Book a session</h1>`;
+    inner += `<div class="type-toggle">
+      <div class="type-btn ${selectedType==='virtual'?'active':''}" data-type="virtual">Online</div>
+      <div class="type-btn ${selectedType==='in-person'?'active':''}" data-type="in-person">In person</div>
+    </div>`;
+    if(dates.length===0){
+      inner += `<div class="empty">No open ${selectedType==='virtual'?'online':'in-person'} times right now.</div>`;
+    } else {
+      if(!selectedDay || !dates.includes(selectedDay)) selectedDay = dates[0];
+      inner += `<div class="day-strip">`;
+      dates.forEach(d=>{
+        const dt = new Date(d+'T00:00:00');
+        const dow = dt.toLocaleDateString('en-US',{weekday:'short'});
+        const dnum = dt.getDate();
+        const active = d===selectedDay ? 'active' : '';
+        inner += `<div class="day-cell ${active}" data-day="${d}">
+          <div class="dow">${dow}</div>
+          <div class="dnum">${dnum}</div>
+          <div class="dcount">${grouped[d].length}</div>
+        </div>`;
+      });
+      inner += `</div>`;
+      inner += `<div class="time-grid">`;
+      grouped[selectedDay].forEach(s=>{
+        const sel = selectedSlot && selectedSlot.id===s.id ? 'selected' : '';
+        inner += `<div class="time-cell ${sel}" data-slot="${s.id}">
+          <div class="time">${fmtTime(s.time)}</div>
+          <div class="format">${s.duration} min</div>
+        </div>`;
+      });
+      inner += `</div>`;
+      inner += `<div class="btn-row"><button class="primary" id="toStep2" ${selectedSlot?'':'disabled'}>Continue</button></div>`;
+    }
+  } else if(bookingStep===2){
+    inner += `<h1>Your details</h1>`;
+    inner += `
+      <div class="fact">
+        <div class="fact-row"><span>Time</span><span>${fmtDate(selectedSlot.date)}, ${fmtTime(selectedSlot.time)}</span></div>
+        <div class="fact-row"><span>Format</span><span>${selectedSlot.type==='virtual'?'Video call':'In person'}</span></div>
+        <div class="fact-row"><span>Rate</span><span>$500 per hour</span></div>
+        <div class="fact-row"><span>Charged</span><span>After the session, for actual time used</span></div>
+        <div class="fact-row"><span>Receipt</span><span>Emailed automatically once charged</span></div>
+      </div>
+      <div class="form-section">
+        <div class="section-title">Contact</div>
+        <label>Name</label>
+        <input type="text" id="f-name" value="${clientForm.name}">
+        <div class="row2">
+          <div><label>Email</label><input type="email" id="f-email" value="${clientForm.email}"></div>
+          <div><label>Phone</label><input type="tel" id="f-phone" value="${clientForm.phone}"></div>
+        </div>
+      </div>
+      <div class="form-section last">
+        <div class="section-title">Payment</div>
+        <label>Card</label>
+        <div id="card-element" class="stripe-el"></div>
+        <div id="card-error" class="card-error"></div>
+      </div>
+      <div class="btn-row">
+        <button class="ghost" id="backTo1" ${submitting?'disabled':''}>Back</button>
+        <button class="primary" id="confirmBtn" ${(clientForm.name && clientForm.email && clientForm.phone && cardComplete && !submitting) ? '' : 'disabled'}>${submitting?'Booking…':'Book session'}</button>
+      </div>
+    `;
+  } else {
+    inner += `
+      <div class="confirm">
+        <div class="confirm-mark">&#10003;</div>
+        <h1>Booked.</h1>
+        <p>A confirmation is on its way to your email.</p>
+        <div class="fact">
+          <div class="fact-row"><span>Time</span><span>${fmtDate(selectedSlot.date)}, ${fmtTime(selectedSlot.time)}</span></div>
+          <div class="fact-row"><span>Format</span><span>${selectedSlot.type==='virtual'?'Video call':'In person'}</span></div>
+          <div class="fact-row"><span>Rate</span><span>$500 per hour, charged after the session</span></div>
+        </div>
+        ${selectedSlot.type==='virtual'
+          ? `<div class="join-block"><div class="section-title">Join link</div><a href="${state.settings.meetLink||'#'}" class="join-link">${state.settings.meetLink||'Link will be sent before the session'}</a></div>`
+          : `<div class="join-block"><div class="section-title">Location</div><div class="location-text">${(state.settings.location||'Address will be sent before the session').replace(/\n/g,'<br>')}</div></div>`}
+      </div>
+    `;
+  }
+
+  return `
+    <div class="topbar"><div class="brand">Heshy</div><button class="manage-link" id="toggleView">Manage</button></div>
+    <div class="step-label">Step ${bookingStep} of 3</div>
+    <div class="step-line" style="--pct:${pct}%"></div>
+    ${inner}
+  `;
+}
+
+function renderAdmin(){
+  const bookedIds = new Set(state.bookings.map(b=>b.slotId));
+  const typeSlots = state.slots.filter(s=>s.type===adminType);
+  let rulesHtml = (state.availability[adminType]||[]).length===0 ? `<div class="empty">No weekly pattern set.</div>` : '';
+  (state.availability[adminType]||[]).forEach(r=>{
+    rulesHtml += `
+      <div class="row">
+        <div><div class="main">${daysLabel(r.days)}</div><div class="sub">${fmtTimeShort(r.start)} &ndash; ${fmtTimeShort(r.end)}</div></div>
+        <button class="ghost small" data-remove-rule="${r.id}">Remove</button>
+      </div>`;
+  });
+  let slotsHtml = typeSlots.length===0 ? `<div class="empty">No ${adminType==='virtual'?'online':'in-person'} slots added yet.</div>` : '';
+  typeSlots.slice().sort((a,b)=>(a.date+a.time).localeCompare(b.date+b.time)).forEach(s=>{
+    const isBooked = bookedIds.has(s.id);
+    slotsHtml += `
+      <div class="row">
+        <div><div class="main">${fmtDate(s.date)}, ${fmtTime(s.time)}</div>
+        <div class="sub">${s.duration} min${isBooked?', booked':''}</div></div>
+        <button class="ghost small" data-remove-slot="${s.id}" ${isBooked?'disabled':''}>Remove</button>
+      </div>`;
+  });
+
+  const activeBookings = state.bookings.filter(b=>b.status!=='charged').sort((a,b)=>(a.date+a.time).localeCompare(b.date+b.time));
+  let bookingsHtml = activeBookings.length===0 ? `<div class="empty">No sessions in progress.</div>` : '';
+  activeBookings.forEach(b=>{
+    let controls = '';
+    if(b.type==='virtual'){
+      controls = `
+        <div class="session-controls">
+          <label>Google Meet link</label>
+          <input type="text" value="${b.meetLink||''}" data-meet="${b.id}">
+          <label>Session summary</label>
+          <textarea data-summary="${b.id}">${b.summary||''}</textarea>
+          <div class="note">Connecting Google Calendar/Meet would create this link and pull the summary automatically.</div>
+        </div>
+      `;
+    } else {
+      const running = !!runningTimer[b.id];
+      controls = `
+        <div class="session-controls" style="display:flex;align-items:center;gap:16px;">
+          <span class="timer" id="timer-${b.id}">${String(Math.floor((timerDisplay[b.id]||0)/60)).padStart(2,'0')}:${String((timerDisplay[b.id]||0)%60).padStart(2,'0')}</span>
+          ${running ? `<button class="ghost small" data-stop-timer="${b.id}">Stop</button>` : `<button class="ghost small" data-start-timer="${b.id}">Start</button>`}
+        </div>`;
+    }
+    let action = '';
+    if(b.status==='scheduled'){
+      action = `<button class="primary small" data-mark-complete="${b.id}">Mark complete</button>`;
+    } else if(b.status==='completed'){
+      const mins = b.actualMinutes || b.durationMin;
+      const amt = Math.round((mins/60)*500*100)/100;
+      action = `<button class="primary small" data-charge="${b.id}">Charge ${money(amt)} and send receipt</button>`;
+    }
+    bookingsHtml += `
+      <div class="session">
+        <div class="session-top">
+          <div>
+            <div class="session-name">${b.clientName}</div>
+            <div class="session-meta">${fmtDate(b.date)}, ${fmtTime(b.time)}, ${b.durationMin} min scheduled${b.actualMinutes?', '+b.actualMinutes+' min actual':''}</div>
+            <div class="session-format">${b.type==='virtual'?'Video call':'In person'}</div>
+          </div>
+          <span class="tag status-${b.status}">${b.status}</span>
+        </div>
+        ${controls}
+        ${action?`<div class="session-actions">${action}</div>`:''}
+      </div>`;
+  });
+
+  const chargedBookings = state.bookings.filter(b=>b.status==='charged');
+  const byClient = {};
+  chargedBookings.forEach(b=>{ (byClient[b.clientEmail]=byClient[b.clientEmail]||{name:b.clientName,sessions:[]}).sessions.push(b); });
+  let historyHtml = Object.keys(byClient).length===0 ? `<div class="empty">No billed sessions yet.</div>` : '';
+  Object.values(byClient).forEach(c=>{
+    const total = c.sessions.reduce((sum,s)=>sum+(s.amount||0),0);
+    historyHtml += `<div class="client-block"><div class="client-top"><div class="client-name">${c.name}</div><div class="client-total">${c.sessions.length} session${c.sessions.length>1?'s':''} &middot; ${money(total)} total</div></div>`;
+    c.sessions.sort((a,b)=>b.createdAt-a.createdAt).forEach(s=>{
+      historyHtml += `<div class="hist-line"><span>${fmtDate(s.date)}, ${s.actualMinutes||s.durationMin} min</span><span>${money(s.amount||0)}</span></div>`;
+    });
+    historyHtml += `</div>`;
+  });
+
+  return `
+    <div class="topbar"><div class="brand">Heshy — Manage</div><button class="manage-link" id="toggleView">Back to booking</button></div>
+
+    <div class="admin-block">
+      <h2 class="sect">Settings</h2>
+      <label>Video call link (Google Meet)</label>
+      <input type="text" id="set-meet" placeholder="https://meet.google.com/xxx-xxxx-xxx" value="${state.settings.meetLink}">
+      <label>In-person location and instructions</label>
+      <textarea id="set-location" placeholder="Address, parking, floor, buzzer code, etc.">${state.settings.location}</textarea>
+      <div class="note">Sent automatically on every confirmation, based on which format the client picked.</div>
+    </div>
+
+    <div class="admin-block">
+      <h2 class="sect">Availability</h2>
+      <div class="type-toggle">
+        <div class="type-btn ${adminType==='virtual'?'active':''}" data-admin-type="virtual">Online</div>
+        <div class="type-btn ${adminType==='in-person'?'active':''}" data-admin-type="in-person">In person</div>
+      </div>
+
+      <div class="section-title" style="margin-top:24px;">Weekly pattern</div>
+      ${rulesHtml}
+      <div class="day-toggle-row">
+        ${DOW.map((d,i)=>`<div class="day-toggle ${newRule.days.includes(i)?'active':''}" data-rule-day="${i}">${d[0]}</div>`).join('')}
+      </div>
+      <div class="row2" style="margin-top:12px;">
+        <div><label>Start time</label><input type="text" id="nr-start" placeholder="HH:MM" value="${newRule.start}"></div>
+        <div><label>End time</label><input type="text" id="nr-end" placeholder="HH:MM" value="${newRule.end}"></div>
+      </div>
+      <div style="margin-top:14px;"><button class="ghost small" id="addRuleBtn">Add pattern</button></div>
+
+      <div class="section-title" style="margin-top:32px;">One-off slot</div>
+      <div class="admin-grid">
+        <div><label>Date</label><input type="text" id="ns-date" placeholder="YYYY-MM-DD" value="${newSlot.date}"></div>
+        <div><label>Time</label><input type="text" id="ns-time" placeholder="HH:MM" value="${newSlot.time}"></div>
+        <div><label>Duration</label>
+          <select id="ns-duration">
+            <option value="30" ${newSlot.duration==30?'selected':''}>30 min</option>
+            <option value="60" ${newSlot.duration==60?'selected':''}>60 min</option>
+            <option value="90" ${newSlot.duration==90?'selected':''}>90 min</option>
+          </select>
+        </div>
+      </div>
+      <div style="margin-top:16px;"><button class="primary small" id="addSlotBtn">Add ${adminType==='virtual'?'online':'in-person'} slot</button></div>
+      <div class="slot-list-wrap">
+        ${slotsHtml}
+      </div>
+    </div>
+
+    <div class="admin-block">
+      <h2 class="sect">Sessions</h2>
+      ${bookingsHtml}
+    </div>
+
+    <div class="admin-block">
+      <h2 class="sect">Client history</h2>
+      ${historyHtml}
+    </div>
+  `;
+}
+
+function mountCardElementIfNeeded(){
+  const mount = document.getElementById('card-element');
+  if(!mount || bookingStep !== 2) return;
+  if(mount.childElementCount === 0){
+    cardElement.mount('#card-element');
+  }
+  const errEl = document.getElementById('card-error');
+  if(errEl) errEl.textContent = cardErrorMsg;
+}
+
+function attachHandlers(){
+  const $ = id => document.getElementById(id);
+  const toggle = $('toggleView'); if(toggle) toggle.onclick = toggleView;
+
+  if(view==='client'){
+    document.querySelectorAll('[data-slot]').forEach(el=>{ el.onclick = ()=>selectSlot(el.getAttribute('data-slot')); });
+    document.querySelectorAll('[data-day]').forEach(el=>{ el.onclick = ()=>selectDay(el.getAttribute('data-day')); });
+    document.querySelectorAll('[data-type]').forEach(el=>{ el.onclick = ()=>selectType(el.getAttribute('data-type')); });
+    const to2 = $('toStep2'); if(to2) to2.onclick = ()=>goStep(2);
+    const back1 = $('backTo1'); if(back1) back1.onclick = ()=>goStep(1);
+    const map = {'f-name':'name','f-email':'email','f-phone':'phone'};
+    Object.keys(map).forEach(id=>{
+      const el = $(id);
+      if(el) el.oninput = e=>{
+        clientForm[map[id]] = e.target.value;
+        const btn = $('confirmBtn');
+        if(btn) btn.disabled = !(clientForm.name && clientForm.email && clientForm.phone && cardComplete) || submitting;
+      };
+    });
+    const conf = $('confirmBtn'); if(conf) conf.onclick = confirmBooking;
+    mountCardElementIfNeeded();
+  } else {
+    const dateEl=$('ns-date'), timeEl=$('ns-time'), durEl=$('ns-duration');
+    if(dateEl) dateEl.oninput = e=> newSlot.date = e.target.value;
+    if(timeEl) timeEl.oninput = e=> newSlot.time = e.target.value;
+    if(durEl) durEl.onchange = e=> newSlot.duration = e.target.value;
+    document.querySelectorAll('[data-admin-type]').forEach(el=>{ el.onclick = ()=>selectAdminType(el.getAttribute('data-admin-type')); });
+    document.querySelectorAll('[data-rule-day]').forEach(el=>{ el.onclick = ()=>toggleRuleDay(Number(el.getAttribute('data-rule-day'))); });
+    document.querySelectorAll('[data-remove-rule]').forEach(el=>{ el.onclick = ()=>removeRule(el.getAttribute('data-remove-rule')); });
+    const nrStart=$('nr-start'), nrEnd=$('nr-end');
+    if(nrStart) nrStart.oninput = e=> newRule.start = e.target.value;
+    if(nrEnd) nrEnd.oninput = e=> newRule.end = e.target.value;
+    const addRuleBtn = $('addRuleBtn'); if(addRuleBtn) addRuleBtn.onclick = addRule;
+    const meetEl=$('set-meet'), locEl=$('set-location');
+    if(meetEl) meetEl.onchange = e=> updateSettings('meetLink', e.target.value);
+    if(locEl) locEl.onchange = e=> updateSettings('location', e.target.value);
+    const addBtn = $('addSlotBtn'); if(addBtn) addBtn.onclick = addSlot;
+    document.querySelectorAll('[data-remove-slot]').forEach(el=>{ el.onclick = ()=>removeSlot(el.getAttribute('data-remove-slot')); });
+    document.querySelectorAll('[data-mark-complete]').forEach(el=>{ el.onclick = ()=>markComplete(el.getAttribute('data-mark-complete')); });
+    document.querySelectorAll('[data-charge]').forEach(el=>{ el.onclick = ()=>chargeAndReceipt(el.getAttribute('data-charge')); });
+    document.querySelectorAll('[data-start-timer]').forEach(el=>{ el.onclick = ()=>startTimer(el.getAttribute('data-start-timer')); });
+    document.querySelectorAll('[data-stop-timer]').forEach(el=>{ el.onclick = ()=>stopTimer(el.getAttribute('data-stop-timer')); });
+    document.querySelectorAll('[data-meet]').forEach(el=>{ el.onchange = ()=>updateBooking(el.getAttribute('data-meet'), { meetLink: el.value }); });
+    document.querySelectorAll('[data-summary]').forEach(el=>{ el.onchange = ()=>updateBooking(el.getAttribute('data-summary'), { summary: el.value }); });
+  }
+}
+
+loadState();
+</script>
+</body>
+</html>
