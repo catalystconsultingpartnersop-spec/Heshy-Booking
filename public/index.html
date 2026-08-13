@@ -229,25 +229,34 @@ function timeToMin(t){ const [h,m] = t.split(':').map(Number); return h*60+m; }
 function pad2(n){ return String(n).padStart(2,'0'); }
 function dateStr(d){ return d.getFullYear()+'-'+pad2(d.getMonth()+1)+'-'+pad2(d.getDate()); }
 function generateSlotsFromRules(weeksAhead){
-  const existing = new Set(state.slots.map(s=>s.date+'|'+s.time+'|'+s.type));
+  const bookedSlotIds = new Set(state.bookings.map(b=>b.slotId));
+  const existingMap = new Map();
+  state.slots.forEach(s=> existingMap.set(s.date+'|'+s.time+'|'+s.type, s));
   const today = new Date(); today.setHours(0,0,0,0);
   const added = [];
   for(let i=0;i<weeksAhead*7;i++){
     const d = new Date(today); d.setDate(d.getDate()+i);
     const dow = d.getDay();
+    const ds = dateStr(d);
     ['virtual','in-person'].forEach(type=>{
       (state.availability[type]||[]).forEach(rule=>{
         if(rule.days.includes(dow)){
-          const ds = dateStr(d);
-          const key = ds+'|'+rule.start+'|'+type;
-          if(!existing.has(key)){
-            const dur = timeToMin(rule.end) - timeToMin(rule.start);
-            if(dur > 0){
-              const slot = { id: uid(), date: ds, time: rule.start, duration: dur, type };
+          let cursor = timeToMin(rule.start);
+          const endMin = timeToMin(rule.end);
+          while(cursor + 60 <= endMin){
+            const timeStr = pad2(Math.floor(cursor/60))+':'+pad2(cursor%60);
+            const key = ds+'|'+timeStr+'|'+type;
+            const existing = existingMap.get(key);
+            if(!existing){
+              const slot = { id: uid(), date: ds, time: timeStr, duration: 60, type };
               state.slots.push(slot);
-              existing.add(key);
+              existingMap.set(key, slot);
               added.push(slot);
+            } else if(existing.duration !== 60 && !bookedSlotIds.has(existing.id)){
+              existing.duration = 60;
+              added.push(existing);
             }
+            cursor += 60;
           }
         }
       });
