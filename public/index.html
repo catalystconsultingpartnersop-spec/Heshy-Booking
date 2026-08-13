@@ -255,7 +255,9 @@ function generateSlotsFromRules(weeksAhead){
   }
   return added;
 }
-let view = 'client';
+const ADMIN_PASSWORD = 'Heshybooking123';
+let adminUnlocked = (typeof sessionStorage !== 'undefined' && sessionStorage.getItem('heshyAdminUnlocked') === '1');
+let view = (location.hash === '#manage') ? 'admin' : 'client';
 let bookingStep = 1;
 let selectedSlot = null;
 let selectedDay = null;
@@ -318,13 +320,23 @@ function selectSlot(id){ selectedSlot = state.slots.find(s=>s.id===id); render()
 function selectDay(d){ selectedDay = d; selectedSlot = null; render(); }
 function selectType(t){ selectedType = t; selectedDay = null; selectedSlot = null; render(); }
 function goStep(n){ bookingStep = n; render(); }
-function toggleView(){
-  view = view==='client' ? 'admin' : 'client';
-  if(view==='client'){
-    bookingStep=1; selectedSlot=null; clientForm={name:'',email:'',phone:''};
-    cardComplete=false; cardErrorMsg=''; if(cardElement) cardElement.clear();
-  }
+function backToClient(){
+  view = 'client'; history.replaceState(null, '', '#');
+  bookingStep=1; selectedSlot=null; clientForm={name:'',email:'',phone:''};
+  cardComplete=false; cardErrorMsg=''; if(cardElement) cardElement.clear();
   render();
+}
+async function tryAdminLogin(){
+  const input = document.getElementById('admin-pass');
+  const err = document.getElementById('admin-pass-err');
+  if(!input) return;
+  if(input.value === ADMIN_PASSWORD){
+    adminUnlocked = true;
+    sessionStorage.setItem('heshyAdminUnlocked', '1');
+    view = 'admin'; render();
+  } else {
+    if(err) err.textContent = 'Wrong password.';
+  }
 }
 
 async function confirmBooking(){
@@ -444,8 +456,24 @@ async function markComplete(id){ await updateBooking(id, { status:'completed' })
 
 function render(){
   const app = document.getElementById('app');
-  app.innerHTML = view==='client' ? renderClient() : renderAdmin();
+  if(view==='admin' && !adminUnlocked){
+    app.innerHTML = renderAdminGate();
+  } else {
+    app.innerHTML = view==='client' ? renderClient() : renderAdmin();
+  }
   attachHandlers();
+}
+
+function renderAdminGate(){
+  return `
+    <div class="topbar"><div class="brand">Heshy — Manage</div></div>
+    <div style="max-width:320px;margin-top:60px;">
+      <label>Password</label>
+      <input type="password" id="admin-pass" placeholder="">
+      <div id="admin-pass-err" class="card-error"></div>
+      <button class="primary" id="admin-login-btn" style="margin-top:14px;">Enter</button>
+    </div>
+  `;
 }
 
 function renderClient(){
@@ -538,7 +566,7 @@ function renderClient(){
   }
 
   return `
-    <div class="topbar"><div class="brand">Heshy</div><button class="manage-link" id="toggleView">Manage</button></div>
+    <div class="topbar"><div class="brand">Heshy</div></div>
     <div class="step-label">Step ${bookingStep} of 3</div>
     <div class="step-line" style="--pct:${pct}%"></div>
     ${inner}
@@ -626,7 +654,7 @@ function renderAdmin(){
   });
 
   return `
-    <div class="topbar"><div class="brand">Heshy — Manage</div><button class="manage-link" id="toggleView">Back to booking</button></div>
+    <div class="topbar"><div class="brand">Heshy — Manage</div><button class="manage-link" id="backToClientBtn">Back to booking</button></div>
 
     <div class="admin-block">
       <h2 class="sect">Settings</h2>
@@ -697,7 +725,12 @@ function mountCardElementIfNeeded(){
 
 function attachHandlers(){
   const $ = id => document.getElementById(id);
-  const toggle = $('toggleView'); if(toggle) toggle.onclick = toggleView;
+  const backBtn = $('backToClientBtn'); if(backBtn) backBtn.onclick = backToClient;
+  const loginBtn = $('admin-login-btn'); if(loginBtn) loginBtn.onclick = tryAdminLogin;
+  const passInput = $('admin-pass');
+  if(passInput) passInput.onkeydown = e=>{ if(e.key==='Enter') tryAdminLogin(); };
+
+  if(view==='admin' && !adminUnlocked) return;
 
   if(view==='client'){
     document.querySelectorAll('[data-slot]').forEach(el=>{ el.onclick = ()=>selectSlot(el.getAttribute('data-slot')); });
