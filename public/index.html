@@ -408,6 +408,7 @@ async function loadState(){
     if(!state.availability) state.availability = { virtual: [], 'in-person': [] };
     const newlyAdded = generateSlotsFromRules(8);
     if(newlyAdded.length > 0) await saveState();
+    await loadCalendarBusy();
   }catch(e){ console.error('load failed', e); }
   render();
 }
@@ -433,9 +434,29 @@ function fmtTime(t){
 }
 function money(n){ return '$'+n.toFixed(2); }
 
+let calendarBusy = [];
+let calendarConnected = false;
+function slotOverlapsBusy(slot){
+  const slotStart = new Date(slot.date+'T'+slot.time+':00');
+  const slotEnd = new Date(slotStart.getTime() + slot.duration*60000);
+  return calendarBusy.some(b=>{
+    const bStart = new Date(b.start), bEnd = new Date(b.end);
+    return slotStart < bEnd && slotEnd > bStart;
+  });
+}
+async function loadCalendarBusy(){
+  try{
+    const today = new Date();
+    const later = new Date(); later.setDate(later.getDate()+60);
+    const r = await fetch('/api/free-busy?timeMin='+today.toISOString()+'&timeMax='+later.toISOString());
+    const data = await r.json();
+    calendarConnected = !!data.connected;
+    calendarBusy = data.busy || [];
+  }catch(e){ calendarConnected = false; calendarBusy = []; }
+}
 function openSlots(){
   const bookedIds = new Set(state.bookings.map(b=>b.slotId));
-  return state.slots.filter(s=>!bookedIds.has(s.id) && s.type===selectedType).sort((a,b)=>(a.date+a.time).localeCompare(b.date+b.time));
+  return state.slots.filter(s=>!bookedIds.has(s.id) && s.type===selectedType && !slotOverlapsBusy(s)).sort((a,b)=>(a.date+a.time).localeCompare(b.date+b.time));
 }
 function groupByDate(slots){
   const g = {};
@@ -511,6 +532,20 @@ async function confirmBooking(){
       meetLink:'', summary:'', clientSummary:'', actualMinutes: null, amount: null, createdAt: Date.now()
     });
     await saveState();
+    try{
+      const startISO = new Date(selectedSlot.date+'T'+selectedSlot.time+':00').toISOString();
+      const endISO = new Date(new Date(startISO).getTime() + selectedSlot.duration*60000).toISOString();
+      await fetch('/api/create-calendar-event', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          summary: 'Clarity session — ' + clientForm.name,
+          description: selectedSlot.type==='virtual' ? (state.settings.meetLink||'') : (state.settings.location||''),
+          location: selectedSlot.type==='in-person' ? (state.settings.location||'') : '',
+          startISO, endISO
+        })
+      });
+    }catch(e){ /* calendar sync is best-effort, booking still succeeds */ }
     submitting = false;
     bookingStep = 3; render();
   }catch(err){
@@ -896,6 +931,12 @@ function renderAdmin(){
 
     <div class="admin-block">
       <h2 class="sect">Settings</h2>
+      <label>Google Calendar</label>
+      <div style="display:flex;align-items:center;gap:14px;">
+        <span class="tag ${calendarConnected?'status-completed':'status-scheduled'}">${calendarConnected?'connected':'not connected'}</span>
+        <a class="wg-link" href="/api/google-auth-url">${calendarConnected?'Reconnect':'Connect Google Calendar'}</a>
+      </div>
+      <div class="note">When connected, times that conflict with your personal calendar won't show as bookable, and booked sessions get added to your calendar automatically.</div>
       <label>Video call link (Google Meet)</label>
       <input type="text" id="set-meet" placeholder="https://meet.google.com/xxx-xxxx-xxx" value="${state.settings.meetLink}">
       <label>In-person location and instructions</label>
