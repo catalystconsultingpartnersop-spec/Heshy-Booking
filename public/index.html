@@ -229,13 +229,21 @@ const cardElement = elements.create('card', {
 let cardMounted = false;
 let cardComplete = false;
 let cardErrorMsg = '';
+function isCurrentEmailBlocked(){
+  const c = findClient(clientForm.email);
+  return !!(c && c.blocked);
+}
+function updateConfirmButtonState(){
+  const btn = document.getElementById('confirmBtn');
+  if(!btn) return;
+  btn.disabled = !(clientForm.name && clientForm.email && clientForm.phone && cardComplete) || submitting || isCurrentEmailBlocked();
+}
 cardElement.on('change', (e)=>{
   cardComplete = e.complete;
   cardErrorMsg = e.error ? e.error.message : '';
   const errEl = document.getElementById('card-error');
   if(errEl) errEl.textContent = cardErrorMsg;
-  const btn = document.getElementById('confirmBtn');
-  if(btn) btn.disabled = !(clientForm.name && clientForm.email && clientForm.phone && cardComplete) || submitting;
+  updateConfirmButtonState();
 });
 
 let state = { slots: [], bookings: [], clients: [], settings: { meetLink: '', location: '', intakeQuestions: [
@@ -327,7 +335,44 @@ function uid(){ return Math.random().toString(36).slice(2,10); }
 function findClient(email){
   return state.clients.find(c => c.email.toLowerCase() === (email||'').toLowerCase());
 }
-function onEmailBlur(){ render(); }
+function intakeRegionHtml(){
+  const existingClient = clientForm.email ? findClient(clientForm.email) : null;
+  const isBlocked = !!(existingClient && existingClient.blocked);
+  const isNew = clientForm.email && !existingClient;
+  if(isBlocked){
+    return `<div class="blocked-msg">We're not able to book a session for this email right now.</div>`;
+  }
+  if(isNew){
+    const questions = state.settings.intakeQuestions || [];
+    while(clientForm.intakeAnswers.length < questions.length) clientForm.intakeAnswers.push('');
+    let html = `<div class="form-section q-block"><div class="section-title">A few questions</div>`;
+    questions.forEach((q,i)=>{
+      html += `<label>${q}</label><input type="text" data-intake="${i}" value="${clientForm.intakeAnswers[i]||''}">`;
+    });
+    html += `</div>`;
+    html += `
+      <div class="wg-block">
+        <div class="section-title">Six Types of Working Genius</div>
+        <p>If you've taken the assessment, it helps me understand how you think before we even start. Not required for this session &mdash; you can always add it later. <a class="wg-link" href="https://www.workinggenius.com" target="_blank" rel="noopener">Take the assessment</a>, then upload your results PDF here if you have it.</p>
+        <input type="file" id="wg-file" accept="application/pdf">
+        <div class="file-name" id="wg-file-name">${clientForm.wgPdfName||''}</div>
+      </div>
+    `;
+    return html;
+  }
+  return '';
+}
+function attachIntakeRegionHandlers(){
+  document.querySelectorAll('[data-intake]').forEach(el=>{
+    el.oninput = e=>{ clientForm.intakeAnswers[Number(el.getAttribute('data-intake'))] = e.target.value; };
+  });
+  const wgFile = document.getElementById('wg-file'); if(wgFile) wgFile.onchange = ()=>handleWgFile(wgFile);
+}
+function onEmailBlur(){
+  const region = document.getElementById('intake-region');
+  if(region){ region.innerHTML = intakeRegionHtml(); attachIntakeRegionHandlers(); }
+  updateConfirmButtonState();
+}
 function handleWgFile(fileInput){
   const file = fileInput.files[0];
   if(!file) return;
@@ -670,9 +715,6 @@ function renderClient(){
       inner += `<div class="btn-row"><button class="primary" id="toStep2" ${selectedSlot?'':'disabled'}>Continue</button></div>`;
     }
   } else if(bookingStep===2){
-    const existingClient = clientForm.email ? findClient(clientForm.email) : null;
-    const isBlocked = !!(existingClient && existingClient.blocked);
-    const isNew = clientForm.email && !existingClient;
     inner += `<h1>Your details</h1>`;
     inner += `
       <div class="fact">
@@ -691,41 +733,18 @@ function renderClient(){
           <div><label>Phone</label><input type="tel" id="f-phone" value="${clientForm.phone}"></div>
         </div>
       </div>
+      <div id="intake-region">${intakeRegionHtml()}</div>
+      <div class="form-section last">
+        <div class="section-title">Payment</div>
+        <label>Card</label>
+        <div id="card-element" class="stripe-el"></div>
+        <div id="card-error" class="card-error"></div>
+      </div>
+      <div class="btn-row">
+        <button class="ghost" id="backTo1" ${submitting?'disabled':''}>Back</button>
+        <button class="primary" id="confirmBtn" ${(clientForm.name && clientForm.email && clientForm.phone && cardComplete && !submitting && !isCurrentEmailBlocked()) ? '' : 'disabled'}>${submitting?'Booking…':'Book session'}</button>
+      </div>
     `;
-    if(isBlocked){
-      inner += `<div class="blocked-msg">We're not able to book a session for this email right now.</div>`;
-      inner += `<div class="btn-row"><button class="ghost" id="backTo1">Back</button></div>`;
-    } else {
-      if(isNew){
-        const questions = state.settings.intakeQuestions || [];
-        while(clientForm.intakeAnswers.length < questions.length) clientForm.intakeAnswers.push('');
-        inner += `<div class="form-section q-block"><div class="section-title">A few questions</div>`;
-        questions.forEach((q,i)=>{
-          inner += `<label>${q}</label><input type="text" data-intake="${i}" value="${clientForm.intakeAnswers[i]||''}">`;
-        });
-        inner += `</div>`;
-        inner += `
-          <div class="wg-block">
-            <div class="section-title">Six Types of Working Genius</div>
-            <p>If you've taken the assessment, it helps me understand how you think before we even start. Not required for this session &mdash; you can always add it later. <a class="wg-link" href="https://www.workinggenius.com" target="_blank" rel="noopener">Take the assessment</a>, then upload your results PDF here if you have it.</p>
-            <input type="file" id="wg-file" accept="application/pdf">
-            <div class="file-name" id="wg-file-name">${clientForm.wgPdfName||''}</div>
-          </div>
-        `;
-      }
-      inner += `
-        <div class="form-section last">
-          <div class="section-title">Payment</div>
-          <label>Card</label>
-          <div id="card-element" class="stripe-el"></div>
-          <div id="card-error" class="card-error"></div>
-        </div>
-        <div class="btn-row">
-          <button class="ghost" id="backTo1" ${submitting?'disabled':''}>Back</button>
-          <button class="primary" id="confirmBtn" ${(clientForm.name && clientForm.email && clientForm.phone && cardComplete && !submitting) ? '' : 'disabled'}>${submitting?'Booking…':'Book session'}</button>
-        </div>
-      `;
-    }
   } else {
     inner += `
       <div class="confirm">
@@ -971,15 +990,11 @@ function attachHandlers(){
       const el = $(id);
       if(el) el.oninput = e=>{
         clientForm[map[id]] = e.target.value;
-        const btn = $('confirmBtn');
-        if(btn) btn.disabled = !(clientForm.name && clientForm.email && clientForm.phone && cardComplete) || submitting;
+        updateConfirmButtonState();
       };
     });
     const emailEl = $('f-email'); if(emailEl) emailEl.onblur = onEmailBlur;
-    document.querySelectorAll('[data-intake]').forEach(el=>{
-      el.oninput = e=>{ clientForm.intakeAnswers[Number(el.getAttribute('data-intake'))] = e.target.value; };
-    });
-    const wgFile = $('wg-file'); if(wgFile) wgFile.onchange = ()=>handleWgFile(wgFile);
+    attachIntakeRegionHandlers();
     const conf = $('confirmBtn'); if(conf) conf.onclick = confirmBooking;
     mountCardElementIfNeeded();
   } else {
