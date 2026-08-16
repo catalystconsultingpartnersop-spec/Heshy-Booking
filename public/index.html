@@ -230,8 +230,7 @@ let cardMounted = false;
 let cardComplete = false;
 let cardErrorMsg = '';
 function isCurrentEmailBlocked(){
-  const c = findClient(clientForm.email);
-  return !!(c && c.blocked);
+  return clientForm.checkedEmail === clientForm.email && !!clientForm.blocked;
 }
 function updateConfirmButtonState(){
   const btn = document.getElementById('confirmBtn');
@@ -307,8 +306,8 @@ function generateSlotsFromRules(weeksAhead){
   }
   return added;
 }
-const ADMIN_PASSWORD = 'Heshybooking123';
-let adminUnlocked = (typeof sessionStorage !== 'undefined' && sessionStorage.getItem('heshyAdminUnlocked') === '1');
+let adminToken = (typeof sessionStorage !== 'undefined' && sessionStorage.getItem('heshyAdminToken')) || '';
+let adminUnlocked = !!adminToken;
 let view = (() => {
   const h = location.hash.replace(/[^a-z]/gi, '');
   if(h.includes('manage')) return 'admin';
@@ -319,7 +318,7 @@ let bookingStep = 1;
 let selectedSlot = null;
 let selectedDay = null;
 let selectedType = 'virtual';
-let clientForm = { name:'', email:'', phone:'', intakeAnswers:[], wgPdfName:'', wgPdfData:'' };
+let clientForm = { name:'', email:'', phone:'', intakeAnswers:[], wgPdfName:'', wgPdfData:'', checkedEmail:'', isNew:false, blocked:false };
 let submitting = false;
 let portalEmail = '';
 let portalClient = null;
@@ -332,13 +331,10 @@ let adminType = 'virtual';
 function selectAdminType(t){ adminType = t; newSlot.type = t; render(); }
 
 function uid(){ return Math.random().toString(36).slice(2,10); }
-function findClient(email){
-  return state.clients.find(c => c.email.toLowerCase() === (email||'').toLowerCase());
-}
 function intakeRegionHtml(){
-  const existingClient = clientForm.email ? findClient(clientForm.email) : null;
-  const isBlocked = !!(existingClient && existingClient.blocked);
-  const isNew = clientForm.email && !existingClient;
+  const checked = clientForm.checkedEmail === clientForm.email && clientForm.email;
+  const isBlocked = !!(checked && clientForm.blocked);
+  const isNew = !!(checked && clientForm.isNew);
   if(isBlocked){
     return `<div class="blocked-msg">We're not able to book a session for this email right now.</div>`;
   }
@@ -368,8 +364,26 @@ function attachIntakeRegionHandlers(){
   });
   const wgFile = document.getElementById('wg-file'); if(wgFile) wgFile.onchange = ()=>handleWgFile(wgFile);
 }
-function onEmailBlur(){
+async function onEmailBlur(){
+  const email = clientForm.email;
   const region = document.getElementById('intake-region');
+  if(!email){
+    clientForm.checkedEmail = '';
+    if(region) region.innerHTML = '';
+    updateConfirmButtonState();
+    return;
+  }
+  try{
+    const r = await fetch('/api/check-client?email='+encodeURIComponent(email));
+    const data = await r.json();
+    clientForm.checkedEmail = email;
+    clientForm.isNew = !data.exists;
+    clientForm.blocked = !!data.blocked;
+  }catch(e){
+    clientForm.checkedEmail = email;
+    clientForm.isNew = true;
+    clientForm.blocked = false;
+  }
   if(region){ region.innerHTML = intakeRegionHtml(); attachIntakeRegionHandlers(); }
   updateConfirmButtonState();
 }
@@ -388,35 +402,42 @@ function handleWgFile(fileInput){
 
 async function loadState(){
   try{
-    const r = await fetch('/api/state');
+    if(view === 'admin'){
+      if(adminUnlocked && adminToken) await loadAdminState();
+      render();
+      return;
+    }
+    await fetch('/api/generate-slots', { method: 'POST' }).catch(()=>{});
+    const r = await fetch('/api/public-state');
     const data = await r.json();
-    if(data){ state = data; }
-    if(!state.settings) state.settings = { meetLink:'', location:'' };
-    if(!state.settings.intakeQuestions) state.settings.intakeQuestions = [
-      "What's your name and what do you do?",
-      "What's the main challenge or decision you're facing right now?",
-      "What does success look like if this session goes well?",
-      "How did you hear about Catalyst Consulting?",
-      "What's your current role or business?",
-      "Is this a personal, business, or career-related topic?",
-      "Have you worked with a coach or consultant on this before?",
-      "What's the timeline or urgency around this?",
-      "Anything you'd rather I know going in that's hard to say out loud?",
-      "Anything else I should know before we talk?"
-    ];
-    if(!state.clients) state.clients = [];
-    if(!state.availability) state.availability = { virtual: [], 'in-person': [] };
-    const newlyAdded = generateSlotsFromRules(8);
-    if(newlyAdded.length > 0) await saveState();
+    state.slots = data.slots || [];
+    state.bookings = (data.bookedSlotIds || []).map(id => ({ slotId: id }));
+    state.settings = data.settings || { meetLink:'', location:'', intakeQuestions:[] };
+    state.availability = data.availability || { virtual: [], 'in-person': [] };
     await loadCalendarBusy();
   }catch(e){ console.error('load failed', e); }
   render();
 }
+async function loadAdminState(){
+  try{
+    const r = await fetch('/api/admin-state', { headers: { 'X-Admin-Token': adminToken } });
+    if(r.status === 401){
+      adminUnlocked = false; adminToken = '';
+      sessionStorage.removeItem('heshyAdminToken');
+      return;
+    }
+    const data = await r.json();
+    state = data;
+    if(!state.settings) state.settings = { meetLink:'', location:'', intakeQuestions:[] };
+    if(!state.clients) state.clients = [];
+    if(!state.availability) state.availability = { virtual: [], 'in-person': [] };
+  }catch(e){ console.error('admin load failed', e); }
+}
 async function saveState(){
   try{
-    await fetch('/api/state', {
+    await fetch('/api/admin-save', {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: { 'Content-Type': 'application/json', 'X-Admin-Token': adminToken },
       body: JSON.stringify(state)
     });
   }catch(e){ console.error('save failed', e); }
@@ -470,27 +491,44 @@ function selectType(t){ selectedType = t; selectedDay = null; selectedSlot = nul
 function goStep(n){ bookingStep = n; render(); }
 function backToClient(){
   view = 'client'; history.replaceState(null, '', '#');
-  bookingStep=1; selectedSlot=null; clientForm={name:'',email:'',phone:''};
+  bookingStep=1; selectedSlot=null;
+  clientForm={name:'',email:'',phone:'',intakeAnswers:[],wgPdfName:'',wgPdfData:'',checkedEmail:'',isNew:false,blocked:false};
   cardComplete=false; cardErrorMsg=''; if(cardElement) cardElement.clear();
   render();
 }
 async function tryAdminLogin(){
   const input = document.getElementById('admin-pass');
   const err = document.getElementById('admin-pass-err');
+  const btn = document.getElementById('admin-login-btn');
   if(!input) return;
-  if(input.value === ADMIN_PASSWORD){
-    adminUnlocked = true;
-    sessionStorage.setItem('heshyAdminUnlocked', '1');
-    view = 'admin'; render();
-  } else {
-    if(err) err.textContent = 'Wrong password.';
+  if(btn){ btn.disabled = true; btn.textContent = 'Checking…'; }
+  try{
+    const r = await fetch('/api/admin-login', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ password: input.value })
+    });
+    const data = await r.json();
+    if(data.ok){
+      adminUnlocked = true;
+      adminToken = data.token;
+      sessionStorage.setItem('heshyAdminToken', adminToken);
+      view = 'admin';
+      await loadAdminState();
+      render();
+    } else {
+      if(err) err.textContent = 'Wrong password.';
+      if(btn){ btn.disabled = false; btn.textContent = 'Enter'; }
+    }
+  }catch(e){
+    if(err) err.textContent = 'Something went wrong. Try again.';
+    if(btn){ btn.disabled = false; btn.textContent = 'Enter'; }
   }
 }
 
 async function confirmBooking(){
   if(!clientForm.name || !clientForm.email || !clientForm.phone || !cardComplete || submitting) return;
-  const existingClient = findClient(clientForm.email);
-  if(existingClient && existingClient.blocked) return;
+  if(isCurrentEmailBlocked()) return;
   submitting = true;
   const btn = document.getElementById('confirmBtn');
   const backBtn = document.getElementById('backTo1');
@@ -514,38 +552,18 @@ async function confirmBooking(){
     });
     if(result.error){ throw new Error(result.error.message); }
 
-    let client = findClient(clientForm.email);
-    if(!client){
-      client = {
-        id: uid(), name: clientForm.name, email: clientForm.email, phone: clientForm.phone,
-        intakeAnswers: clientForm.intakeAnswers.slice(), wgPdfName: clientForm.wgPdfName || '',
-        wgPdfData: clientForm.wgPdfData || '', blocked: false, createdAt: Date.now()
-      };
-      state.clients.push(client);
-    }
-
-    state.bookings.push({
-      id: uid(), slotId: selectedSlot.id, date: selectedSlot.date, time: selectedSlot.time,
-      durationMin: selectedSlot.duration, type: selectedSlot.type,
-      clientId: client.id, clientName: clientForm.name, clientEmail: clientForm.email, clientPhone: clientForm.phone,
-      stripeCustomerId: setupData.customerId, status: 'scheduled',
-      meetLink:'', summary:'', clientSummary:'', actualMinutes: null, amount: null, createdAt: Date.now()
+    const bookingRes = await fetch('/api/create-booking', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        slotId: selectedSlot.id, name: clientForm.name, email: clientForm.email, phone: clientForm.phone,
+        intakeAnswers: clientForm.intakeAnswers, wgPdfName: clientForm.wgPdfName, wgPdfData: clientForm.wgPdfData,
+        stripeCustomerId: setupData.customerId
+      })
     });
-    await saveState();
-    try{
-      const startISO = new Date(selectedSlot.date+'T'+selectedSlot.time+':00').toISOString();
-      const endISO = new Date(new Date(startISO).getTime() + selectedSlot.duration*60000).toISOString();
-      await fetch('/api/create-calendar-event', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          summary: 'Clarity session — ' + clientForm.name,
-          description: selectedSlot.type==='virtual' ? (state.settings.meetLink||'') : (state.settings.location||''),
-          location: selectedSlot.type==='in-person' ? (state.settings.location||'') : '',
-          startISO, endISO
-        })
-      });
-    }catch(e){ /* calendar sync is best-effort, booking still succeeds */ }
+    const bookingData = await bookingRes.json();
+    if(bookingData.error){ throw new Error(bookingData.error); }
+
     submitting = false;
     bookingStep = 3; render();
   }catch(err){
@@ -625,13 +643,12 @@ async function chargeAndReceipt(id){
   try{
     const res = await fetch('/api/charge-booking', {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: { 'Content-Type': 'application/json', 'X-Admin-Token': adminToken },
       body: JSON.stringify({ bookingId: id })
     });
     const data = await res.json();
     if(data.error){ alert('Charge failed: ' + data.error); if(btn){ btn.disabled=false; } return; }
-    const r = await fetch('/api/state');
-    state = await r.json();
+    await loadAdminState();
     render();
   }catch(e){
     alert('Charge failed: ' + e.message);
@@ -664,15 +681,20 @@ function renderAdminGate(){
   `;
 }
 
-function checkPortal(){
-  const client = findClient(portalEmail);
-  if(!client){ portalError = "No profile found for that email."; portalClient = null; render(); return; }
-  portalError = ''; portalClient = client; render();
+async function checkPortal(){
+  try{
+    const r = await fetch('/api/portal-lookup?email='+encodeURIComponent(portalEmail));
+    const data = await r.json();
+    if(!data.found){ portalError = "No profile found for that email."; portalClient = null; render(); return; }
+    portalError = ''; portalClient = data; render();
+  }catch(e){
+    portalError = "Something went wrong. Try again."; render();
+  }
 }
 function portalBookAgain(){
   view = 'client'; history.replaceState(null, '', '#');
   bookingStep = 1; selectedSlot = null;
-  clientForm = { name: portalClient.name, email: portalClient.email, phone: portalClient.phone, intakeAnswers: [], wgPdfName:'', wgPdfData:'' };
+  clientForm = { name: portalClient.name, email: portalEmail, phone: portalClient.phone||'', intakeAnswers: [], wgPdfName:'', wgPdfData:'', checkedEmail:'', isNew:false, blocked:false };
   render();
 }
 
@@ -689,9 +711,8 @@ function renderPortal(){
       </div>
     `;
   }
-  const myBookings = state.bookings.filter(b=>b.clientId===portalClient.id).sort((a,b)=>(b.date+b.time).localeCompare(a.date+a.time));
-  const upcoming = myBookings.filter(b=>b.status!=='charged');
-  const past = myBookings.filter(b=>b.status==='charged');
+  const upcoming = (portalClient.upcoming||[]).slice().sort((a,b)=>(a.date+a.time).localeCompare(b.date+b.time));
+  const past = (portalClient.past||[]).slice().sort((a,b)=>b.date.localeCompare(a.date));
   let upHtml = upcoming.length===0 ? `<div class="empty">No upcoming sessions.</div>` : '';
   upcoming.forEach(b=>{
     upHtml += `<div class="portal-session"><div class="top"><span>${fmtDate(b.date)}, ${fmtTime(b.time)}</span><span>${b.type==='virtual'?'Video call':'In person'}</span></div></div>`;
@@ -934,7 +955,7 @@ function renderAdmin(){
       <label>Google Calendar</label>
       <div style="display:flex;align-items:center;gap:14px;">
         <span class="tag ${calendarConnected?'status-completed':'status-scheduled'}">${calendarConnected?'connected':'not connected'}</span>
-        <a class="wg-link" href="/api/google-auth-url">${calendarConnected?'Reconnect':'Connect Google Calendar'}</a>
+        <a class="wg-link" href="/api/google-auth-url?token=${encodeURIComponent(adminToken)}">${calendarConnected?'Reconnect':'Connect Google Calendar'}</a>
       </div>
       <div class="note">When connected, times that conflict with your personal calendar won't show as bookable, and booked sessions get added to your calendar automatically.</div>
       <label>Video call link (Google Meet)</label>
