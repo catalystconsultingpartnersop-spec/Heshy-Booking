@@ -125,6 +125,8 @@
     cursor:pointer;color:var(--ink);font-family:'Inter',sans-serif;border-radius:4px;
   }
   button.ghost:hover{border-color:var(--ink);}
+  button.ghost.danger-ghost{border-color:#D9A8A2;color:#8C2F27;}
+  button.ghost.danger-ghost:hover{border-color:#8C2F27;}
   button.small{padding:7px 12px;font-size:12.5px;}
   .btn-row{display:flex;gap:10px;margin-top:28px;}
 
@@ -189,6 +191,28 @@
   .client-total{font-size:12.5px;color:var(--muted);}
   .hist-line{display:flex;justify-content:space-between;font-size:13.5px;padding:6px 0;color:var(--ink);}
   .hist-line span:last-child{color:var(--muted);}
+  .q-block label:first-of-type{margin-top:14px;}
+  .wg-block{border-top:1px solid var(--line);padding-top:18px;margin-top:24px;}
+  .wg-block p{font-size:13.5px;line-height:1.6;color:var(--muted);margin:0 0 10px;}
+  .wg-link{color:var(--ink);text-decoration:underline;text-underline-offset:3px;}
+  input[type=file]{font-size:13px;margin-top:8px;}
+  .file-name{font-size:12.5px;color:var(--muted);margin-top:6px;}
+  .blocked-msg{background:#FBEAEA;border:1px solid #E3B3AC;border-radius:8px;padding:14px 16px;font-size:13.5px;color:#8C2F27;margin:20px 0;}
+  .client-row{display:flex;align-items:center;justify-content:space-between;padding:14px 0;border-bottom:1px solid var(--line);cursor:pointer;}
+  .client-row:hover{background:#F7F7F5;}
+  .client-row .main{font-weight:500;}
+  .client-row .sub{color:var(--muted);font-size:12.5px;margin-top:2px;}
+  .client-detail{padding:6px 0 24px;border-bottom:1px solid var(--line);}
+  .client-detail .qa{font-size:13.5px;padding:8px 0;border-bottom:1px solid var(--line);}
+  .client-detail .qa:last-child{border-bottom:none;}
+  .client-detail .qa .q{color:var(--muted);margin-bottom:3px;}
+  .tag.blocked{background:#8C2F27;color:#fff;border-color:#8C2F27;}
+  .portal-box{max-width:400px;margin-top:60px;}
+  .portal-session{border-bottom:1px solid var(--line);padding:16px 0;}
+  .portal-session:last-child{border-bottom:none;}
+  .portal-session .top{display:flex;justify-content:space-between;font-size:13.5px;font-weight:500;}
+  .portal-session .meta{font-size:12.5px;color:var(--muted);margin-top:2px;}
+  .portal-session .summary{font-size:13.5px;line-height:1.6;margin-top:8px;color:var(--ink);}
 </style>
 </head>
 <body>
@@ -214,7 +238,18 @@ cardElement.on('change', (e)=>{
   if(btn) btn.disabled = !(clientForm.name && clientForm.email && clientForm.phone && cardComplete) || submitting;
 });
 
-let state = { slots: [], bookings: [], settings: { meetLink: '', location: '' }, availability: {
+let state = { slots: [], bookings: [], clients: [], settings: { meetLink: '', location: '', intakeQuestions: [
+  "What's your name and what do you do?",
+  "What's the main challenge or decision you're facing right now?",
+  "What does success look like if this session goes well?",
+  "How did you hear about Catalyst Consulting?",
+  "What's your current role or business?",
+  "Is this a personal, business, or career-related topic?",
+  "Have you worked with a coach or consultant on this before?",
+  "What's the timeline or urgency around this?",
+  "Anything you'd rather I know going in that's hard to say out loud?",
+  "Anything else I should know before we talk?"
+] }, availability: {
   virtual: [
     { id:'r1', days:[1,2,3,4], start:'11:00', end:'13:00' },
     { id:'r2', days:[5], start:'10:30', end:'12:30' },
@@ -266,13 +301,22 @@ function generateSlotsFromRules(weeksAhead){
 }
 const ADMIN_PASSWORD = 'Heshybooking123';
 let adminUnlocked = (typeof sessionStorage !== 'undefined' && sessionStorage.getItem('heshyAdminUnlocked') === '1');
-let view = location.hash.replace(/[^a-z]/gi, '').includes('manage') ? 'admin' : 'client';
+let view = (() => {
+  const h = location.hash.replace(/[^a-z]/gi, '');
+  if(h.includes('manage')) return 'admin';
+  if(h.includes('portal')) return 'portal';
+  return 'client';
+})();
 let bookingStep = 1;
 let selectedSlot = null;
 let selectedDay = null;
 let selectedType = 'virtual';
-let clientForm = { name:'', email:'', phone:'' };
+let clientForm = { name:'', email:'', phone:'', intakeAnswers:[], wgPdfName:'', wgPdfData:'' };
 let submitting = false;
+let portalEmail = '';
+let portalClient = null;
+let portalError = '';
+let expandedClientId = null;
 let runningTimer = {};
 let timerDisplay = {};
 let newSlot = { date:'', time:'', duration:60, type:'virtual' };
@@ -280,6 +324,22 @@ let adminType = 'virtual';
 function selectAdminType(t){ adminType = t; newSlot.type = t; render(); }
 
 function uid(){ return Math.random().toString(36).slice(2,10); }
+function findClient(email){
+  return state.clients.find(c => c.email.toLowerCase() === (email||'').toLowerCase());
+}
+function onEmailBlur(){ render(); }
+function handleWgFile(fileInput){
+  const file = fileInput.files[0];
+  if(!file) return;
+  const reader = new FileReader();
+  reader.onload = () => {
+    clientForm.wgPdfData = reader.result;
+    clientForm.wgPdfName = file.name;
+    const nameEl = document.getElementById('wg-file-name');
+    if(nameEl) nameEl.textContent = file.name;
+  };
+  reader.readAsDataURL(file);
+}
 
 async function loadState(){
   try{
@@ -287,6 +347,19 @@ async function loadState(){
     const data = await r.json();
     if(data){ state = data; }
     if(!state.settings) state.settings = { meetLink:'', location:'' };
+    if(!state.settings.intakeQuestions) state.settings.intakeQuestions = [
+      "What's your name and what do you do?",
+      "What's the main challenge or decision you're facing right now?",
+      "What does success look like if this session goes well?",
+      "How did you hear about Catalyst Consulting?",
+      "What's your current role or business?",
+      "Is this a personal, business, or career-related topic?",
+      "Have you worked with a coach or consultant on this before?",
+      "What's the timeline or urgency around this?",
+      "Anything you'd rather I know going in that's hard to say out loud?",
+      "Anything else I should know before we talk?"
+    ];
+    if(!state.clients) state.clients = [];
     if(!state.availability) state.availability = { virtual: [], 'in-person': [] };
     const newlyAdded = generateSlotsFromRules(8);
     if(newlyAdded.length > 0) await saveState();
@@ -350,6 +423,8 @@ async function tryAdminLogin(){
 
 async function confirmBooking(){
   if(!clientForm.name || !clientForm.email || !clientForm.phone || !cardComplete || submitting) return;
+  const existingClient = findClient(clientForm.email);
+  if(existingClient && existingClient.blocked) return;
   submitting = true; render();
 
   try{
@@ -369,12 +444,22 @@ async function confirmBooking(){
     });
     if(result.error){ throw new Error(result.error.message); }
 
+    let client = findClient(clientForm.email);
+    if(!client){
+      client = {
+        id: uid(), name: clientForm.name, email: clientForm.email, phone: clientForm.phone,
+        intakeAnswers: clientForm.intakeAnswers.slice(), wgPdfName: clientForm.wgPdfName || '',
+        wgPdfData: clientForm.wgPdfData || '', blocked: false, createdAt: Date.now()
+      };
+      state.clients.push(client);
+    }
+
     state.bookings.push({
       id: uid(), slotId: selectedSlot.id, date: selectedSlot.date, time: selectedSlot.time,
       durationMin: selectedSlot.duration, type: selectedSlot.type,
-      clientName: clientForm.name, clientEmail: clientForm.email, clientPhone: clientForm.phone,
+      clientId: client.id, clientName: clientForm.name, clientEmail: clientForm.email, clientPhone: clientForm.phone,
       stripeCustomerId: setupData.customerId, status: 'scheduled',
-      meetLink:'', summary:'', actualMinutes: null, amount: null, createdAt: Date.now()
+      meetLink:'', summary:'', clientSummary:'', actualMinutes: null, amount: null, createdAt: Date.now()
     });
     await saveState();
     submitting = false;
@@ -418,6 +503,12 @@ async function addSlot(){
 async function updateSettings(field, val){
   state.settings[field] = val;
   await saveState();
+}
+function toggleExpandClient(id){ expandedClientId = expandedClientId===id ? null : id; render(); }
+async function setClientBlocked(id, blocked){
+  const c = state.clients.find(x=>x.id===id); if(!c) return;
+  c.blocked = blocked;
+  await saveState(); render();
 }
 async function removeSlot(id){ state.slots = state.slots.filter(s=>s.id!==id); await saveState(); render(); }
 async function updateBooking(id, patch){
@@ -467,6 +558,8 @@ function render(){
   const app = document.getElementById('app');
   if(view==='admin' && !adminUnlocked){
     app.innerHTML = renderAdminGate();
+  } else if(view==='portal'){
+    app.innerHTML = renderPortal();
   } else {
     app.innerHTML = view==='client' ? renderClient() : renderAdmin();
   }
@@ -482,6 +575,56 @@ function renderAdminGate(){
       <div id="admin-pass-err" class="card-error"></div>
       <button class="primary" id="admin-login-btn" style="margin-top:14px;">Enter</button>
     </div>
+  `;
+}
+
+function checkPortal(){
+  const client = findClient(portalEmail);
+  if(!client){ portalError = "No profile found for that email."; portalClient = null; render(); return; }
+  portalError = ''; portalClient = client; render();
+}
+function portalBookAgain(){
+  view = 'client'; history.replaceState(null, '', '#');
+  bookingStep = 1; selectedSlot = null;
+  clientForm = { name: portalClient.name, email: portalClient.email, phone: portalClient.phone, intakeAnswers: [], wgPdfName:'', wgPdfData:'' };
+  render();
+}
+
+function renderPortal(){
+  if(!portalClient){
+    return `
+      <div class="topbar"><div class="brand">Heshy</div></div>
+      <div class="portal-box">
+        <h1>My sessions</h1>
+        <label>Email</label>
+        <input type="email" id="portal-email" value="${portalEmail}">
+        <div class="card-error">${portalError}</div>
+        <button class="primary" id="portal-go-btn" style="margin-top:14px;">View my sessions</button>
+      </div>
+    `;
+  }
+  const myBookings = state.bookings.filter(b=>b.clientId===portalClient.id).sort((a,b)=>(b.date+b.time).localeCompare(a.date+a.time));
+  const upcoming = myBookings.filter(b=>b.status!=='charged');
+  const past = myBookings.filter(b=>b.status==='charged');
+  let upHtml = upcoming.length===0 ? `<div class="empty">No upcoming sessions.</div>` : '';
+  upcoming.forEach(b=>{
+    upHtml += `<div class="portal-session"><div class="top"><span>${fmtDate(b.date)}, ${fmtTime(b.time)}</span><span>${b.type==='virtual'?'Video call':'In person'}</span></div></div>`;
+  });
+  let pastHtml = past.length===0 ? `<div class="empty">No past sessions yet.</div>` : '';
+  past.forEach(b=>{
+    pastHtml += `<div class="portal-session"><div class="top"><span>${fmtDate(b.date)}</span><span>${money(b.amount||0)}</span></div>
+      <div class="meta">${b.actualMinutes||b.durationMin} min, ${b.type==='virtual'?'video call':'in person'}</div>
+      ${b.clientSummary?`<div class="summary">${b.clientSummary}</div>`:''}
+    </div>`;
+  });
+  return `
+    <div class="topbar"><div class="brand">Heshy</div></div>
+    <h1>Hi ${portalClient.name.split(' ')[0]}</h1>
+    <div class="btn-row" style="margin-top:0;margin-bottom:32px;"><button class="primary small" id="portal-book-again">Book another session</button></div>
+    <div class="section-title">Upcoming</div>
+    ${upHtml}
+    <div class="section-title" style="margin-top:32px;">Past sessions</div>
+    ${pastHtml}
   `;
 }
 
@@ -527,6 +670,9 @@ function renderClient(){
       inner += `<div class="btn-row"><button class="primary" id="toStep2" ${selectedSlot?'':'disabled'}>Continue</button></div>`;
     }
   } else if(bookingStep===2){
+    const existingClient = clientForm.email ? findClient(clientForm.email) : null;
+    const isBlocked = !!(existingClient && existingClient.blocked);
+    const isNew = clientForm.email && !existingClient;
     inner += `<h1>Your details</h1>`;
     inner += `
       <div class="fact">
@@ -545,17 +691,41 @@ function renderClient(){
           <div><label>Phone</label><input type="tel" id="f-phone" value="${clientForm.phone}"></div>
         </div>
       </div>
-      <div class="form-section last">
-        <div class="section-title">Payment</div>
-        <label>Card</label>
-        <div id="card-element" class="stripe-el"></div>
-        <div id="card-error" class="card-error"></div>
-      </div>
-      <div class="btn-row">
-        <button class="ghost" id="backTo1" ${submitting?'disabled':''}>Back</button>
-        <button class="primary" id="confirmBtn" ${(clientForm.name && clientForm.email && clientForm.phone && cardComplete && !submitting) ? '' : 'disabled'}>${submitting?'Booking…':'Book session'}</button>
-      </div>
     `;
+    if(isBlocked){
+      inner += `<div class="blocked-msg">We're not able to book a session for this email right now.</div>`;
+      inner += `<div class="btn-row"><button class="ghost" id="backTo1">Back</button></div>`;
+    } else {
+      if(isNew){
+        const questions = state.settings.intakeQuestions || [];
+        while(clientForm.intakeAnswers.length < questions.length) clientForm.intakeAnswers.push('');
+        inner += `<div class="form-section q-block"><div class="section-title">A few questions</div>`;
+        questions.forEach((q,i)=>{
+          inner += `<label>${q}</label><input type="text" data-intake="${i}" value="${clientForm.intakeAnswers[i]||''}">`;
+        });
+        inner += `</div>`;
+        inner += `
+          <div class="wg-block">
+            <div class="section-title">Six Types of Working Genius</div>
+            <p>If you've taken the assessment, it helps me understand how you think before we even start. Not required for this session &mdash; you can always add it later. <a class="wg-link" href="https://www.workinggenius.com" target="_blank" rel="noopener">Take the assessment</a>, then upload your results PDF here if you have it.</p>
+            <input type="file" id="wg-file" accept="application/pdf">
+            <div class="file-name" id="wg-file-name">${clientForm.wgPdfName||''}</div>
+          </div>
+        `;
+      }
+      inner += `
+        <div class="form-section last">
+          <div class="section-title">Payment</div>
+          <label>Card</label>
+          <div id="card-element" class="stripe-el"></div>
+          <div id="card-error" class="card-error"></div>
+        </div>
+        <div class="btn-row">
+          <button class="ghost" id="backTo1" ${submitting?'disabled':''}>Back</button>
+          <button class="primary" id="confirmBtn" ${(clientForm.name && clientForm.email && clientForm.phone && cardComplete && !submitting) ? '' : 'disabled'}>${submitting?'Booking…':'Book session'}</button>
+        </div>
+      `;
+    }
   } else {
     inner += `
       <div class="confirm">
@@ -607,25 +777,30 @@ function renderAdmin(){
   const activeBookings = state.bookings.filter(b=>b.status!=='charged').sort((a,b)=>(a.date+a.time).localeCompare(b.date+b.time));
   let bookingsHtml = activeBookings.length===0 ? `<div class="empty">No sessions in progress.</div>` : '';
   activeBookings.forEach(b=>{
-    let controls = '';
+    let typeControls = '';
     if(b.type==='virtual'){
-      controls = `
-        <div class="session-controls">
+      typeControls = `
           <label>Google Meet link</label>
           <input type="text" value="${b.meetLink||''}" data-meet="${b.id}">
-          <label>Session summary</label>
-          <textarea data-summary="${b.id}">${b.summary||''}</textarea>
-          <div class="note">Connecting Google Calendar/Meet would create this link and pull the summary automatically.</div>
-        </div>
       `;
     } else {
       const running = !!runningTimer[b.id];
-      controls = `
-        <div class="session-controls" style="display:flex;align-items:center;gap:16px;">
+      typeControls = `
+        <div style="display:flex;align-items:center;gap:16px;margin-bottom:8px;">
           <span class="timer" id="timer-${b.id}">${String(Math.floor((timerDisplay[b.id]||0)/60)).padStart(2,'0')}:${String((timerDisplay[b.id]||0)%60).padStart(2,'0')}</span>
           ${running ? `<button class="ghost small" data-stop-timer="${b.id}">Stop</button>` : `<button class="ghost small" data-start-timer="${b.id}">Start</button>`}
         </div>`;
     }
+    const controls = `
+        <div class="session-controls">
+          ${typeControls}
+          <label>Internal notes</label>
+          <textarea data-summary="${b.id}">${b.summary||''}</textarea>
+          <label>Client-facing summary</label>
+          <textarea data-clientsummary="${b.id}">${b.clientSummary||''}</textarea>
+          ${b.type==='virtual' ? `<div class="note">Connecting Google Calendar/Meet would create the link and pull a first-draft summary automatically.</div>` : ''}
+        </div>
+    `;
     let action = '';
     if(b.status==='scheduled'){
       action = `<button class="primary small" data-mark-complete="${b.id}">Mark complete</button>`;
@@ -662,6 +837,35 @@ function renderAdmin(){
     historyHtml += `</div>`;
   });
 
+  let clientsHtml = state.clients.length===0 ? `<div class="empty">No client profiles yet.</div>` : '';
+  state.clients.slice().sort((a,b)=>b.createdAt-a.createdAt).forEach(c=>{
+    const sessionCount = state.bookings.filter(b=>b.clientId===c.id).length;
+    clientsHtml += `
+      <div class="client-row" data-toggle-client="${c.id}">
+        <div><div class="main">${c.name}</div><div class="sub">${c.email} &middot; ${sessionCount} session${sessionCount!==1?'s':''}</div></div>
+        ${c.blocked ? `<span class="tag blocked">blocked</span>` : ''}
+      </div>`;
+    if(expandedClientId === c.id){
+      const questions = state.settings.intakeQuestions || [];
+      let qaHtml = '';
+      questions.forEach((q,i)=>{
+        if(c.intakeAnswers && c.intakeAnswers[i]){
+          qaHtml += `<div class="qa"><div class="q">${q}</div><div>${c.intakeAnswers[i]}</div></div>`;
+        }
+      });
+      clientsHtml += `
+        <div class="client-detail">
+          ${qaHtml || `<div class="empty">No intake answers on file.</div>`}
+          ${c.wgPdfData ? `<div class="qa"><div class="q">Working Genius</div><a class="wg-link" href="${c.wgPdfData}" download="${c.wgPdfName||'working-genius.pdf'}">${c.wgPdfName||'Download PDF'}</a></div>` : ''}
+          <div style="margin-top:14px;">
+            ${c.blocked
+              ? `<button class="ghost small" data-unblock-client="${c.id}">Unblock</button>`
+              : `<button class="ghost small danger-ghost" data-block-client="${c.id}">Block from booking</button>`}
+          </div>
+        </div>`;
+    }
+  });
+
   return `
     <div class="topbar"><div class="brand">Heshy — Manage</div><button class="manage-link" id="backToClientBtn">Back to booking</button></div>
 
@@ -671,6 +875,8 @@ function renderAdmin(){
       <input type="text" id="set-meet" placeholder="https://meet.google.com/xxx-xxxx-xxx" value="${state.settings.meetLink}">
       <label>In-person location and instructions</label>
       <textarea id="set-location" placeholder="Address, parking, floor, buzzer code, etc.">${state.settings.location}</textarea>
+      <label>Intake questions (one per line, asked only on a client's first booking)</label>
+      <textarea id="set-intake" style="min-height:140px;">${(state.settings.intakeQuestions||[]).join('\n')}</textarea>
       <div class="note">Sent automatically on every confirmation, based on which format the client picked.</div>
     </div>
 
@@ -719,6 +925,11 @@ function renderAdmin(){
       <h2 class="sect">Client history</h2>
       ${historyHtml}
     </div>
+
+    <div class="admin-block">
+      <h2 class="sect">Clients</h2>
+      ${clientsHtml}
+    </div>
   `;
 }
 
@@ -738,8 +949,16 @@ function attachHandlers(){
   const loginBtn = $('admin-login-btn'); if(loginBtn) loginBtn.onclick = tryAdminLogin;
   const passInput = $('admin-pass');
   if(passInput) passInput.onkeydown = e=>{ if(e.key==='Enter') tryAdminLogin(); };
+  const portalGoBtn = $('portal-go-btn'); if(portalGoBtn) portalGoBtn.onclick = checkPortal;
+  const portalEmailInput = $('portal-email');
+  if(portalEmailInput){
+    portalEmailInput.oninput = e=> portalEmail = e.target.value;
+    portalEmailInput.onkeydown = e=>{ if(e.key==='Enter') checkPortal(); };
+  }
+  const portalBookAgainBtn = $('portal-book-again'); if(portalBookAgainBtn) portalBookAgainBtn.onclick = portalBookAgain;
 
   if(view==='admin' && !adminUnlocked) return;
+  if(view==='portal') return;
 
   if(view==='client'){
     document.querySelectorAll('[data-slot]').forEach(el=>{ el.onclick = ()=>selectSlot(el.getAttribute('data-slot')); });
@@ -756,6 +975,11 @@ function attachHandlers(){
         if(btn) btn.disabled = !(clientForm.name && clientForm.email && clientForm.phone && cardComplete) || submitting;
       };
     });
+    const emailEl = $('f-email'); if(emailEl) emailEl.onblur = onEmailBlur;
+    document.querySelectorAll('[data-intake]').forEach(el=>{
+      el.oninput = e=>{ clientForm.intakeAnswers[Number(el.getAttribute('data-intake'))] = e.target.value; };
+    });
+    const wgFile = $('wg-file'); if(wgFile) wgFile.onchange = ()=>handleWgFile(wgFile);
     const conf = $('confirmBtn'); if(conf) conf.onclick = confirmBooking;
     mountCardElementIfNeeded();
   } else {
@@ -770,9 +994,10 @@ function attachHandlers(){
     if(nrStart) nrStart.oninput = e=> newRule.start = e.target.value;
     if(nrEnd) nrEnd.oninput = e=> newRule.end = e.target.value;
     const addRuleBtn = $('addRuleBtn'); if(addRuleBtn) addRuleBtn.onclick = addRule;
-    const meetEl=$('set-meet'), locEl=$('set-location');
+    const meetEl=$('set-meet'), locEl=$('set-location'), intakeEl=$('set-intake');
     if(meetEl) meetEl.onchange = e=> updateSettings('meetLink', e.target.value);
     if(locEl) locEl.onchange = e=> updateSettings('location', e.target.value);
+    if(intakeEl) intakeEl.onchange = e=> updateSettings('intakeQuestions', e.target.value.split('\n').map(s=>s.trim()).filter(Boolean));
     const addBtn = $('addSlotBtn'); if(addBtn) addBtn.onclick = addSlot;
     document.querySelectorAll('[data-remove-slot]').forEach(el=>{ el.onclick = ()=>removeSlot(el.getAttribute('data-remove-slot')); });
     document.querySelectorAll('[data-mark-complete]').forEach(el=>{ el.onclick = ()=>markComplete(el.getAttribute('data-mark-complete')); });
@@ -781,6 +1006,10 @@ function attachHandlers(){
     document.querySelectorAll('[data-stop-timer]').forEach(el=>{ el.onclick = ()=>stopTimer(el.getAttribute('data-stop-timer')); });
     document.querySelectorAll('[data-meet]').forEach(el=>{ el.onchange = ()=>updateBooking(el.getAttribute('data-meet'), { meetLink: el.value }); });
     document.querySelectorAll('[data-summary]').forEach(el=>{ el.onchange = ()=>updateBooking(el.getAttribute('data-summary'), { summary: el.value }); });
+    document.querySelectorAll('[data-clientsummary]').forEach(el=>{ el.onchange = ()=>updateBooking(el.getAttribute('data-clientsummary'), { clientSummary: el.value }); });
+    document.querySelectorAll('[data-toggle-client]').forEach(el=>{ el.onclick = ()=>toggleExpandClient(el.getAttribute('data-toggle-client')); });
+    document.querySelectorAll('[data-block-client]').forEach(el=>{ el.onclick = (e)=>{ e.stopPropagation(); setClientBlocked(el.getAttribute('data-block-client'), true); }; });
+    document.querySelectorAll('[data-unblock-client]').forEach(el=>{ el.onclick = (e)=>{ e.stopPropagation(); setClientBlocked(el.getAttribute('data-unblock-client'), false); }; });
   }
 }
 
