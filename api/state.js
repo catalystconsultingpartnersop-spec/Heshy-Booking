@@ -4,7 +4,23 @@ function defaultState() {
   return {
     slots: [],
     bookings: [],
-    settings: { meetLink: '', location: '' },
+    clients: [],
+    settings: {
+      meetLink: '',
+      location: '',
+      intakeQuestions: [
+        "What's your name and what do you do?",
+        "What's the main challenge or decision you're facing right now?",
+        "What does success look like if this session goes well?",
+        "How did you hear about Catalyst Consulting?",
+        "What's your current role or business?",
+        "Is this a personal, business, or career-related topic?",
+        "Have you worked with a coach or consultant on this before?",
+        "What's the timeline or urgency around this?",
+        "Anything you'd rather I know going in that's hard to say out loud?",
+        "Anything else I should know before we talk?"
+      ]
+    },
     availability: {
       virtual: [
         { id: 'r1', days: [1, 2, 3, 4], start: '11:00', end: '13:00' },
