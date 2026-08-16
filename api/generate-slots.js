@@ -14,9 +14,13 @@ export default async function handler(req, res) {
     if (!data.bookings) data.bookings = [];
 
     const bookedSlotIds = new Set(data.bookings.map(b => b.slotId));
+    const today = new Date(); today.setHours(0, 0, 0, 0);
+    const todayStr = today.getFullYear() + '-' + pad2(today.getMonth()+1) + '-' + pad2(today.getDate());
+    const beforeCount = data.slots.length;
+    data.slots = data.slots.filter(s => s.date >= todayStr || bookedSlotIds.has(s.id));
+    const removed = beforeCount - data.slots.length;
     const existingMap = new Map();
     data.slots.forEach(s => existingMap.set(s.date + '|' + s.time + '|' + s.type, s));
-    const today = new Date(); today.setHours(0, 0, 0, 0);
     let added = 0;
 
     for (let i = 0; i < 8 * 7; i++) {
@@ -47,8 +51,8 @@ export default async function handler(req, res) {
       }
     }
 
-    if (added > 0) await kv.set('app-data', data);
-    res.status(200).json({ added });
+    if (added > 0 || removed > 0) await kv.set('app-data', data);
+    res.status(200).json({ added, removed });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
