@@ -1,4 +1,5 @@
 import { kv } from '@vercel/kv';
+import { verifyAdminToken } from './_lib/auth.js';
 
 async function getAccessToken() {
   const refreshToken = await kv.get('google-refresh-token');
@@ -21,6 +22,7 @@ async function getAccessToken() {
 export default async function handler(req, res) {
   if (req.method !== 'POST') return res.status(405).json({ error: 'Method not allowed' });
   try {
+    if (!(await verifyAdminToken(req))) return res.status(401).json({ error: 'Unauthorized' });
     const { summary, description, startISO, endISO, location } = req.body;
     const accessToken = await getAccessToken();
     if (!accessToken) return res.status(200).json({ created: false });

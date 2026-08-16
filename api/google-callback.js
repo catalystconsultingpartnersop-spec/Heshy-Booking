@@ -2,9 +2,12 @@ import { kv } from '@vercel/kv';
 
 export default async function handler(req, res) {
   try {
-    const { code, error } = req.query;
+    const { code, error, state } = req.query;
     if (error) return res.status(400).send('Google sign-in was cancelled or denied.');
     if (!code) return res.status(400).send('Missing authorization code.');
+    if (!state || !(await kv.get('admin-session:' + state))) {
+      return res.status(401).send('Unauthorized request. Please reconnect from inside Manage.');
+    }
 
     const params = new URLSearchParams({
       code,

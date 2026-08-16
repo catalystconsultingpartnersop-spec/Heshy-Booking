@@ -1,11 +1,13 @@
 import Stripe from 'stripe';
 import { kv } from '@vercel/kv';
+import { verifyAdminToken } from './_lib/auth.js';
 
 const stripe = new Stripe(process.env.STRIPE_SECRET_KEY);
 
 export default async function handler(req, res) {
   if (req.method !== 'POST') return res.status(405).json({ error: 'Method not allowed' });
   try {
+    if (!(await verifyAdminToken(req))) return res.status(401).json({ error: 'Unauthorized' });
     const { bookingId } = req.body;
     const data = await kv.get('app-data');
     if (!data) return res.status(404).json({ error: 'No data found' });

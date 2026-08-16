@@ -1,4 +1,5 @@
 import { kv } from '@vercel/kv';
+import { verifyAdminToken } from './_lib/auth.js';
 
 function defaultState() {
   return {
@@ -36,6 +37,7 @@ function defaultState() {
 
 export default async function handler(req, res) {
   try {
+    if (!(await verifyAdminToken(req))) return res.status(401).json({ error: 'Unauthorized' });
     if (req.method === 'GET') {
       const data = await kv.get('app-data');
       return res.status(200).json(data || defaultState());
