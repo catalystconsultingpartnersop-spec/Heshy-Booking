@@ -470,7 +470,11 @@ async function confirmBooking(){
   if(!clientForm.name || !clientForm.email || !clientForm.phone || !cardComplete || submitting) return;
   const existingClient = findClient(clientForm.email);
   if(existingClient && existingClient.blocked) return;
-  submitting = true; render();
+  submitting = true;
+  const btn = document.getElementById('confirmBtn');
+  const backBtn = document.getElementById('backTo1');
+  if(btn){ btn.disabled = true; btn.textContent = 'Booking…'; }
+  if(backBtn) backBtn.disabled = true;
 
   try{
     const setupRes = await fetch('/api/create-setup-intent', {
@@ -512,7 +516,9 @@ async function confirmBooking(){
   }catch(err){
     submitting = false;
     cardErrorMsg = err.message || 'Something went wrong. Please try again.';
-    render();
+    const errEl = document.getElementById('card-error'); if(errEl) errEl.textContent = cardErrorMsg;
+    const btn = document.getElementById('confirmBtn'); if(btn){ btn.textContent = 'Book session'; updateConfirmButtonState(); }
+    const backBtn = document.getElementById('backTo1'); if(backBtn) backBtn.disabled = false;
   }
 }
 
