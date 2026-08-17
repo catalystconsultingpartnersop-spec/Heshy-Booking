@@ -44,8 +44,9 @@ export function bookingConfirmationEmail(booking, settings) {
   const dateStr = new Date(booking.date + 'T' + booking.time + ':00').toLocaleDateString('en-US', { weekday:'short', month:'short', day:'numeric' });
   const timeStr = new Date(booking.date + 'T' + booking.time + ':00').toLocaleTimeString('en-US', { hour:'numeric', minute:'2-digit' });
   const firstName = (booking.clientName || '').split(' ')[0];
+  const meetLink = booking.meetLink || settings.meetLink;
   const joinRow = booking.type === 'virtual'
-    ? factRow('Join link', settings.meetLink ? `<a href="${settings.meetLink}">${settings.meetLink}</a>` : 'Sent before the session')
+    ? factRow('Join link', meetLink ? `<a href="${meetLink}">${meetLink}</a>` : 'Sent before the session')
     : factRow('Location', (settings.location || 'Sent before the session').replace(/\n/g, '<br>'));
   return {
     subject: `You're booked with Heshy — ${dateStr} at ${timeStr}`,
