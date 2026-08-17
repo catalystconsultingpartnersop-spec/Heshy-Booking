@@ -385,6 +385,8 @@ let scheduleCalMonth = (()=>{ const d = new Date(); d.setDate(1); d.setHours(0,0
 let selectedScheduleDate = null;
 let quickAddTime = '';
 let quickAddDuration = 60;
+let dashboardCalMonth = (()=>{ const d = new Date(); d.setDate(1); d.setHours(0,0,0,0); return d; })();
+let selectedDashboardDate = null;
 function selectAdminType(t){ adminType = t; newSlot.type = t; selectedScheduleDate = null; render(); }
 
 function uid(){ return Math.random().toString(36).slice(2,10); }
@@ -948,6 +950,47 @@ function renderClient(){
   `;
 }
 
+function renderDashboardCalendar(){
+  const monthStart = new Date(dashboardCalMonth.getFullYear(), dashboardCalMonth.getMonth(), 1);
+  const monthLabel = monthStart.toLocaleDateString('en-US',{month:'long', year:'numeric'});
+  const firstDow = monthStart.getDay();
+  const daysInMonth = new Date(monthStart.getFullYear(), monthStart.getMonth()+1, 0).getDate();
+  const todayDs = dateStr(new Date());
+
+  const countsByDate = {};
+  state.bookings.forEach(b=>{ countsByDate[b.date] = (countsByDate[b.date]||0)+1; });
+
+  let cells = '';
+  for(let i=0;i<firstDow;i++) cells += `<div class="cal-cell empty"></div>`;
+  for(let day=1; day<=daysInMonth; day++){
+    const d = new Date(monthStart.getFullYear(), monthStart.getMonth(), day);
+    const ds = dateStr(d);
+    const isHoliday = jewishHolidayDates.has(ds);
+    const hasBookings = !!countsByDate[ds];
+    const isSelected = selectedDashboardDate === ds;
+    const isToday = ds === todayDs;
+    cells += `<div class="cal-cell ${isHoliday?'holiday':''} ${isSelected?'selected':''} ${isToday?'today':''}" data-dash-day="${ds}" ${isHoliday?`title="${jewishHolidayNames[ds]||'Jewish holiday'}"`:''}>
+      <div class="cal-daynum">${day}</div>
+      ${hasBookings ? `<div class="cal-dot"></div>` : ''}
+    </div>`;
+  }
+
+  return `
+    <div class="cal-header">
+      <button class="ghost small" id="dashCalPrevMonth">&larr;</button>
+      <div class="cal-month-label">${monthLabel}</div>
+      <button class="ghost small" id="dashCalNextMonth">&rarr;</button>
+    </div>
+    <div class="cal-grid">
+      ${['S','M','T','W','T','F','S'].map(d=>`<div class="cal-dow">${d}</div>`).join('')}
+      ${cells}
+    </div>
+    <div class="cal-legend">
+      <span><span class="cal-dot-legend"></span> has sessions</span>
+    </div>
+  `;
+}
+
 function renderScheduleCalendar(){
   const monthStart = new Date(scheduleCalMonth.getFullYear(), scheduleCalMonth.getMonth(), 1);
   const monthLabel = monthStart.toLocaleDateString('en-US',{month:'long', year:'numeric'});
@@ -1063,9 +1106,10 @@ function renderAdmin(){
         ${running ? `<button class="ghost small" data-stop-timer="${b.id}">Stop</button>` : `<button class="ghost small" data-start-timer="${b.id}">Start</button>`}
         <span class="note" style="margin:0;">Tracks actual time for billing</span>
       </div>`;
-    const meetBlock = b.type==='virtual' ? `
-      <label>Google Meet link</label>
+    const meetBlock = b.meetLink ? `
+      <label>${b.type==='virtual' ? 'Google Meet link' : 'Google Meet link (for your own recording/notes)'}</label>
       <input type="text" value="${b.meetLink||''}" data-meet="${b.id}">
+      ${!running ? `<button class="primary small" data-join-start="${b.id}" style="margin-top:10px;">${b.type==='virtual'?'Join meeting':'Start Meet'} &amp; start timer</button>` : ''}
     ` : '';
     const controls = `
         <div class="session-controls">
@@ -1122,21 +1166,35 @@ function renderAdmin(){
   let body = '';
 
   if(adminView==='dashboard'){
-    const activeBookings = state.bookings.filter(b=>b.status!=='charged').sort((a,b)=>(a.date+a.time).localeCompare(b.date+b.time));
-    const upcomingHtml = activeBookings.length===0 ? `<div class="empty">No sessions in progress.</div>` : activeBookings.map(sessionCardHtml).join('');
-    const recentCharged = state.bookings.filter(b=>b.status==='charged').sort((a,b)=>b.createdAt-a.createdAt).slice(0,6);
-    let recentHtml = recentCharged.length===0 ? `<div class="empty">No completed sessions yet.</div>` : '';
-    recentCharged.forEach(b=>{
-      recentHtml += `<div class="hist-line"><span>${b.clientId?`<a class="client-link" data-view-client="${b.clientId}">${b.clientName}</a>`:b.clientName} &middot; ${fmtDate(b.date)}</span><span>${money(b.amount||0)}</span></div>`;
+    const todayDs = dateStr(new Date());
+    if(!selectedDashboardDate) selectedDashboardDate = todayDs;
+    const dayBookings = state.bookings.filter(b=>b.date===selectedDashboardDate).sort((a,b)=>a.time.localeCompare(b.time));
+    let dayHtml = dayBookings.length===0 ? `<div class="empty">No sessions on this day.</div>` : '';
+    dayBookings.forEach(b=>{
+      if(b.status==='charged'){
+        dayHtml += `<div class="session">
+          <div class="session-top">
+            <div>
+              <div class="session-name">${b.clientId?`<a class="client-link" data-view-client="${b.clientId}">${b.clientName}</a>`:b.clientName}</div>
+              <div class="session-meta">${fmtTime(b.time)}, ${b.actualMinutes||b.durationMin} min &middot; ${money(b.amount||0)} charged</div>
+              <div class="session-format">${b.type==='virtual'?'Video call':'In person'}</div>
+            </div>
+            <span class="tag status-charged">charged</span>
+          </div>
+        </div>`;
+      } else {
+        dayHtml += sessionCardHtml(b);
+      }
     });
+    const isSelectedToday = selectedDashboardDate === todayDs;
     body = `
       <div class="admin-block">
-        <h2 class="sect">Upcoming</h2>
-        ${upcomingHtml}
+        <h2 class="sect">Dashboard</h2>
+        ${renderDashboardCalendar()}
       </div>
       <div class="admin-block">
-        <h2 class="sect">Recent</h2>
-        ${recentHtml}
+        <h2 class="sect">${isSelectedToday ? 'Today' : fmtDate(selectedDashboardDate)}</h2>
+        ${dayHtml}
       </div>
     `;
   }
@@ -1323,6 +1381,13 @@ function attachHandlers(){
     if(calPrev) calPrev.onclick = ()=>{ scheduleCalMonth = new Date(scheduleCalMonth.getFullYear(), scheduleCalMonth.getMonth()-1, 1); render(); };
     const calNext = $('calNextMonth');
     if(calNext) calNext.onclick = ()=>{ scheduleCalMonth = new Date(scheduleCalMonth.getFullYear(), scheduleCalMonth.getMonth()+1, 1); render(); };
+    document.querySelectorAll('[data-dash-day]').forEach(el=>{
+      el.onclick = ()=>{ selectedDashboardDate = el.getAttribute('data-dash-day'); render(); };
+    });
+    const dashCalPrev = $('dashCalPrevMonth');
+    if(dashCalPrev) dashCalPrev.onclick = ()=>{ dashboardCalMonth = new Date(dashboardCalMonth.getFullYear(), dashboardCalMonth.getMonth()-1, 1); render(); };
+    const dashCalNext = $('dashCalNextMonth');
+    if(dashCalNext) dashCalNext.onclick = ()=>{ dashboardCalMonth = new Date(dashboardCalMonth.getFullYear(), dashboardCalMonth.getMonth()+1, 1); render(); };
     const qaTimeEl = $('quickAddTime'), qaDurEl = $('quickAddDuration');
     if(qaTimeEl) qaTimeEl.oninput = e=> quickAddTime = e.target.value;
     if(qaDurEl) qaDurEl.onchange = e=> quickAddDuration = Number(e.target.value);
@@ -1357,6 +1422,14 @@ function attachHandlers(){
     document.querySelectorAll('[data-charge]').forEach(el=>{ el.onclick = ()=>chargeAndReceipt(el.getAttribute('data-charge')); });
     document.querySelectorAll('[data-skip-charge]').forEach(el=>{ el.onclick = ()=>skipCharge(el.getAttribute('data-skip-charge')); });
     document.querySelectorAll('[data-start-timer]').forEach(el=>{ el.onclick = ()=>startTimer(el.getAttribute('data-start-timer')); });
+    document.querySelectorAll('[data-join-start]').forEach(el=>{
+      el.onclick = ()=>{
+        const id = el.getAttribute('data-join-start');
+        const b = state.bookings.find(x=>x.id===id);
+        if(b && b.meetLink) window.open(b.meetLink, '_blank');
+        startTimer(id);
+      };
+    });
     document.querySelectorAll('[data-stop-timer]').forEach(el=>{ el.onclick = ()=>stopTimer(el.getAttribute('data-stop-timer')); });
     document.querySelectorAll('[data-meet]').forEach(el=>{ el.onchange = ()=>updateBooking(el.getAttribute('data-meet'), { meetLink: el.value }); });
     document.querySelectorAll('[data-summary]').forEach(el=>{ el.onchange = ()=>updateBooking(el.getAttribute('data-summary'), { summary: el.value }); });
