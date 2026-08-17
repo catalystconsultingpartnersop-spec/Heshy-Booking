@@ -43,13 +43,15 @@ function wrap(bodyHtml) {
 export function bookingConfirmationEmail(booking, settings) {
   const dateStr = new Date(booking.date + 'T' + booking.time + ':00').toLocaleDateString('en-US', { weekday:'short', month:'short', day:'numeric' });
   const timeStr = new Date(booking.date + 'T' + booking.time + ':00').toLocaleTimeString('en-US', { hour:'numeric', minute:'2-digit' });
+  const firstName = (booking.clientName || '').split(' ')[0];
   const joinRow = booking.type === 'virtual'
     ? factRow('Join link', settings.meetLink ? `<a href="${settings.meetLink}">${settings.meetLink}</a>` : 'Sent before the session')
     : factRow('Location', (settings.location || 'Sent before the session').replace(/\n/g, '<br>'));
   return {
-    subject: `You're booked — ${dateStr} at ${timeStr}`,
+    subject: `You're booked with Heshy — ${dateStr} at ${timeStr}`,
     html: wrap(`
-      <div style="font-size:22px;font-family:Georgia,serif;margin-bottom:16px;">Booked.</div>
+      <div style="font-size:22px;font-family:Georgia,serif;margin-bottom:8px;">You're booked.</div>
+      <div style="font-size:14px;font-family:Arial,sans-serif;color:#6E6E6E;margin-bottom:20px;">Hi ${firstName || 'there'} &mdash; your session with Heshy is confirmed. Here are the details:</div>
       <table style="width:100%;border-collapse:collapse;font-family:Arial,sans-serif;">
         ${factRow('Time', `${dateStr}, ${timeStr}`)}
         ${factRow('Format', booking.type === 'virtual' ? 'Video call' : 'In person')}
