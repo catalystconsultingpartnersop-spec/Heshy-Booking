@@ -76,6 +76,7 @@ export function newBookingAlertEmail(booking) {
         ${factRow('Phone', booking.clientPhone)}
         ${factRow('Time', `${dateStr}, ${timeStr}`)}
         ${factRow('Format', booking.type === 'virtual' ? 'Video call' : 'In person')}
+        ${booking.type === 'virtual' && booking.meetLink ? factRow('Join link', `<a href="${booking.meetLink}">${booking.meetLink}</a>`) : ''}
       </table>
     `)
   };
