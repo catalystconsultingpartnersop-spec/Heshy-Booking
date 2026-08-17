@@ -806,7 +806,7 @@ function portalBookAgain(){
 function renderPortal(){
   if(!portalClient){
     return `
-      <div class="topbar"><div class="brand">Heshy</div></div>
+      <div class="topbar"><div class="brand">Heshy — Clarity Sessions</div></div>
       <div class="portal-box">
         <h1>My sessions</h1>
         <label>Email</label>
@@ -830,7 +830,7 @@ function renderPortal(){
     </div>`;
   });
   return `
-    <div class="topbar"><div class="brand">Heshy</div></div>
+    <div class="topbar"><div class="brand">Heshy — Clarity Sessions</div></div>
     <h1>Hi ${portalClient.name.split(' ')[0]}</h1>
     <div class="btn-row" style="margin-top:0;margin-bottom:32px;"><button class="primary small" id="portal-book-again">Book another session</button></div>
     <div class="section-title">Upcoming</div>
@@ -931,7 +931,7 @@ function renderClient(){
   }
 
   return `
-    <div class="topbar"><div class="brand">Heshy</div></div>
+    <div class="topbar"><div class="brand">Heshy — Clarity Sessions</div></div>
     <div class="step-label">Step ${bookingStep} of 3</div>
     <div class="step-line" style="--pct:${pct}%"></div>
     ${inner}
