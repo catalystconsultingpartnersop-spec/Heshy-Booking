@@ -773,9 +773,10 @@ function renderTimerOnly(id){
 async function chargeAndReceipt(id){
   const btn = document.querySelector(`[data-charge="${id}"]`);
   const amountInput = document.querySelector(`[data-amount="${id}"]`);
-  const minutesInput = document.querySelector(`[data-actual-min="${id}"]`);
+  const hoursInput = document.querySelector(`[data-actual-hours="${id}"]`);
   const overrideAmount = amountInput ? parseFloat(amountInput.value) : null;
-  const overrideMinutes = minutesInput ? parseFloat(minutesInput.value) : null;
+  const overrideHours = hoursInput ? parseFloat(hoursInput.value) : null;
+  const overrideMinutes = (overrideHours!=null && !isNaN(overrideHours)) ? Math.round(overrideHours*60) : null;
   if(btn){ btn.disabled = true; btn.textContent = 'Charging…'; }
   try{
     const res = await fetch('/api/charge-booking', {
@@ -1156,16 +1157,15 @@ function renderAdmin(){
         </div>
     `;
     let action = '';
-    if(b.status==='scheduled'){
-      action = `<button class="primary small" data-mark-complete="${b.id}">Mark complete</button>`;
-    } else if(b.status==='completed'){
+    if(b.status!=='charged'){
       const mins = b.actualMinutes || b.durationMin;
-      const defaultAmt = Math.round((mins/60)*500*100)/100;
+      const hours = Math.round((mins/60)*100)/100;
+      const defaultAmt = Math.round(hours*500*100)/100;
       const amt = (b.amount!=null) ? b.amount : defaultAmt;
       action = `
         <div class="charge-row">
           <div class="row2">
-            <div><label>Actual minutes</label><input type="text" value="${mins}" data-actual-min="${b.id}"></div>
+            <div><label>Actual hours</label><input type="text" value="${hours}" data-actual-hours="${b.id}"></div>
             <div><label>Amount to charge</label><input type="text" value="${amt.toFixed(2)}" data-amount="${b.id}"></div>
           </div>
           <div style="margin-top:12px;"><button class="primary small" data-charge="${b.id}">Charge and send receipt</button></div>
@@ -1478,13 +1478,13 @@ function attachHandlers(){
     document.querySelectorAll('[data-remove-slot]').forEach(el=>{ el.onclick = ()=>removeSlot(el.getAttribute('data-remove-slot')); });
     document.querySelectorAll('[data-mark-complete]').forEach(el=>{ el.onclick = ()=>markComplete(el.getAttribute('data-mark-complete')); });
     document.querySelectorAll('[data-charge]').forEach(el=>{ el.onclick = ()=>chargeAndReceipt(el.getAttribute('data-charge')); });
-    document.querySelectorAll('[data-actual-min]').forEach(el=>{
+    document.querySelectorAll('[data-actual-hours]').forEach(el=>{
       el.oninput = ()=>{
-        const id = el.getAttribute('data-actual-min');
+        const id = el.getAttribute('data-actual-hours');
         const amtEl = document.querySelector(`[data-amount="${id}"]`);
-        const mins = parseFloat(el.value);
-        if(amtEl && !isNaN(mins)){
-          amtEl.value = (Math.round((mins/60)*500*100)/100).toFixed(2);
+        const hours = parseFloat(el.value);
+        if(amtEl && !isNaN(hours)){
+          amtEl.value = (Math.round(hours*500*100)/100).toFixed(2);
         }
       };
     });
