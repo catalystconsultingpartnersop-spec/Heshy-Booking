@@ -56,7 +56,7 @@ export function bookingConfirmationEmail(booking, settings) {
       <table style="width:100%;border-collapse:collapse;font-family:Arial,sans-serif;">
         ${factRow('Time', `${dateStr}, ${timeStr}`)}
         ${factRow('Format', booking.type === 'virtual' ? 'Video call' : 'In person')}
-        ${factRow('Rate', '$500 per hour, charged after the session')}
+        ${factRow('Rate', booking.comped ? 'Complimentary — no charge' : '$500 per hour, charged after the session')}
         ${joinRow}
       </table>
     `)
