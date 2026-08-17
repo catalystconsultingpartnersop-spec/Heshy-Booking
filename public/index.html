@@ -345,6 +345,7 @@ let runningTimer = {};
 let timerDisplay = {};
 let newSlot = { date:'', time:'', duration:60, type:'virtual' };
 let adminType = 'virtual';
+let showScheduleEditor = false;
 function selectAdminType(t){ adminType = t; newSlot.type = t; render(); }
 
 function uid(){ return Math.random().toString(36).slice(2,10); }
@@ -422,6 +423,7 @@ async function loadState(){
     if(view === 'admin'){
       if(adminUnlocked && adminToken) await loadAdminState();
       await loadCalendarBusy();
+      await loadJewishHolidays();
       render();
       return;
     }
@@ -433,6 +435,7 @@ async function loadState(){
     state.settings = data.settings || { meetLink:'', location:'', intakeQuestions:[] };
     state.availability = data.availability || { virtual: [], 'in-person': [] };
     await loadCalendarBusy();
+    await loadJewishHolidays();
   }catch(e){ console.error('load failed', e); }
   render();
 }
@@ -480,6 +483,24 @@ function fmtTime(t){
 function money(n){ return '$'+n.toFixed(2); }
 
 let calendarBusy = [];
+let jewishHolidayDates = new Set();
+const BLOCKED_HOLIDAY_MATCHES = [
+  'Rosh Hashana', 'Yom Kippur', 'Sukkot', 'Shmini Atzeret', 'Simchat Torah',
+  'Pesach', 'Shavuot', 'Purim', "Tish'a B'Av", 'Tisha B\u2019Av'
+];
+async function loadJewishHolidays(){
+  try{
+    const year = new Date().getFullYear();
+    const urls = [year, year+1].map(y=>`https://www.hebcal.com/hebcal?v=1&cfg=json&maj=on&min=on&mod=off&nx=off&year=${y}&ss=off&mf=on&c=off&geo=none`);
+    const results = await Promise.all(urls.map(u=>fetch(u).then(r=>r.json()).catch(()=>({items:[]}))));
+    const items = results.flatMap(d=>d.items||[]);
+    jewishHolidayDates = new Set(
+      items
+        .filter(i=> BLOCKED_HOLIDAY_MATCHES.some(name=> (i.title||'').includes(name)))
+        .map(i=>i.date.slice(0,10))
+    );
+  }catch(e){ jewishHolidayDates = new Set(); }
+}
 let calendarConnected = false;
 function slotOverlapsBusy(slot){
   const slotStart = new Date(slot.date+'T'+slot.time+':00');
@@ -501,7 +522,7 @@ async function loadCalendarBusy(){
 }
 function openSlots(){
   const bookedIds = new Set(state.bookings.map(b=>b.slotId));
-  return state.slots.filter(s=>!bookedIds.has(s.id) && s.type===selectedType && !slotOverlapsBusy(s)).sort((a,b)=>(a.date+a.time).localeCompare(b.date+b.time));
+  return state.slots.filter(s=>!bookedIds.has(s.id) && s.type===selectedType && !slotOverlapsBusy(s) && !jewishHolidayDates.has(s.date)).sort((a,b)=>(a.date+a.time).localeCompare(b.date+b.time));
 }
 function groupByDate(slots){
   const g = {};
@@ -540,6 +561,7 @@ async function tryAdminLogin(){
       view = 'admin';
       await loadAdminState();
       await loadCalendarBusy();
+      await loadJewishHolidays();
       render();
     } else {
       if(err) err.textContent = 'Wrong password.';
@@ -878,7 +900,7 @@ function renderClient(){
 function renderAdmin(){
   const bookedIds = new Set(state.bookings.map(b=>b.slotId));
   const todayDs = (()=>{ const d=new Date(); return d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')+'-'+String(d.getDate()).padStart(2,'0'); })();
-  const typeSlots = state.slots.filter(s=>s.type===adminType && s.date>=todayDs);
+  const typeSlots = state.slots.filter(s=>s.type===adminType && s.date>=todayDs && !jewishHolidayDates.has(s.date));
   let rulesHtml = (state.availability[adminType]||[]).length===0 ? `<div class="empty">No weekly pattern set.</div>` : '';
   (state.availability[adminType]||[]).forEach(r=>{
     rulesHtml += `
@@ -1032,33 +1054,43 @@ function renderAdmin(){
         <div class="type-btn ${adminType==='in-person'?'active':''}" data-admin-type="in-person">In person</div>
       </div>
 
-      <div class="section-title" style="margin-top:24px;">Weekly pattern</div>
-      ${rulesHtml}
-      <div class="day-toggle-row">
-        ${DOW.map((d,i)=>`<div class="day-toggle ${newRule.days.includes(i)?'active':''}" data-rule-day="${i}">${d[0]}</div>`).join('')}
-      </div>
-      <div class="row2" style="margin-top:12px;">
-        <div><label>Start time</label><input type="text" id="nr-start" placeholder="HH:MM" value="${newRule.start}"></div>
-        <div><label>End time</label><input type="text" id="nr-end" placeholder="HH:MM" value="${newRule.end}"></div>
-      </div>
-      <div style="margin-top:14px;"><button class="ghost small" id="addRuleBtn">Add pattern</button></div>
-
-      <div class="section-title" style="margin-top:32px;">One-off slot</div>
-      <div class="admin-grid">
-        <div><label>Date</label><input type="text" id="ns-date" placeholder="YYYY-MM-DD" value="${newSlot.date}"></div>
-        <div><label>Time</label><input type="text" id="ns-time" placeholder="HH:MM" value="${newSlot.time}"></div>
-        <div><label>Duration</label>
-          <select id="ns-duration">
-            <option value="30" ${newSlot.duration==30?'selected':''}>30 min</option>
-            <option value="60" ${newSlot.duration==60?'selected':''}>60 min</option>
-            <option value="90" ${newSlot.duration==90?'selected':''}>90 min</option>
-          </select>
-        </div>
-      </div>
-      <div style="margin-top:16px;"><button class="primary small" id="addSlotBtn">Add ${adminType==='virtual'?'online':'in-person'} slot</button></div>
+      <div class="section-title" style="margin-top:24px;">Upcoming times</div>
       <div class="slot-list-wrap">
         ${slotsHtml}
       </div>
+
+      <button class="ghost small" id="toggleScheduleEditor" style="margin-top:20px;">${showScheduleEditor?'Hide schedule editor':'Edit weekly schedule'}</button>
+
+      ${showScheduleEditor ? `
+      <div style="margin-top:24px;padding-top:20px;border-top:1px solid var(--line);">
+        <div class="section-title">Weekly pattern</div>
+        <p class="note" style="margin:0 0 14px;">This is the schedule that repeats every week. Add or remove a day/time block below.</p>
+        ${rulesHtml}
+        <div class="day-toggle-row" style="margin-top:14px;">
+          ${DOW.map((d,i)=>`<div class="day-toggle ${newRule.days.includes(i)?'active':''}" data-rule-day="${i}">${d[0]}</div>`).join('')}
+        </div>
+        <div class="row2" style="margin-top:12px;">
+          <div><label>Start time</label><input type="text" id="nr-start" placeholder="HH:MM" value="${newRule.start}"></div>
+          <div><label>End time</label><input type="text" id="nr-end" placeholder="HH:MM" value="${newRule.end}"></div>
+        </div>
+        <div style="margin-top:14px;"><button class="ghost small" id="addRuleBtn">Add pattern</button></div>
+
+        <div class="section-title" style="margin-top:32px;">One-time slot</div>
+        <p class="note" style="margin:0 0 14px;">Use this only for a single date that doesn't fit your regular weekly schedule.</p>
+        <div class="admin-grid">
+          <div><label>Date</label><input type="text" id="ns-date" placeholder="YYYY-MM-DD" value="${newSlot.date}"></div>
+          <div><label>Time</label><input type="text" id="ns-time" placeholder="HH:MM" value="${newSlot.time}"></div>
+          <div><label>Duration</label>
+            <select id="ns-duration">
+              <option value="30" ${newSlot.duration==30?'selected':''}>30 min</option>
+              <option value="60" ${newSlot.duration==60?'selected':''}>60 min</option>
+              <option value="90" ${newSlot.duration==90?'selected':''}>90 min</option>
+            </select>
+          </div>
+        </div>
+        <div style="margin-top:16px;"><button class="primary small" id="addSlotBtn">Add ${adminType==='virtual'?'online':'in-person'} slot</button></div>
+      </div>
+      ` : ''}
     </div>
 
     <div class="admin-block">
@@ -1129,6 +1161,7 @@ function attachHandlers(){
     if(timeEl) timeEl.oninput = e=> newSlot.time = e.target.value;
     if(durEl) durEl.onchange = e=> newSlot.duration = e.target.value;
     document.querySelectorAll('[data-admin-type]').forEach(el=>{ el.onclick = ()=>selectAdminType(el.getAttribute('data-admin-type')); });
+    const toggleSchedBtn = $('toggleScheduleEditor'); if(toggleSchedBtn) toggleSchedBtn.onclick = ()=>{ showScheduleEditor = !showScheduleEditor; render(); };
     document.querySelectorAll('[data-rule-day]').forEach(el=>{ el.onclick = ()=>toggleRuleDay(Number(el.getAttribute('data-rule-day'))); });
     document.querySelectorAll('[data-remove-rule]').forEach(el=>{ el.onclick = ()=>removeRule(el.getAttribute('data-remove-rule')); });
     const nrStart=$('nr-start'), nrEnd=$('nr-end');
