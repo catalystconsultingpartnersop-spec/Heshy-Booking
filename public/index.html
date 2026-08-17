@@ -104,6 +104,13 @@
   }
   .card-error{color:#A5433A;font-size:12.5px;margin-top:6px;min-height:16px;}
   input:focus{outline:none;border-color:var(--ink);}
+  input:-webkit-autofill,
+  input:-webkit-autofill:hover,
+  input:-webkit-autofill:focus{
+    -webkit-box-shadow:0 0 0 1000px var(--paper) inset;
+    -webkit-text-fill-color:var(--ink);
+    transition:background-color 5000s ease-in-out 0s;
+  }
   .row2{display:grid;grid-template-columns:1fr 1fr;gap:14px;}
 
   .form-section{border-top:1px solid var(--line);padding-top:18px;margin-top:24px;}
