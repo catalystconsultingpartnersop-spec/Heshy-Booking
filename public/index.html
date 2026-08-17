@@ -561,9 +561,17 @@ async function loadCalendarBusy(){
     calendarBusy = data.busy || [];
   }catch(e){ calendarConnected = false; calendarBusy = []; }
 }
+function isFutureSlot(s){
+  const now = new Date();
+  const nowDs = dateStr(now);
+  if(s.date > nowDs) return true;
+  if(s.date < nowDs) return false;
+  const nowTime = String(now.getHours()).padStart(2,'0')+':'+String(now.getMinutes()).padStart(2,'0');
+  return s.time > nowTime;
+}
 function openSlots(){
   const bookedIds = new Set(state.bookings.map(b=>b.slotId));
-  return state.slots.filter(s=>!bookedIds.has(s.id) && s.type===selectedType && !slotOverlapsBusy(s) && !jewishHolidayDates.has(s.date)).sort((a,b)=>(a.date+a.time).localeCompare(b.date+b.time));
+  return state.slots.filter(s=>!bookedIds.has(s.id) && s.type===selectedType && !slotOverlapsBusy(s) && !jewishHolidayDates.has(s.date) && isFutureSlot(s)).sort((a,b)=>(a.date+a.time).localeCompare(b.date+b.time));
 }
 function groupByDate(slots){
   const g = {};
@@ -947,7 +955,7 @@ function renderScheduleCalendar(){
   const todayDs = dateStr(today);
 
   const countsForType = {};
-  state.slots.forEach(s=>{ if(s.type===adminType) countsForType[s.date] = (countsForType[s.date]||0)+1; });
+  state.slots.forEach(s=>{ if(s.type===adminType && isFutureSlot(s)) countsForType[s.date] = (countsForType[s.date]||0)+1; });
 
   let cells = '';
   for(let i=0;i<firstDow;i++) cells += `<div class="cal-cell empty"></div>`;
@@ -1018,7 +1026,7 @@ function renderDayDetail(){
 function renderAdmin(){
   const bookedIds = new Set(state.bookings.map(b=>b.slotId));
   const todayDs = (()=>{ const d=new Date(); return d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')+'-'+String(d.getDate()).padStart(2,'0'); })();
-  const typeSlots = state.slots.filter(s=>s.type===adminType && s.date>=todayDs && !jewishHolidayDates.has(s.date));
+  const typeSlots = state.slots.filter(s=>s.type===adminType && s.date>=todayDs && !jewishHolidayDates.has(s.date) && isFutureSlot(s));
   let rulesHtml = (state.availability[adminType]||[]).length===0 ? `<div class="empty">No weekly pattern set.</div>` : '';
   (state.availability[adminType]||[]).forEach(r=>{
     rulesHtml += `
