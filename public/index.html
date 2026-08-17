@@ -369,6 +369,7 @@ let selectedSlot = null;
 let selectedDay = null;
 let selectedType = 'virtual';
 let clientForm = { name:'', email:'', phone:'', intakeAnswers:[], wgPdfName:'', wgPdfData:'', checkedEmail:'', isNew:false, blocked:false };
+let confirmedMeetLink = '';
 let submitting = false;
 let portalEmail = '';
 let portalClient = null;
@@ -659,6 +660,7 @@ async function confirmBooking(){
     });
     const bookingData = await bookingRes.json();
     if(bookingData.error){ throw new Error(bookingData.error); }
+    if(bookingData.meetLink) confirmedMeetLink = bookingData.meetLink;
 
     submitting = false;
     bookingStep = 3; render();
@@ -932,7 +934,7 @@ function renderClient(){
           <div class="fact-row"><span>Rate</span><span>$500 per hour, charged after the session</span></div>
         </div>
         ${selectedSlot.type==='virtual'
-          ? `<div class="join-block"><div class="section-title">Join link</div><a href="${state.settings.meetLink||'#'}" class="join-link">${state.settings.meetLink||'Link will be sent before the session'}</a></div>`
+          ? `<div class="join-block"><div class="section-title">Join link</div><a href="${confirmedMeetLink||'#'}" class="join-link">${confirmedMeetLink||'Link will be sent before the session'}</a></div>`
           : `<div class="join-block"><div class="section-title">Location</div><div class="location-text">${(state.settings.location||'Address will be sent before the session').replace(/\n/g,'<br>')}</div></div>`}
       </div>
     `;
