@@ -368,8 +368,9 @@ let bookingStep = 1;
 let selectedSlot = null;
 let selectedDay = null;
 let selectedType = 'virtual';
-let clientForm = { name:'', email:'', phone:'', intakeAnswers:[], wgPdfName:'', wgPdfData:'', checkedEmail:'', isNew:false, blocked:false };
+let clientForm = { name:'', email:'', phone:'', intakeAnswers:[], wgPdfName:'', wgPdfData:'', checkedEmail:'', isNew:false, blocked:false, couponCode:'' };
 let confirmedMeetLink = '';
+let confirmedComped = false;
 let submitting = false;
 let portalEmail = '';
 let portalClient = null;
@@ -378,6 +379,7 @@ let expandedClientId = null;
 let runningTimer = {};
 let timerDisplay = {};
 let newSlot = { date:'', time:'', duration:60, type:'virtual' };
+let newCoupon = { code:'', description:'', maxUses:'' };
 let adminType = 'virtual';
 let adminView = 'dashboard';
 let showScheduleEditor = false;
@@ -492,6 +494,7 @@ async function loadAdminState(){
     state = data;
     if(!state.settings) state.settings = { meetLink:'', location:'', intakeQuestions:[] };
     if(!state.clients) state.clients = [];
+    if(!state.settings.coupons) state.settings.coupons = [];
     if(!state.availability) state.availability = { virtual: [], 'in-person': [] };
   }catch(e){ console.error('admin load failed', e); }
 }
@@ -589,7 +592,8 @@ function goStep(n){ bookingStep = n; render(); }
 function backToClient(){
   view = 'client'; history.replaceState(null, '', '#');
   bookingStep=1; selectedSlot=null;
-  clientForm={name:'',email:'',phone:'',intakeAnswers:[],wgPdfName:'',wgPdfData:'',checkedEmail:'',isNew:false,blocked:false};
+  clientForm={name:'',email:'',phone:'',intakeAnswers:[],wgPdfName:'',wgPdfData:'',checkedEmail:'',isNew:false,blocked:false,couponCode:''};
+  confirmedMeetLink=''; confirmedComped=false;
   cardComplete=false; cardErrorMsg=''; if(cardElement) cardElement.clear();
   render();
 }
@@ -600,10 +604,10 @@ async function tryAdminLogin(){
   if(!input) return;
   if(btn){ btn.disabled = true; btn.textContent = 'Checking…'; }
   try{
-    const r = await fetch('/api/admin-login', {
+    const r = await fetch('/api/admin-data', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ password: input.value })
+      body: JSON.stringify({ action: 'login', password: input.value })
     });
     const data = await r.json();
     if(data.ok){
@@ -657,12 +661,13 @@ async function confirmBooking(){
       body: JSON.stringify({
         slotId: selectedSlot.id, name: clientForm.name, email: clientForm.email, phone: clientForm.phone,
         intakeAnswers: clientForm.intakeAnswers, wgPdfName: clientForm.wgPdfName, wgPdfData: clientForm.wgPdfData,
-        stripeCustomerId: setupData.customerId
+        stripeCustomerId: setupData.customerId, couponCode: clientForm.couponCode
       })
     });
     const bookingData = await bookingRes.json();
     if(bookingData.error){ throw new Error(bookingData.error); }
     if(bookingData.meetLink) confirmedMeetLink = bookingData.meetLink;
+    confirmedComped = !!bookingData.comped;
 
     submitting = false;
     bookingStep = 3; render();
@@ -698,6 +703,23 @@ function daysLabel(days){
 }
 function fmtTimeShort(t){ return fmtTime(t); }
 
+async function addCoupon(){
+  const code = newCoupon.code.trim().toUpperCase();
+  if(!code) return;
+  if(!state.settings.coupons) state.settings.coupons = [];
+  if(state.settings.coupons.some(c=>c.code===code)) return;
+  state.settings.coupons.push({
+    code, description: newCoupon.description.trim(),
+    maxUses: newCoupon.maxUses ? Number(newCoupon.maxUses) : null,
+    usedCount: 0, createdAt: Date.now()
+  });
+  newCoupon = { code:'', description:'', maxUses:'' };
+  await saveState(); render();
+}
+async function removeCoupon(code){
+  state.settings.coupons = (state.settings.coupons||[]).filter(c=>c.code!==code);
+  await saveState(); render();
+}
 async function addSlot(){
   if(!newSlot.date || !newSlot.time) return;
   state.slots.push({ id: uid(), date:newSlot.date, time:newSlot.time, duration:Number(newSlot.duration), type:adminType });
@@ -751,13 +773,19 @@ function renderTimerOnly(id){
 async function chargeAndReceipt(id){
   const btn = document.querySelector(`[data-charge="${id}"]`);
   const amountInput = document.querySelector(`[data-amount="${id}"]`);
+  const minutesInput = document.querySelector(`[data-actual-min="${id}"]`);
   const overrideAmount = amountInput ? parseFloat(amountInput.value) : null;
+  const overrideMinutes = minutesInput ? parseFloat(minutesInput.value) : null;
   if(btn){ btn.disabled = true; btn.textContent = 'Charging…'; }
   try{
     const res = await fetch('/api/charge-booking', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', 'X-Admin-Token': adminToken },
-      body: JSON.stringify({ bookingId: id, amount: (overrideAmount!=null && !isNaN(overrideAmount)) ? overrideAmount : undefined })
+      body: JSON.stringify({
+        bookingId: id,
+        amount: (overrideAmount!=null && !isNaN(overrideAmount)) ? overrideAmount : undefined,
+        actualMinutes: (overrideMinutes!=null && !isNaN(overrideMinutes)) ? overrideMinutes : undefined
+      })
     });
     const data = await res.json();
     if(data.error){ alert('Charge failed: ' + data.error); if(btn){ btn.disabled=false; } return; }
@@ -913,6 +941,10 @@ function renderClient(){
         <input type="tel" id="f-phone" value="${clientForm.phone}">
       </div>
       <div id="intake-region">${intakeRegionHtml()}</div>
+      <div class="form-section">
+        <div class="section-title">Coupon code <span class="optional-mark">(optional)</span></div>
+        <input type="text" id="f-coupon" placeholder="Have a code? Enter it here" value="${clientForm.couponCode}">
+      </div>
       <div class="form-section last">
         <div class="section-title">Payment</div>
         <label>Card</label>
@@ -933,7 +965,8 @@ function renderClient(){
         <div class="fact">
           <div class="fact-row"><span>Time</span><span>${fmtDate(selectedSlot.date)}, ${fmtTime(selectedSlot.time)}</span></div>
           <div class="fact-row"><span>Format</span><span>${selectedSlot.type==='virtual'?'Video call':'In person'}</span></div>
-          <div class="fact-row"><span>Rate</span><span>$500 per hour, charged after the session</span></div>
+          <div class="fact-row"><span>Rate</span><span>${confirmedComped ? 'Complimentary — no charge' : '$500 per hour, charged after the session'}</span></div>
+          ${confirmedComped ? `<div class="fact-row"><span>Coupon</span><span>${clientForm.couponCode}</span></div>` : ''}
         </div>
         ${selectedSlot.type==='virtual'
           ? `<div class="join-block"><div class="section-title">Join link</div><a href="${confirmedMeetLink||'#'}" class="join-link">${confirmedMeetLink||'Link will be sent before the session'}</a></div>`
@@ -1115,11 +1148,11 @@ function renderAdmin(){
         <div class="session-controls">
           ${timerBlock}
           ${meetBlock}
+          ${b.calendarEventId ? `<button class="ghost small" data-fetch-gemini="${b.id}" style="margin-bottom:14px;">Fetch Gemini notes</button><span id="gemini-msg-${b.id}" style="font-size:12.5px;margin-left:10px;"></span>` : ''}
           <label>Internal notes</label>
           <textarea data-summary="${b.id}">${b.summary||''}</textarea>
           <label>Client-facing summary</label>
           <textarea data-clientsummary="${b.id}">${b.clientSummary||''}</textarea>
-          ${b.type==='virtual' ? `<div class="note">Connecting Google Calendar/Meet would create the link and pull a first-draft summary automatically.</div>` : ''}
         </div>
     `;
     let action = '';
@@ -1131,11 +1164,11 @@ function renderAdmin(){
       const amt = (b.amount!=null) ? b.amount : defaultAmt;
       action = `
         <div class="charge-row">
-          <label>Amount to charge</label>
-          <div style="display:flex;gap:10px;align-items:center;">
-            <input type="text" value="${amt.toFixed(2)}" data-amount="${b.id}" style="max-width:120px;">
-            <button class="primary small" data-charge="${b.id}">Charge and send receipt</button>
+          <div class="row2">
+            <div><label>Actual minutes</label><input type="text" value="${mins}" data-actual-min="${b.id}"></div>
+            <div><label>Amount to charge</label><input type="text" value="${amt.toFixed(2)}" data-amount="${b.id}"></div>
           </div>
+          <div style="margin-top:12px;"><button class="primary small" data-charge="${b.id}">Charge and send receipt</button></div>
           <button class="ghost small danger-ghost" data-skip-charge="${b.id}" style="margin-top:8px;">Mark complete, don't charge</button>
         </div>`;
     }
@@ -1145,7 +1178,7 @@ function renderAdmin(){
           <div>
             <div class="session-name">${b.clientId?`<a class="client-link" data-view-client="${b.clientId}">${b.clientName}</a>`:b.clientName}</div>
             <div class="session-meta">${fmtDate(b.date)}, ${fmtTime(b.time)}, ${b.durationMin} min scheduled${b.actualMinutes?', '+b.actualMinutes+' min actual':''}</div>
-            <div class="session-format">${b.type==='virtual'?'Video call':'In person'}</div>
+            <div class="session-format">${b.type==='virtual'?'Video call':'In person'}${b.comped?' &middot; comped ('+b.couponCode+')':''}</div>
           </div>
           <span class="tag status-${b.status}">${b.status}</span>
         </div>
@@ -1302,6 +1335,24 @@ function renderAdmin(){
           <span id="settings-save-msg" style="font-size:13px;margin-left:12px;"></span>
         </div>
       </div>
+
+      <div class="admin-block">
+        <h2 class="sect">Coupon codes</h2>
+        <p class="note" style="margin:0 0 14px;">A client can enter a code at booking to make that one session free. The card is still saved for no-show protection, but you won't be charged for it unless you choose to.</p>
+        ${(state.settings.coupons||[]).length===0 ? `<div class="empty">No coupon codes yet.</div>` : ''}
+        ${(state.settings.coupons||[]).map(c=>`
+          <div class="row">
+            <div><div class="main">${c.code}</div><div class="sub">${c.description||'No description'} &middot; ${c.maxUses ? (c.usedCount||0)+' of '+c.maxUses+' used' : 'Unlimited uses'}${c.usedCount>0?' &middot; used '+(c.usedCount||0)+' time'+(c.usedCount===1?'':'s'):''}</div></div>
+            <button class="ghost small danger-ghost" data-remove-coupon="${c.code}">Remove</button>
+          </div>
+        `).join('')}
+        <div class="admin-grid" style="margin-top:16px;">
+          <div><label>Code</label><input type="text" id="coupon-code" placeholder="FRIEND2026" value="${newCoupon.code}"></div>
+          <div><label>Description (optional)</label><input type="text" id="coupon-desc" placeholder="For referrals" value="${newCoupon.description}"></div>
+          <div><label>Max uses</label><input type="text" id="coupon-max" placeholder="Blank = unlimited" value="${newCoupon.maxUses}"></div>
+        </div>
+        <div style="margin-top:14px;"><button class="ghost small" id="addCouponBtn">Add coupon</button></div>
+      </div>
     `;
   }
 
@@ -1354,6 +1405,7 @@ function attachHandlers(){
       };
     });
     const emailEl = $('f-email'); if(emailEl) emailEl.onblur = onEmailBlur;
+    const couponEl = $('f-coupon'); if(couponEl) couponEl.oninput = e=> clientForm.couponCode = e.target.value;
     attachIntakeRegionHandlers();
     const conf = $('confirmBtn'); if(conf) conf.onclick = confirmBooking;
     mountCardElementIfNeeded();
@@ -1417,9 +1469,25 @@ function attachHandlers(){
       };
     }
     const addBtn = $('addSlotBtn'); if(addBtn) addBtn.onclick = addSlot;
+    const couponCodeEl=$('coupon-code'), couponDescEl=$('coupon-desc'), couponMaxEl=$('coupon-max');
+    if(couponCodeEl) couponCodeEl.oninput = e=> newCoupon.code = e.target.value;
+    if(couponDescEl) couponDescEl.oninput = e=> newCoupon.description = e.target.value;
+    if(couponMaxEl) couponMaxEl.oninput = e=> newCoupon.maxUses = e.target.value;
+    const addCouponBtn = $('addCouponBtn'); if(addCouponBtn) addCouponBtn.onclick = addCoupon;
+    document.querySelectorAll('[data-remove-coupon]').forEach(el=>{ el.onclick = ()=>removeCoupon(el.getAttribute('data-remove-coupon')); });
     document.querySelectorAll('[data-remove-slot]').forEach(el=>{ el.onclick = ()=>removeSlot(el.getAttribute('data-remove-slot')); });
     document.querySelectorAll('[data-mark-complete]').forEach(el=>{ el.onclick = ()=>markComplete(el.getAttribute('data-mark-complete')); });
     document.querySelectorAll('[data-charge]').forEach(el=>{ el.onclick = ()=>chargeAndReceipt(el.getAttribute('data-charge')); });
+    document.querySelectorAll('[data-actual-min]').forEach(el=>{
+      el.oninput = ()=>{
+        const id = el.getAttribute('data-actual-min');
+        const amtEl = document.querySelector(`[data-amount="${id}"]`);
+        const mins = parseFloat(el.value);
+        if(amtEl && !isNaN(mins)){
+          amtEl.value = (Math.round((mins/60)*500*100)/100).toFixed(2);
+        }
+      };
+    });
     document.querySelectorAll('[data-skip-charge]').forEach(el=>{ el.onclick = ()=>skipCharge(el.getAttribute('data-skip-charge')); });
     document.querySelectorAll('[data-start-timer]').forEach(el=>{ el.onclick = ()=>startTimer(el.getAttribute('data-start-timer')); });
     document.querySelectorAll('[data-join-start]').forEach(el=>{
@@ -1428,6 +1496,31 @@ function attachHandlers(){
         const b = state.bookings.find(x=>x.id===id);
         if(b && b.meetLink) window.open(b.meetLink, '_blank');
         startTimer(id);
+      };
+    });
+    document.querySelectorAll('[data-fetch-gemini]').forEach(el=>{
+      el.onclick = async ()=>{
+        const id = el.getAttribute('data-fetch-gemini');
+        const msg = document.getElementById('gemini-msg-'+id);
+        el.disabled = true; el.textContent = 'Fetching…';
+        try{
+          const res = await fetch('/api/fetch-gemini-notes', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', 'X-Admin-Token': adminToken },
+            body: JSON.stringify({ bookingId: id })
+          });
+          const data = await res.json();
+          if(data.error){
+            if(msg){ msg.style.color = '#A5433A'; msg.textContent = data.error; }
+            el.disabled = false; el.textContent = 'Fetch Gemini notes';
+            return;
+          }
+          await loadAdminState();
+          render();
+        }catch(e){
+          if(msg){ msg.style.color = '#A5433A'; msg.textContent = 'Something went wrong.'; }
+          el.disabled = false; el.textContent = 'Fetch Gemini notes';
+        }
       };
     });
     document.querySelectorAll('[data-stop-timer]').forEach(el=>{ el.onclick = ()=>stopTimer(el.getAttribute('data-stop-timer')); });
