@@ -1,4 +1,5 @@
 import { kv } from '@vercel/kv';
+import { sendEmail, bookingConfirmationEmail, newBookingAlertEmail } from './_lib/email.js';
 
 async function getGoogleAccessToken() {
   const refreshToken = await kv.get('google-refresh-token');
@@ -82,6 +83,13 @@ export default async function handler(req, res) {
         });
       }
     } catch (e) { /* calendar sync is best-effort */ }
+
+    try {
+      const confirmation = bookingConfirmationEmail(booking, data.settings || {});
+      await sendEmail({ to: booking.clientEmail, subject: confirmation.subject, html: confirmation.html });
+      const alert = newBookingAlertEmail(booking);
+      await sendEmail({ to: 'heshy@catalystconsultingnyc.com', subject: alert.subject, html: alert.html });
+    } catch (e) { /* email is best-effort */ }
 
     res.status(200).json({ ok: true, bookingId: booking.id });
   } catch (err) {

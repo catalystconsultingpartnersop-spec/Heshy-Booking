@@ -1,6 +1,7 @@
 import Stripe from 'stripe';
 import { kv } from '@vercel/kv';
 import { verifyAdminToken } from './_lib/auth.js';
+import { sendEmail, receiptEmail } from './_lib/email.js';
 
 const stripe = new Stripe(process.env.STRIPE_SECRET_KEY);
 
@@ -47,6 +48,12 @@ export default async function handler(req, res) {
     booking.stripePaymentIntentId = paymentIntent.id;
 
     await kv.set('app-data', data);
+
+    try {
+      const receipt = receiptEmail(booking);
+      await sendEmail({ to: booking.clientEmail, subject: receipt.subject, html: receipt.html });
+    } catch (e) { /* email is best-effort */ }
+
     res.status(200).json({ ok: true, amount: amountCents / 100 });
   } catch (err) {
     res.status(500).json({ error: err.message });
