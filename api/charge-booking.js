@@ -8,7 +8,7 @@ export default async function handler(req, res) {
   if (req.method !== 'POST') return res.status(405).json({ error: 'Method not allowed' });
   try {
     if (!(await verifyAdminToken(req))) return res.status(401).json({ error: 'Unauthorized' });
-    const { bookingId } = req.body;
+    const { bookingId, amount } = req.body;
     const data = await kv.get('app-data');
     if (!data) return res.status(404).json({ error: 'No data found' });
 
@@ -17,7 +17,10 @@ export default async function handler(req, res) {
     if (!booking.stripeCustomerId) return res.status(400).json({ error: 'No card on file for this booking' });
 
     const mins = booking.actualMinutes || booking.durationMin;
-    const amountCents = Math.round((mins / 60) * 500 * 100);
+    const defaultAmountCents = Math.round((mins / 60) * 500 * 100);
+    const amountCents = (typeof amount === 'number' && !isNaN(amount) && amount >= 0)
+      ? Math.round(amount * 100)
+      : defaultAmountCents;
 
     const paymentMethods = await stripe.paymentMethods.list({
       customer: booking.stripeCustomerId,
