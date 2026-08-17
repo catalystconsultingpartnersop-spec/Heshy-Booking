@@ -522,6 +522,7 @@ function money(n){ return '$'+n.toFixed(2); }
 
 let calendarBusy = [];
 let jewishHolidayDates = new Set();
+let jewishHolidayNames = {};
 const BLOCKED_HOLIDAY_MATCHES = [
   'Rosh Hashana', 'Yom Kippur', 'Sukkot', 'Shmini Atzeret', 'Simchat Torah',
   'Pesach', 'Shavuot', 'Purim', "Tish'a B'Av", 'Tisha B\u2019Av'
@@ -532,12 +533,14 @@ async function loadJewishHolidays(){
     const urls = [year, year+1].map(y=>`https://www.hebcal.com/hebcal?v=1&cfg=json&maj=on&min=on&mod=off&nx=off&year=${y}&ss=off&mf=on&c=off&geo=none`);
     const results = await Promise.all(urls.map(u=>fetch(u).then(r=>r.json()).catch(()=>({items:[]}))));
     const items = results.flatMap(d=>d.items||[]);
-    jewishHolidayDates = new Set(
-      items
-        .filter(i=> BLOCKED_HOLIDAY_MATCHES.some(name=> (i.title||'').includes(name)))
-        .map(i=>i.date.slice(0,10))
-    );
-  }catch(e){ jewishHolidayDates = new Set(); }
+    const matched = items.filter(i=> BLOCKED_HOLIDAY_MATCHES.some(name=> (i.title||'').includes(name)));
+    jewishHolidayDates = new Set(matched.map(i=>i.date.slice(0,10)));
+    jewishHolidayNames = {};
+    matched.forEach(i=>{
+      const ds = i.date.slice(0,10);
+      if(!jewishHolidayNames[ds]) jewishHolidayNames[ds] = i.title;
+    });
+  }catch(e){ jewishHolidayDates = new Set(); jewishHolidayNames = {}; }
 }
 let calendarConnected = false;
 function slotOverlapsBusy(slot){
@@ -956,7 +959,7 @@ function renderScheduleCalendar(){
     const hasSlots = !!countsForType[ds];
     const isSelected = selectedScheduleDate === ds;
     const isToday = ds === todayDs;
-    cells += `<div class="cal-cell ${isPast?'past':''} ${isHoliday?'holiday':''} ${isSelected?'selected':''} ${isToday?'today':''}" ${isPast?'':`data-cal-day="${ds}"`}>
+    cells += `<div class="cal-cell ${isPast?'past':''} ${isHoliday?'holiday':''} ${isSelected?'selected':''} ${isToday?'today':''}" ${isPast?'':`data-cal-day="${ds}"`} ${isHoliday?`title="${jewishHolidayNames[ds]||'Jewish holiday'}"`:''}>
       <div class="cal-daynum">${day}</div>
       ${hasSlots ? `<div class="cal-dot"></div>` : ''}
     </div>`;
@@ -993,7 +996,7 @@ function renderDayDetail(){
   return `
     <div class="day-detail">
       <div class="day-detail-header">${fmtDate(ds)}</div>
-      ${isHoliday ? `<div class="note">This is a Jewish holiday and stays unavailable regardless of times added here.</div>` : ''}
+      ${isHoliday ? `<div class="note">${jewishHolidayNames[ds]||'Jewish holiday'} &mdash; stays unavailable regardless of times added here.</div>` : ''}
       <div class="slot-chip-row" style="margin:10px 0 16px;">${chips}</div>
       ${!isHoliday ? `
       <div class="row2">
