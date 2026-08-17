@@ -63,11 +63,32 @@ export default async function handler(req, res) {
       meetLink: '', summary: '', clientSummary: '', actualMinutes: null, amount: null, createdAt: Date.now()
     };
     data.bookings.push(booking);
-    await kv.set('app-data', data);
 
     try {
       const accessToken = await getGoogleAccessToken();
-      if (accessToken) {
+      if (accessToken && slot.type === 'virtual') {
+        const startISO = new Date(slot.date + 'T' + slot.time + ':00').toISOString();
+        const endISO = new Date(new Date(startISO).getTime() + slot.duration * 60000).toISOString();
+        const evRes = await fetch('https://www.googleapis.com/calendar/v3/calendars/primary/events?conferenceDataVersion=1', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${accessToken}` },
+          body: JSON.stringify({
+            summary: 'Clarity session — ' + name,
+            start: { dateTime: startISO },
+            end: { dateTime: endISO },
+            conferenceData: {
+              createRequest: {
+                requestId: booking.id,
+                conferenceSolutionKey: { type: 'hangoutsMeet' }
+              }
+            }
+          })
+        });
+        const evData = await evRes.json();
+        if (evData.hangoutLink) {
+          booking.meetLink = evData.hangoutLink;
+        }
+      } else if (accessToken && slot.type === 'in-person') {
         const startISO = new Date(slot.date + 'T' + slot.time + ':00').toISOString();
         const endISO = new Date(new Date(startISO).getTime() + slot.duration * 60000).toISOString();
         await fetch('https://www.googleapis.com/calendar/v3/calendars/primary/events', {
@@ -75,14 +96,15 @@ export default async function handler(req, res) {
           headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${accessToken}` },
           body: JSON.stringify({
             summary: 'Clarity session — ' + name,
-            description: slot.type === 'virtual' ? (data.settings?.meetLink || '') : (data.settings?.location || ''),
-            location: slot.type === 'in-person' ? (data.settings?.location || '') : '',
+            location: data.settings?.location || '',
             start: { dateTime: startISO },
             end: { dateTime: endISO }
           })
         });
       }
     } catch (e) { /* calendar sync is best-effort */ }
+
+    await kv.set('app-data', data);
 
     try {
       const confirmation = bookingConfirmationEmail(booking, data.settings || {});
@@ -91,7 +113,7 @@ export default async function handler(req, res) {
       await sendEmail({ to: 'heshy@catalystconsultingnyc.com', subject: alert.subject, html: alert.html });
     } catch (e) { /* email is best-effort */ }
 
-    res.status(200).json({ ok: true, bookingId: booking.id });
+    res.status(200).json({ ok: true, bookingId: booking.id, meetLink: booking.meetLink });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
