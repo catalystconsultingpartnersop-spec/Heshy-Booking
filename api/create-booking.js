@@ -26,7 +26,7 @@ function uid() {
 export default async function handler(req, res) {
   if (req.method !== 'POST') return res.status(405).json({ error: 'Method not allowed' });
   try {
-    const { slotId, name, email, phone, intakeAnswers, wgPdfName, wgPdfData, stripeCustomerId } = req.body || {};
+    const { slotId, name, email, phone, intakeAnswers, wgPdfName, wgPdfData, stripeCustomerId, couponCode } = req.body || {};
     if (!slotId || !name || !email || !phone || !stripeCustomerId) {
       return res.status(400).json({ error: 'Missing required fields.' });
     }
@@ -55,14 +55,28 @@ export default async function handler(req, res) {
       data.clients.push(client);
     }
 
+    let comped = false;
+    let appliedCoupon = null;
+    if (couponCode) {
+      const trimmed = String(couponCode).trim().toUpperCase();
+      const coupon = (data.settings?.coupons || []).find(c => c.code === trimmed);
+      if (coupon && (coupon.maxUses == null || (coupon.usedCount || 0) < coupon.maxUses)) {
+        comped = true;
+        appliedCoupon = coupon;
+      }
+    }
+
     const booking = {
       id: uid(), slotId: slot.id, date: slot.date, time: slot.time,
       durationMin: slot.duration, type: slot.type,
       clientId: client.id, clientName: name, clientEmail: email, clientPhone: phone,
-      stripeCustomerId, status: 'scheduled',
+      stripeCustomerId, status: 'scheduled', comped, couponCode: comped ? appliedCoupon.code : '',
       meetLink: '', summary: '', clientSummary: '', actualMinutes: null, amount: null, createdAt: Date.now()
     };
     data.bookings.push(booking);
+    if (comped) {
+      appliedCoupon.usedCount = (appliedCoupon.usedCount || 0) + 1;
+    }
 
     try {
       const accessToken = await getGoogleAccessToken();
@@ -89,6 +103,9 @@ export default async function handler(req, res) {
         if (evData.hangoutLink) {
           booking.meetLink = evData.hangoutLink;
         }
+        if (evData.id) {
+          booking.calendarEventId = evData.id;
+        }
       }
     } catch (e) { /* calendar sync is best-effort */ }
 
@@ -101,7 +118,7 @@ export default async function handler(req, res) {
       await sendEmail({ to: 'heshy@catalystconsultingnyc.com', subject: alert.subject, html: alert.html });
     } catch (e) { /* email is best-effort */ }
 
-    res.status(200).json({ ok: true, bookingId: booking.id, meetLink: slot.type === 'virtual' ? booking.meetLink : undefined });
+    res.status(200).json({ ok: true, bookingId: booking.id, meetLink: slot.type === 'virtual' ? booking.meetLink : undefined, comped });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }

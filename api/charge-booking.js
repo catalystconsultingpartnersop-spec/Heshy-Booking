@@ -9,7 +9,7 @@ export default async function handler(req, res) {
   if (req.method !== 'POST') return res.status(405).json({ error: 'Method not allowed' });
   try {
     if (!(await verifyAdminToken(req))) return res.status(401).json({ error: 'Unauthorized' });
-    const { bookingId, amount } = req.body;
+    const { bookingId, amount, actualMinutes } = req.body;
     const data = await kv.get('app-data');
     if (!data) return res.status(404).json({ error: 'No data found' });
 
@@ -17,6 +17,9 @@ export default async function handler(req, res) {
     if (!booking) return res.status(404).json({ error: 'Booking not found' });
     if (!booking.stripeCustomerId) return res.status(400).json({ error: 'No card on file for this booking' });
 
+    if (typeof actualMinutes === 'number' && !isNaN(actualMinutes) && actualMinutes >= 0) {
+      booking.actualMinutes = actualMinutes;
+    }
     const mins = booking.actualMinutes || booking.durationMin;
     const defaultAmountCents = Math.round((mins / 60) * 500 * 100);
     const amountCents = (typeof amount === 'number' && !isNaN(amount) && amount >= 0)
