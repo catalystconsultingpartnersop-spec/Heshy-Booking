@@ -92,6 +92,8 @@
   .empty{color:var(--muted);font-size:14px;padding:24px 0;}
 
   label{display:block;font-size:13px;font-weight:600;margin:20px 0 6px;}
+  .required-mark{color:#A5433A;}
+  .optional-mark{color:var(--muted);font-weight:400;font-size:12px;margin-left:4px;}
   label:first-of-type{margin-top:0;}
   input[type=text],input[type=email],input[type=tel]{
     width:100%;padding:11px 12px;border:1px solid var(--line-strong);border-radius:4px;font-size:14.5px;
@@ -404,6 +406,7 @@ async function loadState(){
   try{
     if(view === 'admin'){
       if(adminUnlocked && adminToken) await loadAdminState();
+      await loadCalendarBusy();
       render();
       return;
     }
@@ -420,7 +423,7 @@ async function loadState(){
 }
 async function loadAdminState(){
   try{
-    const r = await fetch('/api/admin-state', { headers: { 'X-Admin-Token': adminToken } });
+    const r = await fetch('/api/admin-data', { headers: { 'X-Admin-Token': adminToken } });
     if(r.status === 401){
       adminUnlocked = false; adminToken = '';
       sessionStorage.removeItem('heshyAdminToken');
@@ -435,12 +438,18 @@ async function loadAdminState(){
 }
 async function saveState(){
   try{
-    await fetch('/api/admin-save', {
+    const r = await fetch('/api/admin-data', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', 'X-Admin-Token': adminToken },
       body: JSON.stringify(state)
     });
-  }catch(e){ console.error('save failed', e); }
+    if(!r.ok){
+      const data = await r.json().catch(()=>({}));
+      console.error('save failed', data.error);
+      return false;
+    }
+    return true;
+  }catch(e){ console.error('save failed', e); return false; }
 }
 
 function fmtDate(d){
@@ -515,6 +524,7 @@ async function tryAdminLogin(){
       sessionStorage.setItem('heshyAdminToken', adminToken);
       view = 'admin';
       await loadAdminState();
+      await loadCalendarBusy();
       render();
     } else {
       if(err) err.textContent = 'Wrong password.';
@@ -604,9 +614,20 @@ async function addSlot(){
   newSlot = { date:'', time:'', duration:60, type:adminType };
   await saveState(); render();
 }
-async function updateSettings(field, val){
+async function updateSettings(field, val, sourceElId){
   state.settings[field] = val;
-  await saveState();
+  const ok = await saveState();
+  const el = sourceElId ? document.getElementById(sourceElId) : null;
+  if(el){
+    const existing = el.parentElement.querySelector('.save-msg');
+    if(existing) existing.remove();
+    const msg = document.createElement('div');
+    msg.className = 'save-msg';
+    msg.style.cssText = 'font-size:12px;margin-top:4px;' + (ok ? 'color:#2E5B27;' : 'color:#A5433A;');
+    msg.textContent = ok ? 'Saved.' : 'Could not save — try again, or log out and back in.';
+    el.insertAdjacentElement('afterend', msg);
+    setTimeout(()=>{ msg.remove(); }, 3000);
+  }
 }
 function toggleExpandClient(id){ expandedClientId = expandedClientId===id ? null : id; render(); }
 async function setClientBlocked(id, blocked){
@@ -788,11 +809,11 @@ function renderClient(){
       </div>
       <div class="form-section">
         <div class="section-title">Contact</div>
-        <label>Name</label>
+        <label>Name <span class="required-mark">*</span></label>
         <input type="text" id="f-name" value="${clientForm.name}">
         <div class="row2">
-          <div><label>Email</label><input type="email" id="f-email" value="${clientForm.email}"></div>
-          <div><label>Phone</label><input type="tel" id="f-phone" value="${clientForm.phone}"></div>
+          <div><label>Email <span class="required-mark">*</span></label><input type="email" id="f-email" value="${clientForm.email}"></div>
+          <div><label>Phone <span class="required-mark">*</span></label><input type="tel" id="f-phone" value="${clientForm.phone}"></div>
         </div>
       </div>
       <div id="intake-region">${intakeRegionHtml()}</div>
@@ -835,7 +856,8 @@ function renderClient(){
 
 function renderAdmin(){
   const bookedIds = new Set(state.bookings.map(b=>b.slotId));
-  const typeSlots = state.slots.filter(s=>s.type===adminType);
+  const todayDs = (()=>{ const d=new Date(); return d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')+'-'+String(d.getDate()).padStart(2,'0'); })();
+  const typeSlots = state.slots.filter(s=>s.type===adminType && s.date>=todayDs);
   let rulesHtml = (state.availability[adminType]||[]).length===0 ? `<div class="empty">No weekly pattern set.</div>` : '';
   (state.availability[adminType]||[]).forEach(r=>{
     rulesHtml += `
@@ -965,6 +987,10 @@ function renderAdmin(){
       <label>Intake questions (one per line, asked only on a client's first booking)</label>
       <textarea id="set-intake" style="min-height:140px;">${(state.settings.intakeQuestions||[]).join('\n')}</textarea>
       <div class="note">Sent automatically on every confirmation, based on which format the client picked.</div>
+      <div style="margin-top:16px;">
+        <button class="primary small" id="save-settings-btn">Save settings</button>
+        <span id="settings-save-msg" style="font-size:13px;margin-left:12px;"></span>
+      </div>
     </div>
 
     <div class="admin-block">
@@ -1078,9 +1104,23 @@ function attachHandlers(){
     if(nrEnd) nrEnd.oninput = e=> newRule.end = e.target.value;
     const addRuleBtn = $('addRuleBtn'); if(addRuleBtn) addRuleBtn.onclick = addRule;
     const meetEl=$('set-meet'), locEl=$('set-location'), intakeEl=$('set-intake');
-    if(meetEl) meetEl.onchange = e=> updateSettings('meetLink', e.target.value);
-    if(locEl) locEl.onchange = e=> updateSettings('location', e.target.value);
-    if(intakeEl) intakeEl.onchange = e=> updateSettings('intakeQuestions', e.target.value.split('\n').map(s=>s.trim()).filter(Boolean));
+    const saveSettingsBtn = $('save-settings-btn');
+    if(saveSettingsBtn){
+      saveSettingsBtn.onclick = async ()=>{
+        state.settings.meetLink = meetEl ? meetEl.value : state.settings.meetLink;
+        state.settings.location = locEl ? locEl.value : state.settings.location;
+        state.settings.intakeQuestions = intakeEl ? intakeEl.value.split('\n').map(s=>s.trim()).filter(Boolean) : state.settings.intakeQuestions;
+        saveSettingsBtn.disabled = true; saveSettingsBtn.textContent = 'Saving…';
+        const ok = await saveState();
+        saveSettingsBtn.disabled = false; saveSettingsBtn.textContent = 'Save settings';
+        const msg = $('settings-save-msg');
+        if(msg){
+          msg.style.color = ok ? '#2E5B27' : '#A5433A';
+          msg.textContent = ok ? 'Saved.' : 'Could not save — try logging out and back in.';
+          setTimeout(()=>{ if(msg) msg.textContent=''; }, 4000);
+        }
+      };
+    }
     const addBtn = $('addSlotBtn'); if(addBtn) addBtn.onclick = addSlot;
     document.querySelectorAll('[data-remove-slot]').forEach(el=>{ el.onclick = ()=>removeSlot(el.getAttribute('data-remove-slot')); });
     document.querySelectorAll('[data-mark-complete]').forEach(el=>{ el.onclick = ()=>markComplete(el.getAttribute('data-mark-complete')); });
