@@ -158,6 +158,21 @@
     border-bottom:1px solid var(--line);font-size:14px;
   }
   .slot-list-wrap{margin-top:24px;border-top:1px solid var(--line);}
+  .slot-day-row{padding:12px 0;border-bottom:1px solid var(--line);}
+  .slot-day-label{font-size:12.5px;font-weight:600;color:var(--muted);margin-bottom:8px;}
+  .slot-chip-row{display:flex;flex-wrap:wrap;gap:6px;}
+  .slot-chip{
+    display:inline-flex;align-items:center;gap:4px;font-size:12.5px;padding:5px 8px;
+    border:1px solid var(--line-strong);border-radius:14px;background:var(--paper);
+  }
+  .slot-chip.booked{color:var(--muted);background:#F4F4F2;}
+  .chip-x{
+    background:none;border:none;color:var(--muted);cursor:pointer;font-size:14px;line-height:1;
+    padding:0;margin-left:2px;
+  }
+  .chip-x:hover{color:#A5433A;}
+  .charge-row{padding-top:4px;}
+  .charge-row label:first-of-type{margin-top:0;}
   .day-toggle-row{display:flex;gap:6px;}
   .day-toggle{
     width:34px;height:34px;border:1px solid var(--line-strong);border-radius:6px;display:flex;
@@ -660,12 +675,14 @@ function renderTimerOnly(id){
 }
 async function chargeAndReceipt(id){
   const btn = document.querySelector(`[data-charge="${id}"]`);
+  const amountInput = document.querySelector(`[data-amount="${id}"]`);
+  const overrideAmount = amountInput ? parseFloat(amountInput.value) : null;
   if(btn){ btn.disabled = true; btn.textContent = 'Charging…'; }
   try{
     const res = await fetch('/api/charge-booking', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', 'X-Admin-Token': adminToken },
-      body: JSON.stringify({ bookingId: id })
+      body: JSON.stringify({ bookingId: id, amount: (overrideAmount!=null && !isNaN(overrideAmount)) ? overrideAmount : undefined })
     });
     const data = await res.json();
     if(data.error){ alert('Charge failed: ' + data.error); if(btn){ btn.disabled=false; } return; }
@@ -675,6 +692,10 @@ async function chargeAndReceipt(id){
     alert('Charge failed: ' + e.message);
     if(btn){ btn.disabled = false; }
   }
+}
+async function skipCharge(id){
+  if(!confirm('Mark this session complete without charging the card?')) return;
+  await updateBooking(id, { status:'charged', amount:0 });
 }
 async function markComplete(id){ await updateBooking(id, { status:'completed' }); }
 
@@ -867,36 +888,38 @@ function renderAdmin(){
       </div>`;
   });
   let slotsHtml = typeSlots.length===0 ? `<div class="empty">No ${adminType==='virtual'?'online':'in-person'} slots added yet.</div>` : '';
-  typeSlots.slice().sort((a,b)=>(a.date+a.time).localeCompare(b.date+b.time)).forEach(s=>{
-    const isBooked = bookedIds.has(s.id);
-    slotsHtml += `
-      <div class="row">
-        <div><div class="main">${fmtDate(s.date)}, ${fmtTime(s.time)}</div>
-        <div class="sub">${s.duration} min${isBooked?', booked':''}</div></div>
-        <button class="ghost small" data-remove-slot="${s.id}" ${isBooked?'disabled':''}>Remove</button>
-      </div>`;
+  const slotsByDate = {};
+  typeSlots.forEach(s=>{ (slotsByDate[s.date]=slotsByDate[s.date]||[]).push(s); });
+  Object.keys(slotsByDate).sort().forEach(d=>{
+    const daySlots = slotsByDate[d].sort((a,b)=>a.time.localeCompare(b.time));
+    slotsHtml += `<div class="slot-day-row">
+      <div class="slot-day-label">${fmtDate(d)}</div>
+      <div class="slot-chip-row">`;
+    daySlots.forEach(s=>{
+      const isBooked = bookedIds.has(s.id);
+      slotsHtml += `<span class="slot-chip ${isBooked?'booked':''}">${fmtTime(s.time)}${isBooked?'':`<button class="chip-x" data-remove-slot="${s.id}" title="Remove">&times;</button>`}</span>`;
+    });
+    slotsHtml += `</div></div>`;
   });
 
   const activeBookings = state.bookings.filter(b=>b.status!=='charged').sort((a,b)=>(a.date+a.time).localeCompare(b.date+b.time));
   let bookingsHtml = activeBookings.length===0 ? `<div class="empty">No sessions in progress.</div>` : '';
   activeBookings.forEach(b=>{
-    let typeControls = '';
-    if(b.type==='virtual'){
-      typeControls = `
-          <label>Google Meet link</label>
-          <input type="text" value="${b.meetLink||''}" data-meet="${b.id}">
-      `;
-    } else {
-      const running = !!runningTimer[b.id];
-      typeControls = `
-        <div style="display:flex;align-items:center;gap:16px;margin-bottom:8px;">
-          <span class="timer" id="timer-${b.id}">${String(Math.floor((timerDisplay[b.id]||0)/60)).padStart(2,'0')}:${String((timerDisplay[b.id]||0)%60).padStart(2,'0')}</span>
-          ${running ? `<button class="ghost small" data-stop-timer="${b.id}">Stop</button>` : `<button class="ghost small" data-start-timer="${b.id}">Start</button>`}
-        </div>`;
-    }
+    const running = !!runningTimer[b.id];
+    const timerBlock = `
+      <div style="display:flex;align-items:center;gap:16px;margin-bottom:8px;">
+        <span class="timer" id="timer-${b.id}">${String(Math.floor((timerDisplay[b.id]||0)/60)).padStart(2,'0')}:${String((timerDisplay[b.id]||0)%60).padStart(2,'0')}</span>
+        ${running ? `<button class="ghost small" data-stop-timer="${b.id}">Stop</button>` : `<button class="ghost small" data-start-timer="${b.id}">Start</button>`}
+        <span class="note" style="margin:0;">Tracks actual time for billing</span>
+      </div>`;
+    const meetBlock = b.type==='virtual' ? `
+      <label>Google Meet link</label>
+      <input type="text" value="${b.meetLink||''}" data-meet="${b.id}">
+    ` : '';
     const controls = `
         <div class="session-controls">
-          ${typeControls}
+          ${timerBlock}
+          ${meetBlock}
           <label>Internal notes</label>
           <textarea data-summary="${b.id}">${b.summary||''}</textarea>
           <label>Client-facing summary</label>
@@ -909,8 +932,17 @@ function renderAdmin(){
       action = `<button class="primary small" data-mark-complete="${b.id}">Mark complete</button>`;
     } else if(b.status==='completed'){
       const mins = b.actualMinutes || b.durationMin;
-      const amt = Math.round((mins/60)*500*100)/100;
-      action = `<button class="primary small" data-charge="${b.id}">Charge ${money(amt)} and send receipt</button>`;
+      const defaultAmt = Math.round((mins/60)*500*100)/100;
+      const amt = (b.amount!=null) ? b.amount : defaultAmt;
+      action = `
+        <div class="charge-row">
+          <label>Amount to charge</label>
+          <div style="display:flex;gap:10px;align-items:center;">
+            <input type="text" value="${amt.toFixed(2)}" data-amount="${b.id}" style="max-width:120px;">
+            <button class="primary small" data-charge="${b.id}">Charge and send receipt</button>
+          </div>
+          <button class="ghost small danger-ghost" data-skip-charge="${b.id}" style="margin-top:8px;">Mark complete, don't charge</button>
+        </div>`;
     }
     bookingsHtml += `
       <div class="session">
@@ -1125,6 +1157,7 @@ function attachHandlers(){
     document.querySelectorAll('[data-remove-slot]').forEach(el=>{ el.onclick = ()=>removeSlot(el.getAttribute('data-remove-slot')); });
     document.querySelectorAll('[data-mark-complete]').forEach(el=>{ el.onclick = ()=>markComplete(el.getAttribute('data-mark-complete')); });
     document.querySelectorAll('[data-charge]').forEach(el=>{ el.onclick = ()=>chargeAndReceipt(el.getAttribute('data-charge')); });
+    document.querySelectorAll('[data-skip-charge]').forEach(el=>{ el.onclick = ()=>skipCharge(el.getAttribute('data-skip-charge')); });
     document.querySelectorAll('[data-start-timer]').forEach(el=>{ el.onclick = ()=>startTimer(el.getAttribute('data-start-timer')); });
     document.querySelectorAll('[data-stop-timer]').forEach(el=>{ el.onclick = ()=>stopTimer(el.getAttribute('data-stop-timer')); });
     document.querySelectorAll('[data-meet]').forEach(el=>{ el.onchange = ()=>updateBooking(el.getAttribute('data-meet'), { meetLink: el.value }); });
