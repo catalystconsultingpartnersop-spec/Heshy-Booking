@@ -32,7 +32,7 @@ function factRow(label, value) {
 function wrap(bodyHtml) {
   return `
   <div style="font-family:Georgia,serif;max-width:480px;margin:0 auto;padding:32px 24px;color:#111111;">
-    <div style="font-size:19px;font-weight:500;margin-bottom:28px;">Heshy</div>
+    <div style="font-size:19px;font-weight:500;margin-bottom:28px;">Heshy — Clarity Sessions</div>
     ${bodyHtml}
     <div style="margin-top:32px;padding-top:16px;border-top:1px solid #DEDEDE;font-size:12px;color:#6E6E6E;font-family:Arial,sans-serif;">
       Catalyst Consulting Partners LLC
