@@ -66,7 +66,7 @@ export default async function handler(req, res) {
 
     try {
       const accessToken = await getGoogleAccessToken();
-      if (accessToken && slot.type === 'virtual') {
+      if (accessToken) {
         const startISO = new Date(slot.date + 'T' + slot.time + ':00').toISOString();
         const endISO = new Date(new Date(startISO).getTime() + slot.duration * 60000).toISOString();
         const evRes = await fetch('https://www.googleapis.com/calendar/v3/calendars/primary/events?conferenceDataVersion=1', {
@@ -74,6 +74,7 @@ export default async function handler(req, res) {
           headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${accessToken}` },
           body: JSON.stringify({
             summary: 'Clarity session — ' + name,
+            location: slot.type === 'in-person' ? (data.settings?.location || '') : '',
             start: { dateTime: startISO },
             end: { dateTime: endISO },
             conferenceData: {
@@ -88,19 +89,6 @@ export default async function handler(req, res) {
         if (evData.hangoutLink) {
           booking.meetLink = evData.hangoutLink;
         }
-      } else if (accessToken && slot.type === 'in-person') {
-        const startISO = new Date(slot.date + 'T' + slot.time + ':00').toISOString();
-        const endISO = new Date(new Date(startISO).getTime() + slot.duration * 60000).toISOString();
-        await fetch('https://www.googleapis.com/calendar/v3/calendars/primary/events', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${accessToken}` },
-          body: JSON.stringify({
-            summary: 'Clarity session — ' + name,
-            location: data.settings?.location || '',
-            start: { dateTime: startISO },
-            end: { dateTime: endISO }
-          })
-        });
       }
     } catch (e) { /* calendar sync is best-effort */ }
 
@@ -113,7 +101,7 @@ export default async function handler(req, res) {
       await sendEmail({ to: 'heshy@catalystconsultingnyc.com', subject: alert.subject, html: alert.html });
     } catch (e) { /* email is best-effort */ }
 
-    res.status(200).json({ ok: true, bookingId: booking.id, meetLink: booking.meetLink });
+    res.status(200).json({ ok: true, bookingId: booking.id, meetLink: slot.type === 'virtual' ? booking.meetLink : undefined });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
