@@ -146,6 +146,15 @@
 
   /* Admin */
   h2.sect{font-family:'Source Serif 4',serif;font-weight:500;font-size:17px;margin:0 0 14px;}
+  .admin-nav{display:flex;gap:4px;margin-bottom:36px;border-bottom:1px solid var(--line);}
+  .admin-nav-btn{
+    background:none;border:none;padding:12px 4px;margin-right:24px;font-size:14px;font-weight:500;
+    color:var(--muted);cursor:pointer;font-family:'Inter',sans-serif;border-bottom:2px solid transparent;
+    margin-bottom:-1px;
+  }
+  .admin-nav-btn:hover{color:var(--ink);}
+  .admin-nav-btn.active{color:var(--ink);border-bottom-color:var(--ink);}
+  .client-link{color:var(--ink);text-decoration:underline;text-underline-offset:2px;cursor:pointer;}
   .admin-block{margin-bottom:44px;padding-bottom:44px;border-bottom:1px solid var(--line);}
   .admin-block:last-child{border-bottom:none;}
   .admin-grid{display:grid;grid-template-columns:1fr 1fr 1fr;gap:10px;align-items:end;}
@@ -345,6 +354,7 @@ let runningTimer = {};
 let timerDisplay = {};
 let newSlot = { date:'', time:'', duration:60, type:'virtual' };
 let adminType = 'virtual';
+let adminView = 'dashboard';
 let showScheduleEditor = false;
 function selectAdminType(t){ adminType = t; newSlot.type = t; render(); }
 
@@ -924,9 +934,10 @@ function renderAdmin(){
     slotsHtml += `</div></div>`;
   });
 
-  const activeBookings = state.bookings.filter(b=>b.status!=='charged').sort((a,b)=>(a.date+a.time).localeCompare(b.date+b.time));
-  let bookingsHtml = activeBookings.length===0 ? `<div class="empty">No sessions in progress.</div>` : '';
-  activeBookings.forEach(b=>{
+  const clientById = {};
+  state.clients.forEach(c=>{ clientById[c.id] = c; });
+
+  function sessionCardHtml(b){
     const running = !!runningTimer[b.id];
     const timerBlock = `
       <div style="display:flex;align-items:center;gap:16px;margin-bottom:8px;">
@@ -966,11 +977,11 @@ function renderAdmin(){
           <button class="ghost small danger-ghost" data-skip-charge="${b.id}" style="margin-top:8px;">Mark complete, don't charge</button>
         </div>`;
     }
-    bookingsHtml += `
+    return `
       <div class="session">
         <div class="session-top">
           <div>
-            <div class="session-name">${b.clientName}</div>
+            <div class="session-name">${b.clientId?`<a class="client-link" data-view-client="${b.clientId}">${b.clientName}</a>`:b.clientName}</div>
             <div class="session-meta">${fmtDate(b.date)}, ${fmtTime(b.time)}, ${b.durationMin} min scheduled${b.actualMinutes?', '+b.actualMinutes+' min actual':''}</div>
             <div class="session-format">${b.type==='virtual'?'Video call':'In person'}</div>
           </div>
@@ -979,134 +990,164 @@ function renderAdmin(){
         ${controls}
         ${action?`<div class="session-actions">${action}</div>`:''}
       </div>`;
-  });
+  }
 
-  const chargedBookings = state.bookings.filter(b=>b.status==='charged');
-  const byClient = {};
-  chargedBookings.forEach(b=>{ (byClient[b.clientEmail]=byClient[b.clientEmail]||{name:b.clientName,sessions:[]}).sessions.push(b); });
-  let historyHtml = Object.keys(byClient).length===0 ? `<div class="empty">No billed sessions yet.</div>` : '';
-  Object.values(byClient).forEach(c=>{
-    const total = c.sessions.reduce((sum,s)=>sum+(s.amount||0),0);
-    historyHtml += `<div class="client-block"><div class="client-top"><div class="client-name">${c.name}</div><div class="client-total">${c.sessions.length} session${c.sessions.length>1?'s':''} &middot; ${money(total)} total</div></div>`;
-    c.sessions.sort((a,b)=>b.createdAt-a.createdAt).forEach(s=>{
-      historyHtml += `<div class="hist-line"><span>${fmtDate(s.date)}, ${s.actualMinutes||s.durationMin} min</span><span>${money(s.amount||0)}</span></div>`;
+  const nav = `
+    <div class="admin-nav">
+      <button class="admin-nav-btn ${adminView==='dashboard'?'active':''}" data-admin-view="dashboard">Dashboard</button>
+      <button class="admin-nav-btn ${adminView==='schedule'?'active':''}" data-admin-view="schedule">Schedule</button>
+      <button class="admin-nav-btn ${adminView==='clients'?'active':''}" data-admin-view="clients">Clients</button>
+      <button class="admin-nav-btn ${adminView==='settings'?'active':''}" data-admin-view="settings">Settings</button>
+    </div>
+  `;
+
+  let body = '';
+
+  if(adminView==='dashboard'){
+    const activeBookings = state.bookings.filter(b=>b.status!=='charged').sort((a,b)=>(a.date+a.time).localeCompare(b.date+b.time));
+    const upcomingHtml = activeBookings.length===0 ? `<div class="empty">No sessions in progress.</div>` : activeBookings.map(sessionCardHtml).join('');
+    const recentCharged = state.bookings.filter(b=>b.status==='charged').sort((a,b)=>b.createdAt-a.createdAt).slice(0,6);
+    let recentHtml = recentCharged.length===0 ? `<div class="empty">No completed sessions yet.</div>` : '';
+    recentCharged.forEach(b=>{
+      recentHtml += `<div class="hist-line"><span>${b.clientId?`<a class="client-link" data-view-client="${b.clientId}">${b.clientName}</a>`:b.clientName} &middot; ${fmtDate(b.date)}</span><span>${money(b.amount||0)}</span></div>`;
     });
-    historyHtml += `</div>`;
-  });
+    body = `
+      <div class="admin-block">
+        <h2 class="sect">Upcoming</h2>
+        ${upcomingHtml}
+      </div>
+      <div class="admin-block">
+        <h2 class="sect">Recent</h2>
+        ${recentHtml}
+      </div>
+    `;
+  }
 
-  let clientsHtml = state.clients.length===0 ? `<div class="empty">No client profiles yet.</div>` : '';
-  state.clients.slice().sort((a,b)=>b.createdAt-a.createdAt).forEach(c=>{
-    const sessionCount = state.bookings.filter(b=>b.clientId===c.id).length;
-    clientsHtml += `
-      <div class="client-row" data-toggle-client="${c.id}">
-        <div><div class="main">${c.name}</div><div class="sub">${c.email} &middot; ${sessionCount} session${sessionCount!==1?'s':''}</div></div>
-        ${c.blocked ? `<span class="tag blocked">blocked</span>` : ''}
-      </div>`;
-    if(expandedClientId === c.id){
-      const questions = state.settings.intakeQuestions || [];
-      let qaHtml = '';
-      questions.forEach((q,i)=>{
-        if(c.intakeAnswers && c.intakeAnswers[i]){
-          qaHtml += `<div class="qa"><div class="q">${q}</div><div>${c.intakeAnswers[i]}</div></div>`;
-        }
-      });
-      clientsHtml += `
-        <div class="client-detail">
-          ${qaHtml || `<div class="empty">No intake answers on file.</div>`}
-          ${c.wgPdfData ? `<div class="qa"><div class="q">Working Genius</div><a class="wg-link" href="${c.wgPdfData}" download="${c.wgPdfName||'working-genius.pdf'}">${c.wgPdfName||'Download PDF'}</a></div>` : ''}
-          <div style="margin-top:14px;">
-            ${c.blocked
-              ? `<button class="ghost small" data-unblock-client="${c.id}">Unblock</button>`
-              : `<button class="ghost small danger-ghost" data-block-client="${c.id}">Block from booking</button>`}
+  if(adminView==='schedule'){
+    body = `
+      <div class="admin-block">
+        <h2 class="sect">Schedule</h2>
+        <div class="type-toggle">
+          <div class="type-btn ${adminType==='virtual'?'active':''}" data-admin-type="virtual">Online</div>
+          <div class="type-btn ${adminType==='in-person'?'active':''}" data-admin-type="in-person">In person</div>
+        </div>
+
+        <div class="section-title" style="margin-top:24px;">Upcoming times</div>
+        <div class="slot-list-wrap">
+          ${slotsHtml}
+        </div>
+
+        <button class="ghost small" id="toggleScheduleEditor" style="margin-top:20px;">${showScheduleEditor?'Hide schedule editor':'Edit weekly schedule'}</button>
+
+        ${showScheduleEditor ? `
+        <div style="margin-top:24px;padding-top:20px;border-top:1px solid var(--line);">
+          <div class="section-title">Weekly pattern</div>
+          <p class="note" style="margin:0 0 14px;">This is the schedule that repeats every week. Add or remove a day/time block below.</p>
+          ${rulesHtml}
+          <div class="day-toggle-row" style="margin-top:14px;">
+            ${DOW.map((d,i)=>`<div class="day-toggle ${newRule.days.includes(i)?'active':''}" data-rule-day="${i}">${d[0]}</div>`).join('')}
           </div>
+          <div class="row2" style="margin-top:12px;">
+            <div><label>Start time</label><input type="text" id="nr-start" placeholder="HH:MM" value="${newRule.start}"></div>
+            <div><label>End time</label><input type="text" id="nr-end" placeholder="HH:MM" value="${newRule.end}"></div>
+          </div>
+          <div style="margin-top:14px;"><button class="ghost small" id="addRuleBtn">Add pattern</button></div>
+
+          <div class="section-title" style="margin-top:32px;">One-time slot</div>
+          <p class="note" style="margin:0 0 14px;">Use this only for a single date that doesn't fit your regular weekly schedule.</p>
+          <div class="admin-grid">
+            <div><label>Date</label><input type="text" id="ns-date" placeholder="YYYY-MM-DD" value="${newSlot.date}"></div>
+            <div><label>Time</label><input type="text" id="ns-time" placeholder="HH:MM" value="${newSlot.time}"></div>
+            <div><label>Duration</label>
+              <select id="ns-duration">
+                <option value="30" ${newSlot.duration==30?'selected':''}>30 min</option>
+                <option value="60" ${newSlot.duration==60?'selected':''}>60 min</option>
+                <option value="90" ${newSlot.duration==90?'selected':''}>90 min</option>
+              </select>
+            </div>
+          </div>
+          <div style="margin-top:16px;"><button class="primary small" id="addSlotBtn">Add ${adminType==='virtual'?'online':'in-person'} slot</button></div>
+        </div>
+        ` : ''}
+      </div>
+    `;
+  }
+
+  if(adminView==='clients'){
+    let clientsHtml = state.clients.length===0 ? `<div class="empty">No client profiles yet.</div>` : '';
+    state.clients.slice().sort((a,b)=>b.createdAt-a.createdAt).forEach(c=>{
+      const clientBookings = state.bookings.filter(b=>b.clientId===c.id);
+      const sessionCount = clientBookings.length;
+      const totalBilled = clientBookings.filter(b=>b.status==='charged').reduce((sum,b)=>sum+(b.amount||0),0);
+      clientsHtml += `
+        <div class="client-row" data-toggle-client="${c.id}">
+          <div><div class="main">${c.name}</div><div class="sub">${c.email} &middot; ${sessionCount} session${sessionCount!==1?'s':''}${totalBilled>0?' &middot; '+money(totalBilled)+' total':''}</div></div>
+          ${c.blocked ? `<span class="tag blocked">blocked</span>` : ''}
         </div>`;
-    }
-  });
+      if(expandedClientId === c.id){
+        const questions = state.settings.intakeQuestions || [];
+        let qaHtml = '';
+        questions.forEach((q,i)=>{
+          if(c.intakeAnswers && c.intakeAnswers[i]){
+            qaHtml += `<div class="qa"><div class="q">${q}</div><div>${c.intakeAnswers[i]}</div></div>`;
+          }
+        });
+        let sessHtml = '';
+        clientBookings.sort((a,b)=>b.createdAt-a.createdAt).forEach(b=>{
+          sessHtml += `<div class="hist-line"><span>${fmtDate(b.date)} &middot; ${b.type==='virtual'?'Video':'In person'} &middot; ${b.status}</span><span>${b.status==='charged'?money(b.amount||0):''}</span></div>`;
+          if(b.summary) sessHtml += `<div class="qa"><div class="q">Notes</div><div>${b.summary}</div></div>`;
+        });
+        clientsHtml += `
+          <div class="client-detail">
+            ${qaHtml || `<div class="empty">No intake answers on file.</div>`}
+            ${c.wgPdfData ? `<div class="qa"><div class="q">Working Genius</div><a class="wg-link" href="${c.wgPdfData}" download="${c.wgPdfName||'working-genius.pdf'}">${c.wgPdfName||'Download PDF'}</a></div>` : ''}
+            <div class="section-title" style="margin-top:18px;">Session history</div>
+            ${sessHtml || `<div class="empty">No sessions yet.</div>`}
+            <div style="margin-top:14px;">
+              ${c.blocked
+                ? `<button class="ghost small" data-unblock-client="${c.id}">Unblock</button>`
+                : `<button class="ghost small danger-ghost" data-block-client="${c.id}">Block from booking</button>`}
+            </div>
+          </div>`;
+      }
+    });
+    body = `
+      <div class="admin-block">
+        <h2 class="sect">Clients</h2>
+        ${clientsHtml}
+      </div>
+    `;
+  }
+
+  if(adminView==='settings'){
+    body = `
+      <div class="admin-block">
+        <h2 class="sect">Settings</h2>
+        <label>Google Calendar</label>
+        <div style="display:flex;align-items:center;gap:14px;">
+          <span class="tag ${calendarConnected?'status-completed':'status-scheduled'}">${calendarConnected?'connected':'not connected'}</span>
+          <a class="wg-link" href="/api/google-auth-url?token=${encodeURIComponent(adminToken)}">${calendarConnected?'Reconnect':'Connect Google Calendar'}</a>
+        </div>
+        <div class="note">When connected, times that conflict with your personal calendar won't show as bookable, and booked sessions get added to your calendar automatically.</div>
+        <label>Video call link (Google Meet)</label>
+        <input type="text" id="set-meet" placeholder="https://meet.google.com/xxx-xxxx-xxx" value="${state.settings.meetLink}">
+        <label>In-person location and instructions</label>
+        <textarea id="set-location" placeholder="Address, parking, floor, buzzer code, etc.">${state.settings.location}</textarea>
+        <label>Intake questions (one per line, asked only on a client's first booking)</label>
+        <textarea id="set-intake" style="min-height:140px;">${(state.settings.intakeQuestions||[]).join('\n')}</textarea>
+        <div class="note">Sent automatically on every confirmation, based on which format the client picked.</div>
+        <div style="margin-top:16px;">
+          <button class="primary small" id="save-settings-btn">Save settings</button>
+          <span id="settings-save-msg" style="font-size:13px;margin-left:12px;"></span>
+        </div>
+      </div>
+    `;
+  }
 
   return `
     <div class="topbar"><div class="brand">Heshy — Manage</div><button class="manage-link" id="backToClientBtn">Back to booking</button></div>
-
-    <div class="admin-block">
-      <h2 class="sect">Settings</h2>
-      <label>Google Calendar</label>
-      <div style="display:flex;align-items:center;gap:14px;">
-        <span class="tag ${calendarConnected?'status-completed':'status-scheduled'}">${calendarConnected?'connected':'not connected'}</span>
-        <a class="wg-link" href="/api/google-auth-url?token=${encodeURIComponent(adminToken)}">${calendarConnected?'Reconnect':'Connect Google Calendar'}</a>
-      </div>
-      <div class="note">When connected, times that conflict with your personal calendar won't show as bookable, and booked sessions get added to your calendar automatically.</div>
-      <label>Video call link (Google Meet)</label>
-      <input type="text" id="set-meet" placeholder="https://meet.google.com/xxx-xxxx-xxx" value="${state.settings.meetLink}">
-      <label>In-person location and instructions</label>
-      <textarea id="set-location" placeholder="Address, parking, floor, buzzer code, etc.">${state.settings.location}</textarea>
-      <label>Intake questions (one per line, asked only on a client's first booking)</label>
-      <textarea id="set-intake" style="min-height:140px;">${(state.settings.intakeQuestions||[]).join('\n')}</textarea>
-      <div class="note">Sent automatically on every confirmation, based on which format the client picked.</div>
-      <div style="margin-top:16px;">
-        <button class="primary small" id="save-settings-btn">Save settings</button>
-        <span id="settings-save-msg" style="font-size:13px;margin-left:12px;"></span>
-      </div>
-    </div>
-
-    <div class="admin-block">
-      <h2 class="sect">Availability</h2>
-      <div class="type-toggle">
-        <div class="type-btn ${adminType==='virtual'?'active':''}" data-admin-type="virtual">Online</div>
-        <div class="type-btn ${adminType==='in-person'?'active':''}" data-admin-type="in-person">In person</div>
-      </div>
-
-      <div class="section-title" style="margin-top:24px;">Upcoming times</div>
-      <div class="slot-list-wrap">
-        ${slotsHtml}
-      </div>
-
-      <button class="ghost small" id="toggleScheduleEditor" style="margin-top:20px;">${showScheduleEditor?'Hide schedule editor':'Edit weekly schedule'}</button>
-
-      ${showScheduleEditor ? `
-      <div style="margin-top:24px;padding-top:20px;border-top:1px solid var(--line);">
-        <div class="section-title">Weekly pattern</div>
-        <p class="note" style="margin:0 0 14px;">This is the schedule that repeats every week. Add or remove a day/time block below.</p>
-        ${rulesHtml}
-        <div class="day-toggle-row" style="margin-top:14px;">
-          ${DOW.map((d,i)=>`<div class="day-toggle ${newRule.days.includes(i)?'active':''}" data-rule-day="${i}">${d[0]}</div>`).join('')}
-        </div>
-        <div class="row2" style="margin-top:12px;">
-          <div><label>Start time</label><input type="text" id="nr-start" placeholder="HH:MM" value="${newRule.start}"></div>
-          <div><label>End time</label><input type="text" id="nr-end" placeholder="HH:MM" value="${newRule.end}"></div>
-        </div>
-        <div style="margin-top:14px;"><button class="ghost small" id="addRuleBtn">Add pattern</button></div>
-
-        <div class="section-title" style="margin-top:32px;">One-time slot</div>
-        <p class="note" style="margin:0 0 14px;">Use this only for a single date that doesn't fit your regular weekly schedule.</p>
-        <div class="admin-grid">
-          <div><label>Date</label><input type="text" id="ns-date" placeholder="YYYY-MM-DD" value="${newSlot.date}"></div>
-          <div><label>Time</label><input type="text" id="ns-time" placeholder="HH:MM" value="${newSlot.time}"></div>
-          <div><label>Duration</label>
-            <select id="ns-duration">
-              <option value="30" ${newSlot.duration==30?'selected':''}>30 min</option>
-              <option value="60" ${newSlot.duration==60?'selected':''}>60 min</option>
-              <option value="90" ${newSlot.duration==90?'selected':''}>90 min</option>
-            </select>
-          </div>
-        </div>
-        <div style="margin-top:16px;"><button class="primary small" id="addSlotBtn">Add ${adminType==='virtual'?'online':'in-person'} slot</button></div>
-      </div>
-      ` : ''}
-    </div>
-
-    <div class="admin-block">
-      <h2 class="sect">Sessions</h2>
-      ${bookingsHtml}
-    </div>
-
-    <div class="admin-block">
-      <h2 class="sect">Client history</h2>
-      ${historyHtml}
-    </div>
-
-    <div class="admin-block">
-      <h2 class="sect">Clients</h2>
-      ${clientsHtml}
-    </div>
+    ${nav}
+    ${body}
   `;
 }
 
@@ -1162,6 +1203,10 @@ function attachHandlers(){
     if(durEl) durEl.onchange = e=> newSlot.duration = e.target.value;
     document.querySelectorAll('[data-admin-type]').forEach(el=>{ el.onclick = ()=>selectAdminType(el.getAttribute('data-admin-type')); });
     const toggleSchedBtn = $('toggleScheduleEditor'); if(toggleSchedBtn) toggleSchedBtn.onclick = ()=>{ showScheduleEditor = !showScheduleEditor; render(); };
+    document.querySelectorAll('[data-admin-view]').forEach(el=>{ el.onclick = ()=>{ adminView = el.getAttribute('data-admin-view'); render(); }; });
+    document.querySelectorAll('[data-view-client]').forEach(el=>{
+      el.onclick = ()=>{ adminView = 'clients'; expandedClientId = el.getAttribute('data-view-client'); render(); };
+    });
     document.querySelectorAll('[data-rule-day]').forEach(el=>{ el.onclick = ()=>toggleRuleDay(Number(el.getAttribute('data-rule-day'))); });
     document.querySelectorAll('[data-remove-rule]').forEach(el=>{ el.onclick = ()=>removeRule(el.getAttribute('data-remove-rule')); });
     const nrStart=$('nr-start'), nrEnd=$('nr-end');
