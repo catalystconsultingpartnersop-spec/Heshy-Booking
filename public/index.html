@@ -979,4 +979,164 @@ function renderAdmin(){
         <span class="tag ${calendarConnected?'status-completed':'status-scheduled'}">${calendarConnected?'connected':'not connected'}</span>
         <a class="wg-link" href="/api/google-auth-url?token=${encodeURIComponent(adminToken)}">${calendarConnected?'Reconnect':'Connect Google Calendar'}</a>
       </div>
-      <div class="note">When connected, times that conflict with your personal calendar won't show as bookable, and booked
+      <div class="note">When connected, times that conflict with your personal calendar won't show as bookable, and booked sessions get added to your calendar automatically.</div>
+      <label>Video call link (Google Meet)</label>
+      <input type="text" id="set-meet" placeholder="https://meet.google.com/xxx-xxxx-xxx" value="${state.settings.meetLink}">
+      <label>In-person location and instructions</label>
+      <textarea id="set-location" placeholder="Address, parking, floor, buzzer code, etc.">${state.settings.location}</textarea>
+      <label>Intake questions (one per line, asked only on a client's first booking)</label>
+      <textarea id="set-intake" style="min-height:140px;">${(state.settings.intakeQuestions||[]).join('\n')}</textarea>
+      <div class="note">Sent automatically on every confirmation, based on which format the client picked.</div>
+      <div style="margin-top:16px;">
+        <button class="primary small" id="save-settings-btn">Save settings</button>
+        <span id="settings-save-msg" style="font-size:13px;margin-left:12px;"></span>
+      </div>
+    </div>
+
+    <div class="admin-block">
+      <h2 class="sect">Availability</h2>
+      <div class="type-toggle">
+        <div class="type-btn ${adminType==='virtual'?'active':''}" data-admin-type="virtual">Online</div>
+        <div class="type-btn ${adminType==='in-person'?'active':''}" data-admin-type="in-person">In person</div>
+      </div>
+
+      <div class="section-title" style="margin-top:24px;">Weekly pattern</div>
+      ${rulesHtml}
+      <div class="day-toggle-row">
+        ${DOW.map((d,i)=>`<div class="day-toggle ${newRule.days.includes(i)?'active':''}" data-rule-day="${i}">${d[0]}</div>`).join('')}
+      </div>
+      <div class="row2" style="margin-top:12px;">
+        <div><label>Start time</label><input type="text" id="nr-start" placeholder="HH:MM" value="${newRule.start}"></div>
+        <div><label>End time</label><input type="text" id="nr-end" placeholder="HH:MM" value="${newRule.end}"></div>
+      </div>
+      <div style="margin-top:14px;"><button class="ghost small" id="addRuleBtn">Add pattern</button></div>
+
+      <div class="section-title" style="margin-top:32px;">One-off slot</div>
+      <div class="admin-grid">
+        <div><label>Date</label><input type="text" id="ns-date" placeholder="YYYY-MM-DD" value="${newSlot.date}"></div>
+        <div><label>Time</label><input type="text" id="ns-time" placeholder="HH:MM" value="${newSlot.time}"></div>
+        <div><label>Duration</label>
+          <select id="ns-duration">
+            <option value="30" ${newSlot.duration==30?'selected':''}>30 min</option>
+            <option value="60" ${newSlot.duration==60?'selected':''}>60 min</option>
+            <option value="90" ${newSlot.duration==90?'selected':''}>90 min</option>
+          </select>
+        </div>
+      </div>
+      <div style="margin-top:16px;"><button class="primary small" id="addSlotBtn">Add ${adminType==='virtual'?'online':'in-person'} slot</button></div>
+      <div class="slot-list-wrap">
+        ${slotsHtml}
+      </div>
+    </div>
+
+    <div class="admin-block">
+      <h2 class="sect">Sessions</h2>
+      ${bookingsHtml}
+    </div>
+
+    <div class="admin-block">
+      <h2 class="sect">Client history</h2>
+      ${historyHtml}
+    </div>
+
+    <div class="admin-block">
+      <h2 class="sect">Clients</h2>
+      ${clientsHtml}
+    </div>
+  `;
+}
+
+function mountCardElementIfNeeded(){
+  const mount = document.getElementById('card-element');
+  if(!mount || bookingStep !== 2) return;
+  if(mount.childElementCount === 0){
+    cardElement.mount('#card-element');
+  }
+  const errEl = document.getElementById('card-error');
+  if(errEl) errEl.textContent = cardErrorMsg;
+}
+
+function attachHandlers(){
+  const $ = id => document.getElementById(id);
+  const backBtn = $('backToClientBtn'); if(backBtn) backBtn.onclick = backToClient;
+  const loginBtn = $('admin-login-btn'); if(loginBtn) loginBtn.onclick = tryAdminLogin;
+  const passInput = $('admin-pass');
+  if(passInput) passInput.onkeydown = e=>{ if(e.key==='Enter') tryAdminLogin(); };
+  const portalGoBtn = $('portal-go-btn'); if(portalGoBtn) portalGoBtn.onclick = checkPortal;
+  const portalEmailInput = $('portal-email');
+  if(portalEmailInput){
+    portalEmailInput.oninput = e=> portalEmail = e.target.value;
+    portalEmailInput.onkeydown = e=>{ if(e.key==='Enter') checkPortal(); };
+  }
+  const portalBookAgainBtn = $('portal-book-again'); if(portalBookAgainBtn) portalBookAgainBtn.onclick = portalBookAgain;
+
+  if(view==='admin' && !adminUnlocked) return;
+  if(view==='portal') return;
+
+  if(view==='client'){
+    document.querySelectorAll('[data-slot]').forEach(el=>{ el.onclick = ()=>selectSlot(el.getAttribute('data-slot')); });
+    document.querySelectorAll('[data-day]').forEach(el=>{ el.onclick = ()=>selectDay(el.getAttribute('data-day')); });
+    document.querySelectorAll('[data-type]').forEach(el=>{ el.onclick = ()=>selectType(el.getAttribute('data-type')); });
+    const to2 = $('toStep2'); if(to2) to2.onclick = ()=>goStep(2);
+    const back1 = $('backTo1'); if(back1) back1.onclick = ()=>goStep(1);
+    const map = {'f-name':'name','f-email':'email','f-phone':'phone'};
+    Object.keys(map).forEach(id=>{
+      const el = $(id);
+      if(el) el.oninput = e=>{
+        clientForm[map[id]] = e.target.value;
+        updateConfirmButtonState();
+      };
+    });
+    const emailEl = $('f-email'); if(emailEl) emailEl.onblur = onEmailBlur;
+    attachIntakeRegionHandlers();
+    const conf = $('confirmBtn'); if(conf) conf.onclick = confirmBooking;
+    mountCardElementIfNeeded();
+  } else {
+    const dateEl=$('ns-date'), timeEl=$('ns-time'), durEl=$('ns-duration');
+    if(dateEl) dateEl.oninput = e=> newSlot.date = e.target.value;
+    if(timeEl) timeEl.oninput = e=> newSlot.time = e.target.value;
+    if(durEl) durEl.onchange = e=> newSlot.duration = e.target.value;
+    document.querySelectorAll('[data-admin-type]').forEach(el=>{ el.onclick = ()=>selectAdminType(el.getAttribute('data-admin-type')); });
+    document.querySelectorAll('[data-rule-day]').forEach(el=>{ el.onclick = ()=>toggleRuleDay(Number(el.getAttribute('data-rule-day'))); });
+    document.querySelectorAll('[data-remove-rule]').forEach(el=>{ el.onclick = ()=>removeRule(el.getAttribute('data-remove-rule')); });
+    const nrStart=$('nr-start'), nrEnd=$('nr-end');
+    if(nrStart) nrStart.oninput = e=> newRule.start = e.target.value;
+    if(nrEnd) nrEnd.oninput = e=> newRule.end = e.target.value;
+    const addRuleBtn = $('addRuleBtn'); if(addRuleBtn) addRuleBtn.onclick = addRule;
+    const meetEl=$('set-meet'), locEl=$('set-location'), intakeEl=$('set-intake');
+    const saveSettingsBtn = $('save-settings-btn');
+    if(saveSettingsBtn){
+      saveSettingsBtn.onclick = async ()=>{
+        state.settings.meetLink = meetEl ? meetEl.value : state.settings.meetLink;
+        state.settings.location = locEl ? locEl.value : state.settings.location;
+        state.settings.intakeQuestions = intakeEl ? intakeEl.value.split('\n').map(s=>s.trim()).filter(Boolean) : state.settings.intakeQuestions;
+        saveSettingsBtn.disabled = true; saveSettingsBtn.textContent = 'Saving…';
+        const ok = await saveState();
+        saveSettingsBtn.disabled = false; saveSettingsBtn.textContent = 'Save settings';
+        const msg = $('settings-save-msg');
+        if(msg){
+          msg.style.color = ok ? '#2E5B27' : '#A5433A';
+          msg.textContent = ok ? 'Saved.' : 'Could not save — try logging out and back in.';
+          setTimeout(()=>{ if(msg) msg.textContent=''; }, 4000);
+        }
+      };
+    }
+    const addBtn = $('addSlotBtn'); if(addBtn) addBtn.onclick = addSlot;
+    document.querySelectorAll('[data-remove-slot]').forEach(el=>{ el.onclick = ()=>removeSlot(el.getAttribute('data-remove-slot')); });
+    document.querySelectorAll('[data-mark-complete]').forEach(el=>{ el.onclick = ()=>markComplete(el.getAttribute('data-mark-complete')); });
+    document.querySelectorAll('[data-charge]').forEach(el=>{ el.onclick = ()=>chargeAndReceipt(el.getAttribute('data-charge')); });
+    document.querySelectorAll('[data-start-timer]').forEach(el=>{ el.onclick = ()=>startTimer(el.getAttribute('data-start-timer')); });
+    document.querySelectorAll('[data-stop-timer]').forEach(el=>{ el.onclick = ()=>stopTimer(el.getAttribute('data-stop-timer')); });
+    document.querySelectorAll('[data-meet]').forEach(el=>{ el.onchange = ()=>updateBooking(el.getAttribute('data-meet'), { meetLink: el.value }); });
+    document.querySelectorAll('[data-summary]').forEach(el=>{ el.onchange = ()=>updateBooking(el.getAttribute('data-summary'), { summary: el.value }); });
+    document.querySelectorAll('[data-clientsummary]').forEach(el=>{ el.onchange = ()=>updateBooking(el.getAttribute('data-clientsummary'), { clientSummary: el.value }); });
+    document.querySelectorAll('[data-toggle-client]').forEach(el=>{ el.onclick = ()=>toggleExpandClient(el.getAttribute('data-toggle-client')); });
+    document.querySelectorAll('[data-block-client]').forEach(el=>{ el.onclick = (e)=>{ e.stopPropagation(); setClientBlocked(el.getAttribute('data-block-client'), true); }; });
+    document.querySelectorAll('[data-unblock-client]').forEach(el=>{ el.onclick = (e)=>{ e.stopPropagation(); setClientBlocked(el.getAttribute('data-unblock-client'), false); }; });
+  }
+}
+
+loadState();
+</script>
+</body>
+</html>
