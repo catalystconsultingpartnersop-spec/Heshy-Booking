@@ -76,7 +76,8 @@ export default async function handler(req, res) {
       headers: { Authorization: `Bearer ${accessToken}` }
     });
     if (!exportRes.ok) {
-      return res.status(400).json({ error: 'Could not read the notes document. Check that Drive access is connected.' });
+      const errBody = await exportRes.text().catch(() => '');
+      return res.status(400).json({ error: `Google said: ${exportRes.status} — ${errBody.slice(0, 300)}` });
     }
     const text = await exportRes.text();
 
