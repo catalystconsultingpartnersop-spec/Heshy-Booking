@@ -26,7 +26,7 @@ export async function sendEmail({ to, subject, html }) {
 }
 
 function factRow(label, value) {
-  return `<tr><td style="padding:9px 0;border-bottom:1px solid #DEDEDE;color:#6E6E6E;font-size:13.5px;">${label}</td><td style="padding:9px 0;border-bottom:1px solid #DEDEDE;text-align:right;font-size:13.5px;">${value}</td></tr>`;
+  return `<tr><td style="padding:9px 0;border-bottom:1px solid #DEDEDE;color:#6E6E6E;font-size:13.5px;vertical-align:top;width:110px;">${label}</td><td style="padding:9px 0;border-bottom:1px solid #DEDEDE;text-align:right;font-size:13.5px;vertical-align:top;">${value}</td></tr>`;
 }
 
 function wrap(bodyHtml) {
