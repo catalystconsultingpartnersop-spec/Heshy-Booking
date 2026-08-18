@@ -970,6 +970,8 @@ function renderClient(){
         inner += `<div class="type-btn ${selectedDuration===d?'active':''}" data-duration="${d}">${label}</div>`;
       });
       inner += `</div>`;
+      const longestOffered = Math.max(...durationOptions);
+      inner += `<div class="note" style="margin-top:8px;">Think you'll need more than ${longestOffered} min? Book the ${longestOffered}-min session, and we'll figure out the rest together once we're talking.</div>`;
     }
     // Find the next ~56 days that have at least one valid start time for the chosen type+duration.
     const candidateDates = [];
@@ -1000,7 +1002,7 @@ function renderClient(){
       if(selectedType==='in-person'){
         const loc = resolveLocation(selectedDay, 'in-person');
         if(loc && loc.generalArea){
-          inner += `<div class="note" style="margin-bottom:14px;">In-person sessions this day: <strong>${loc.generalArea}</strong>. Exact address sent once you book.</div>`;
+          inner += `<div style="margin-bottom:14px;padding:10px 14px;border:1px solid #C9A961;background:#FBF6EA;border-radius:6px;font-size:13.5px;">In-person sessions this day: <strong>${loc.generalArea}</strong>. Exact address sent once you book.</div>`;
         }
       }
       const dayTimes = (candidateDates.find(c=>c.date===selectedDay) || {times:[]}).times;
@@ -1022,7 +1024,7 @@ function renderClient(){
         <div class="fact-row"><span>Time</span><span>${fmtDate(selectedDay)}, ${fmtTime(selectedStartTime)}</span></div>
         <div class="fact-row"><span>Length</span><span>${selectedDuration} min</span></div>
         <div class="fact-row"><span>Format</span><span>${selectedType==='virtual'?'Video call':'In person'}</span></div>
-        <div class="fact-row"><span>Rate</span><span>$500/hour &mdash; about ${money(selectedDuration/60*500)} for this session</span></div>
+        <div class="fact-row"><span>Rate</span><span>${selectedDuration===60 ? '$500/hour' : '$500/hour (' + money(selectedDuration/60*500) + ' total)'}</span></div>
         <div class="fact-row"><span>Charged</span><span>After the session, for actual time used</span></div>
         <div class="fact-row"><span>Receipt</span><span>Emailed automatically once charged</span></div>
       </div>
@@ -1061,7 +1063,7 @@ function renderClient(){
           <div class="fact-row"><span>Time</span><span>${fmtDate(selectedDay)}, ${fmtTime(selectedStartTime)}</span></div>
           <div class="fact-row"><span>Length</span><span>${selectedDuration} min</span></div>
           <div class="fact-row"><span>Format</span><span>${selectedType==='virtual'?'Video call':'In person'}</span></div>
-          <div class="fact-row"><span>Rate</span><span>${confirmedComped ? 'Complimentary — no charge' : '$500/hour, about ' + money(selectedDuration/60*500) + ' for this session'}</span></div>
+          <div class="fact-row"><span>Rate</span><span>${confirmedComped ? 'Complimentary — no charge' : (selectedDuration===60 ? '$500/hour' : '$500/hour (' + money(selectedDuration/60*500) + ' total)')}</span></div>
           ${confirmedComped ? `<div class="fact-row"><span>Coupon</span><span>${clientForm.couponCode}</span></div>` : ''}
         </div>
         ${selectedType==='virtual'
