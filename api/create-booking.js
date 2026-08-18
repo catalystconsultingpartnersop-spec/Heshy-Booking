@@ -20,6 +20,53 @@ async function getGoogleAccessToken() {
   return d.access_token || null;
 }
 
+const APP_TIMEZONE = 'America/New_York';
+
+function timeToMin(t) { const [h, m] = t.split(':').map(Number); return h * 60 + m; }
+function minToTime(m) { return String(Math.floor(m / 60)).padStart(2, '0') + ':' + String(m % 60).padStart(2, '0'); }
+function dowOf(dateStr) { const [y, mo, d] = dateStr.split('-').map(Number); return new Date(Date.UTC(y, mo - 1, d)).getUTCDay(); }
+
+// Resolves which address applies for a given date, for in-person only: a one-off override for that
+// exact date takes priority over the matching recurring weekly rule (e.g. Mon-Thu one office,
+// Friday another). Falls back to the global settings.location if neither has an address set.
+function resolveAddress(data, date) {
+  const override = (data.overrides || []).find(o => o.date === date && o.type === 'in-person' && o.address);
+  if (override) return override.address;
+  const weekday = dowOf(date);
+  const rule = (data.availability?.['in-person'] || []).find(r => r.days.includes(weekday) && r.address);
+  if (rule) return rule.address;
+  return data.settings?.location || '';
+}
+
+// Authoritative check: is [time, time+durationMin) fully inside an open window on this date/type,
+// after subtracting every other booking of the same type and (if available) real Calendar busy time?
+// This is the actual security boundary — the client-side UI computation is just for showing good options.
+function isRangeAvailable(data, date, time, durationMin, type, excludeBookingId, calendarBusyRanges) {
+  const weekday = dowOf(date);
+  const windows = [];
+  (data.availability?.[type] || []).filter(r => r.days.includes(weekday)).forEach(r => windows.push([timeToMin(r.start), timeToMin(r.end)]));
+  (data.overrides || []).filter(o => o.date === date && o.type === type).forEach(o => windows.push([timeToMin(o.start), timeToMin(o.end)]));
+  if (windows.length === 0) return false;
+
+  const reqStart = timeToMin(time), reqEnd = reqStart + durationMin;
+  const fitsAWindow = windows.some(([ws, we]) => reqStart >= ws && reqEnd <= we);
+  if (!fitsAWindow) return false;
+
+  const conflicts = (data.bookings || [])
+    .filter(b => b.id !== excludeBookingId && b.date === date && b.type === type)
+    .some(b => {
+      const bs = timeToMin(b.time), be = bs + (b.durationMin || 60);
+      return reqStart < be && reqEnd > bs;
+    });
+  if (conflicts) return false;
+
+  if (calendarBusyRanges) {
+    const busyConflict = calendarBusyRanges.some(([bs, be]) => reqStart < be && reqEnd > bs);
+    if (busyConflict) return false;
+  }
+  return true;
+}
+
 function uid() {
   return Math.random().toString(36).slice(2, 10);
 }
@@ -38,14 +85,16 @@ function addMinutes(dateStr, timeStr, minutesToAdd) {
     time: pad(dt.getUTCHours()) + ':' + pad(dt.getUTCMinutes())
   };
 }
-const APP_TIMEZONE = 'America/New_York';
 
 export default async function handler(req, res) {
   if (req.method !== 'POST') return res.status(405).json({ error: 'Method not allowed' });
   try {
-    const { slotId, name, email, phone, intakeAnswers, wgPdfName, wgPdfData, stripeCustomerId, couponCode } = req.body || {};
-    if (!slotId || !name || !email || !phone || !stripeCustomerId) {
+    const { date, time, durationMin, type, name, email, phone, intakeAnswers, wgPdfName, wgPdfData, stripeCustomerId, couponCode } = req.body || {};
+    if (!date || !time || !durationMin || !type || !name || !email || !phone || !stripeCustomerId) {
       return res.status(400).json({ error: 'Missing required fields.' });
+    }
+    if (type !== 'virtual' && type !== 'in-person') {
+      return res.status(400).json({ error: 'Invalid session type.' });
     }
 
     const data = await kv.get('app-data');
@@ -53,10 +102,47 @@ export default async function handler(req, res) {
     if (!data.clients) data.clients = [];
     if (!data.bookings) data.bookings = [];
 
-    const slot = (data.slots || []).find(s => s.id === slotId);
-    if (!slot) return res.status(400).json({ error: 'That time is no longer available.' });
-    if (data.bookings.some(b => b.slotId === slotId)) {
-      return res.status(400).json({ error: 'That time was just booked by someone else.' });
+    // Reject a past date/time outright.
+    const now = new Date();
+    const todayStr = now.getFullYear() + '-' + String(now.getMonth() + 1).padStart(2, '0') + '-' + String(now.getDate()).padStart(2, '0');
+    if (date < todayStr) return res.status(400).json({ error: 'That date has already passed.' });
+    if (date === todayStr) {
+      const nowTime = String(now.getHours()).padStart(2, '0') + ':' + String(now.getMinutes()).padStart(2, '0');
+      if (time <= nowTime) return res.status(400).json({ error: 'That time has already passed.' });
+    }
+
+    // Only allow durations you've actually configured as offered, so a crafted request can't book
+    // an arbitrary length.
+    const allowedDurations = (data.settings?.durationOptions && data.settings.durationOptions.length) ? data.settings.durationOptions : [60];
+    if (!allowedDurations.includes(Number(durationMin))) {
+      return res.status(400).json({ error: 'That session length is not offered.' });
+    }
+
+    // Re-check real Google Calendar busy time at the moment of booking (best-effort — if Calendar
+    // isn't connected or the check fails, we don't block the booking on it, matching how the rest
+    // of the app treats Calendar as a helpful-but-not-required integration).
+    let calendarBusyRanges = null;
+    try {
+      const accessTokenForCheck = await getGoogleAccessToken();
+      if (accessTokenForCheck) {
+        const dayStart = new Date(date + 'T00:00:00');
+        const dayEnd = new Date(date + 'T23:59:59');
+        const fbRes = await fetch('https://www.googleapis.com/calendar/v3/freeBusy', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${accessTokenForCheck}` },
+          body: JSON.stringify({ timeMin: dayStart.toISOString(), timeMax: dayEnd.toISOString(), items: [{ id: 'primary' }] })
+        });
+        const fbData = await fbRes.json();
+        const busy = fbData.calendars?.primary?.busy || [];
+        calendarBusyRanges = busy.map(b => {
+          const bs = new Date(b.start), be = new Date(b.end);
+          return [Math.max(0, Math.round((bs - dayStart) / 60000)), Math.min(24 * 60, Math.round((be - dayStart) / 60000))];
+        });
+      }
+    } catch (e) { /* best-effort; skip if it fails */ }
+
+    if (!isRangeAvailable(data, date, time, Number(durationMin), type, null, calendarBusyRanges)) {
+      return res.status(400).json({ error: 'That time was just booked or is no longer available. Please pick another time.' });
     }
 
     let client = data.clients.find(c => c.email.toLowerCase() === email.toLowerCase());
@@ -93,12 +179,14 @@ export default async function handler(req, res) {
       }
     }
 
+    const resolvedAddress = type === 'in-person' ? resolveAddress(data, date) : '';
+
     const booking = {
-      id: uid(), slotId: slot.id, date: slot.date, time: slot.time,
-      durationMin: slot.duration, type: slot.type,
+      id: uid(), slotId: null, date, time,
+      durationMin: Number(durationMin), type,
       clientId: client.id, clientName: name, clientEmail: email, clientPhone: phone,
       stripeCustomerId, status: 'scheduled', comped, couponCode: comped ? appliedCoupon.code : '',
-      meetLink: '', summary: '', clientSummary: '', actualMinutes: null, amount: null, createdAt: Date.now()
+      meetLink: '', location: resolvedAddress, summary: '', clientSummary: '', actualMinutes: null, amount: null, createdAt: Date.now()
     };
     data.bookings.push(booking);
     if (comped) {
@@ -108,14 +196,14 @@ export default async function handler(req, res) {
     try {
       const accessToken = await getGoogleAccessToken();
       if (accessToken) {
-        const endAt = addMinutes(slot.date, slot.time, slot.duration);
+        const endAt = addMinutes(date, time, Number(durationMin));
         const evRes = await fetch('https://www.googleapis.com/calendar/v3/calendars/primary/events?conferenceDataVersion=1&sendUpdates=none', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${accessToken}` },
           body: JSON.stringify({
             summary: 'Clarity session — ' + name,
-            location: slot.type === 'in-person' ? (data.settings?.location || '') : '',
-            start: { dateTime: slot.date + 'T' + slot.time + ':00', timeZone: APP_TIMEZONE },
+            location: resolvedAddress,
+            start: { dateTime: date + 'T' + time + ':00', timeZone: APP_TIMEZONE },
             end: { dateTime: endAt.date + 'T' + endAt.time + ':00', timeZone: APP_TIMEZONE },
             attendees: [{ email }],
             conferenceData: {
@@ -145,7 +233,7 @@ export default async function handler(req, res) {
       await sendEmail({ to: 'heshy@catalystconsultingnyc.com', subject: alert.subject, html: alert.html });
     } catch (e) { /* email is best-effort */ }
 
-    res.status(200).json({ ok: true, bookingId: booking.id, meetLink: slot.type === 'virtual' ? booking.meetLink : undefined, comped });
+    res.status(200).json({ ok: true, bookingId: booking.id, meetLink: type === 'virtual' ? booking.meetLink : undefined, location: type === 'in-person' ? resolvedAddress : undefined, comped });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }

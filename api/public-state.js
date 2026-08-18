@@ -18,15 +18,19 @@ export default async function handler(req, res) {
     const data = (await kv.get('app-data')) || {};
     const today = new Date(); today.setHours(0,0,0,0);
     const todayStr = today.getFullYear() + '-' + String(today.getMonth()+1).padStart(2,'0') + '-' + String(today.getDate()).padStart(2,'0');
-    const futureSlots = (data.slots || []).filter(s => s.date >= todayStr);
-    const bookedSlotIds = (data.bookings || []).map(b => b.slotId);
+    // Lightweight, no client PII — just enough for the booking page to compute what's still free.
+    const futureBookings = (data.bookings || [])
+      .filter(b => b.date >= todayStr)
+      .map(b => ({ date: b.date, time: b.time, durationMin: b.durationMin, type: b.type }));
+    const futureOverrides = (data.overrides || []).filter(o => o.date >= todayStr);
     res.status(200).json({
-      slots: futureSlots,
-      bookedSlotIds,
+      bookings: futureBookings,
+      overrides: futureOverrides,
       settings: {
         meetLink: data.settings?.meetLink || '',
         location: data.settings?.location || '',
-        intakeQuestions: data.settings?.intakeQuestions || []
+        intakeQuestions: data.settings?.intakeQuestions || [],
+        durationOptions: (data.settings?.durationOptions && data.settings.durationOptions.length) ? data.settings.durationOptions : [60]
       },
       availability: data.availability || defaultAvailability()
     });

@@ -6,12 +6,26 @@ export const maxDuration = 30;
 
 function defaultState() {
   return {
-    slots: [],
     bookings: [],
     clients: [],
-    settings: { meetLink: '', location: '', intakeQuestions: [] },
+    overrides: [],
+    settings: { meetLink: '', location: '', durationOptions: [60], intakeQuestions: [] },
     availability: { virtual: [], 'in-person': [] }
   };
+}
+
+function dowOf(dateStr) { const [y, mo, d] = dateStr.split('-').map(Number); return new Date(Date.UTC(y, mo - 1, d)).getUTCDay(); }
+
+// Resolves which address applies for a given date, for in-person only — matches the same logic
+// used at original booking time in create-booking.js, so a reschedule to a different day (or a
+// different format) correctly picks up that day's own location.
+function resolveAddress(data, date) {
+  const override = (data.overrides || []).find(o => o.date === date && o.type === 'in-person' && o.address);
+  if (override) return override.address;
+  const weekday = dowOf(date);
+  const rule = (data.availability?.['in-person'] || []).find(r => r.days.includes(weekday) && r.address);
+  if (rule) return rule.address;
+  return data.settings?.location || '';
 }
 
 // Compute date/time after adding minutes, using UTC arithmetic purely as scratch
@@ -126,9 +140,9 @@ async function handleCancelBooking(req, res) {
 }
 
 async function handleRescheduleBooking(req, res) {
-  const { bookingId, newSlotId, newDate, newTime, newType } = req.body || {};
+  const { bookingId, newDate, newTime, newType } = req.body || {};
   if (!bookingId) return res.status(400).json({ error: 'Missing bookingId.' });
-  if (!newSlotId && !(newDate && newTime)) return res.status(400).json({ error: 'Provide either newSlotId or newDate + newTime.' });
+  if (!newDate || !newTime) return res.status(400).json({ error: 'Provide newDate and newTime.' });
 
   const data = await kv.get('app-data');
   if (!data) return res.status(404).json({ error: 'No data found' });
@@ -136,17 +150,9 @@ async function handleRescheduleBooking(req, res) {
   const booking = (data.bookings || []).find(b => b.id === bookingId);
   if (!booking) return res.status(404).json({ error: 'Booking not found' });
 
-  let targetDate, targetTime, targetDuration = booking.durationMin, targetSlotId = null;
-  if (newSlotId) {
-    const slot = (data.slots || []).find(s => s.id === newSlotId);
-    if (!slot) return res.status(400).json({ error: 'That slot no longer exists.' });
-    const alreadyTaken = (data.bookings || []).some(b => b.id !== bookingId && b.slotId === slot.id);
-    if (alreadyTaken) return res.status(400).json({ error: 'That slot is already booked.' });
-    targetDate = slot.date; targetTime = slot.time; targetDuration = slot.duration; targetSlotId = slot.id;
-  } else {
-    targetDate = newDate; targetTime = newTime;
-  }
+  const targetDate = newDate, targetTime = newTime, targetDuration = booking.durationMin;
   const targetType = (newType === 'virtual' || newType === 'in-person') ? newType : booking.type;
+  const targetLocation = targetType === 'in-person' ? resolveAddress(data, targetDate) : '';
 
   if (booking.calendarEventId) {
     try {
@@ -155,11 +161,9 @@ async function handleRescheduleBooking(req, res) {
         const endAt = addMinutes(targetDate, targetTime, targetDuration);
         const patchBody = {
           start: { dateTime: targetDate + 'T' + targetTime + ':00', timeZone: APP_TIMEZONE },
-          end: { dateTime: endAt.date + 'T' + endAt.time + ':00', timeZone: APP_TIMEZONE }
+          end: { dateTime: endAt.date + 'T' + endAt.time + ':00', timeZone: APP_TIMEZONE },
+          location: targetLocation
         };
-        if (targetType !== booking.type) {
-          patchBody.location = targetType === 'in-person' ? (data.settings?.location || '') : '';
-        }
         await fetch(`https://www.googleapis.com/calendar/v3/calendars/primary/events/${booking.calendarEventId}?sendUpdates=all`, {
           method: 'PATCH',
           headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${accessToken}` },
@@ -172,8 +176,8 @@ async function handleRescheduleBooking(req, res) {
   booking.date = targetDate;
   booking.time = targetTime;
   booking.durationMin = targetDuration;
-  booking.slotId = targetSlotId;
   booking.type = targetType;
+  booking.location = targetLocation;
 
   await kv.set('app-data', data);
   res.status(200).json({ ok: true });
