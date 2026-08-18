@@ -2,7 +2,7 @@ import { kv } from '@vercel/kv';
 import { put } from '@vercel/blob';
 import { verifyAdminToken, randomToken } from './_lib/auth.js';
 
-export const maxDuration = 30;
+export const maxDuration = 60;
 
 function defaultState() {
   return {
@@ -60,6 +60,103 @@ async function getGoogleAccessToken() {
   });
   const d = await r.json();
   return d.access_token || null;
+}
+
+async function handleUploadRecordingChunk(req, res) {
+  const { bookingId, chunkIndex, chunkBase64 } = req.body || {};
+  if (!bookingId || chunkIndex == null || !chunkBase64) return res.status(400).json({ error: 'Missing bookingId, chunkIndex, or chunkBase64.' });
+  try {
+    const buffer = Buffer.from(chunkBase64, 'base64');
+    const blob = await put(`recordings/${bookingId}/chunk-${String(chunkIndex).padStart(5, '0')}.webm`, buffer, {
+      access: 'public',
+      contentType: 'audio/webm'
+    });
+    const key = 'recording-chunks:' + bookingId;
+    const existing = (await kv.get(key)) || [];
+    existing.push({ index: chunkIndex, url: blob.url });
+    await kv.set(key, existing);
+    res.status(200).json({ ok: true });
+  } catch (e) {
+    res.status(500).json({ error: 'Chunk upload failed: ' + e.message });
+  }
+}
+
+async function handleFinalizeRecording(req, res) {
+  const { bookingId } = req.body || {};
+  if (!bookingId) return res.status(400).json({ error: 'Missing bookingId.' });
+
+  const data = await kv.get('app-data');
+  if (!data) return res.status(404).json({ error: 'No data found' });
+  const booking = (data.bookings || []).find(b => b.id === bookingId);
+  if (!booking) return res.status(404).json({ error: 'Booking not found' });
+
+  const key = 'recording-chunks:' + bookingId;
+  const chunks = (await kv.get(key)) || [];
+  if (chunks.length === 0) return res.status(400).json({ error: 'No recording found for this session.' });
+  chunks.sort((a, b) => a.index - b.index);
+
+  try {
+    // Download and stitch every chunk back into one file, in the order they were recorded.
+    const buffers = [];
+    for (const c of chunks) {
+      const r = await fetch(c.url);
+      if (!r.ok) continue;
+      buffers.push(Buffer.from(await r.arrayBuffer()));
+    }
+    const fullAudio = Buffer.concat(buffers);
+
+    const form = new FormData();
+    form.append('file', new Blob([fullAudio], { type: 'audio/webm' }), 'recording.webm');
+    form.append('model', 'whisper-1');
+    const whisperRes = await fetch('https://api.openai.com/v1/audio/transcriptions', {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${process.env.OPENAI_API_KEY}` },
+      body: form
+    });
+    if (!whisperRes.ok) {
+      const errText = await whisperRes.text().catch(() => '');
+      return res.status(500).json({ error: 'Transcription failed: ' + errText.slice(0, 300) });
+    }
+    const whisperData = await whisperRes.json();
+    const transcript = (whisperData.text || '').trim();
+    if (!transcript) {
+      await kv.delete(key);
+      return res.status(200).json({ ok: true, summary: '', note: 'No speech was detected in the recording.' });
+    }
+
+    const systemPrompt = `You write short, plain, clear session notes for a consultant named Heshy. The transcript may mix English and Yiddish — understand all of it, but write the notes in English. Always structure your response in exactly three short sections with these exact headers, each with 1-4 brief bullet points. No long paragraphs, no flowery language, no fluff.
+
+What we discussed
+Key points
+Next steps
+
+If a section has nothing to report, write "None." under it. Stay factual and concise.`;
+    const gptRes = await fetch('https://api.openai.com/v1/chat/completions', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${process.env.OPENAI_API_KEY}` },
+      body: JSON.stringify({
+        model: 'gpt-4o-mini',
+        messages: [
+          { role: 'system', content: systemPrompt },
+          { role: 'user', content: transcript }
+        ],
+        temperature: 0.3
+      })
+    });
+    if (!gptRes.ok) {
+      const errText = await gptRes.text().catch(() => '');
+      return res.status(500).json({ error: 'Summary failed: ' + errText.slice(0, 300) });
+    }
+    const gptData = await gptRes.json();
+    const summary = gptData.choices?.[0]?.message?.content || '';
+
+    booking.summary = summary;
+    await kv.set('app-data', data);
+    await kv.delete(key);
+    res.status(200).json({ ok: true, summary });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
 }
 
 async function handleCleanupLargePdfs(req, res) {
@@ -208,6 +305,12 @@ export default async function handler(req, res) {
     }
     if (req.method === 'POST' && req.body && req.body.action === 'cleanup-large-pdfs') {
       return handleCleanupLargePdfs(req, res);
+    }
+    if (req.method === 'POST' && req.body && req.body.action === 'upload-recording-chunk') {
+      return handleUploadRecordingChunk(req, res);
+    }
+    if (req.method === 'POST' && req.body && req.body.action === 'finalize-recording') {
+      return handleFinalizeRecording(req, res);
     }
 
     if (req.method === 'GET') {
