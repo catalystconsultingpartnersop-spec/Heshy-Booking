@@ -128,6 +128,7 @@ async function handleFinalizeRecording(req, res) {
       return res.status(200).json({ ok: true, summary: '', note: 'No speech was detected in the recording.' });
     }
 
+    const existingSummary = (booking.summary || '').trim();
     const systemPrompt = `You write short, plain, clear session notes for a consultant named Heshy. The transcript may mix English and Yiddish — understand all of it, but write the notes in English. Always structure your response in exactly three short sections with these exact headers, each with 1-4 brief bullet points. No long paragraphs, no flowery language, no fluff.
 
 What we discussed
@@ -135,6 +136,9 @@ Key points
 Next steps
 
 If a section has nothing to report, write "None." under it. Stay factual and concise.`;
+    const userContent = existingSummary
+      ? `Here are the notes so far from earlier in this same session (e.g. before a short break):\n\n${existingSummary}\n\nHere is the transcript of the next part of the conversation, continuing the same session:\n\n${transcript}\n\nUpdate the notes to reflect the FULL conversation so far. Merge both parts into one clean, de-duplicated set of notes in the same three-section format — don't just append the new part underneath, combine them as one coherent session.`
+      : transcript;
     const gptRes = await fetch('https://api.openai.com/v1/chat/completions', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${process.env.OPENAI_API_KEY}` },
@@ -142,7 +146,7 @@ If a section has nothing to report, write "None." under it. Stay factual and con
         model: 'gpt-4o-mini',
         messages: [
           { role: 'system', content: systemPrompt },
-          { role: 'user', content: transcript }
+          { role: 'user', content: userContent }
         ],
         temperature: 0.3
       })
