@@ -124,7 +124,7 @@ async function handleFinalizeRecording(req, res) {
     const whisperData = await whisperRes.json();
     const transcript = (whisperData.text || '').trim();
     if (!transcript) {
-      await kv.delete(key);
+      await kv.del(key);
       return res.status(200).json({ ok: true, summary: '', note: 'No speech was detected in the recording.' });
     }
 
@@ -156,7 +156,7 @@ If a section has nothing to report, write "None." under it. Stay factual and con
 
     booking.summary = summary;
     await kv.set('app-data', data);
-    await kv.delete(key);
+    await kv.del(key);
     res.status(200).json({ ok: true, summary });
   } catch (err) {
     res.status(500).json({ error: err.message });
