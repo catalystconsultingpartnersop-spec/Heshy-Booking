@@ -2,6 +2,8 @@ import { kv } from '@vercel/kv';
 import { put } from '@vercel/blob';
 import { verifyAdminToken, randomToken } from './_lib/auth.js';
 
+export const maxDuration = 30;
+
 function defaultState() {
   return {
     slots: [],
@@ -49,24 +51,23 @@ async function getGoogleAccessToken() {
 async function handleCleanupLargePdfs(req, res) {
   const data = await kv.get('app-data');
   if (!data) return res.status(404).json({ error: 'No data found' });
-  const results = [];
-  for (const client of (data.clients || [])) {
-    if (client.wgPdfData && client.wgPdfData.startsWith('data:')) {
-      try {
-        const base64 = client.wgPdfData.split(',')[1];
-        const buffer = Buffer.from(base64, 'base64');
-        const safeName = (client.wgPdfName || 'working-genius.pdf').replace(/[^a-zA-Z0-9._-]/g, '_');
-        const blob = await put('wg-pdfs/' + Date.now() + '-' + safeName, buffer, { access: 'public', contentType: 'application/pdf' });
-        client.wgPdfData = blob.url;
-        results.push({ client: client.name, status: 'migrated to Blob storage' });
-      } catch (e) {
-        client.wgPdfData = '';
-        results.push({ client: client.name, status: 'could not migrate, PDF removed (re-upload manually): ' + e.message });
-      }
-    }
+  const target = (data.clients || []).find(c => c.wgPdfData && c.wgPdfData.startsWith('data:'));
+  if (!target) return res.status(200).json({ ok: true, migrated: null, remaining: 0 });
+  let status;
+  try {
+    const base64 = target.wgPdfData.split(',')[1];
+    const buffer = Buffer.from(base64, 'base64');
+    const safeName = (target.wgPdfName || 'working-genius.pdf').replace(/[^a-zA-Z0-9._-]/g, '_');
+    const blob = await put('wg-pdfs/' + Date.now() + '-' + safeName, buffer, { access: 'public', contentType: 'application/pdf' });
+    target.wgPdfData = blob.url;
+    status = 'migrated to Blob storage';
+  } catch (e) {
+    target.wgPdfData = '';
+    status = 'could not migrate, PDF removed (re-upload manually): ' + e.message;
   }
   await kv.set('app-data', data);
-  res.status(200).json({ ok: true, results });
+  const remaining = (data.clients || []).filter(c => c.wgPdfData && c.wgPdfData.startsWith('data:')).length;
+  res.status(200).json({ ok: true, migrated: { client: target.name, status }, remaining });
 }
 
 async function handleUploadPdf(req, res) {
