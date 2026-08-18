@@ -803,6 +803,12 @@ async function skipCharge(id){
   await updateBooking(id, { status:'charged', amount:0 });
 }
 async function markComplete(id){ await updateBooking(id, { status:'completed' }); }
+async function cancelBooking(id){
+  if(!confirm('Cancel this booking? This frees up the time slot and cannot be undone.')) return;
+  state.bookings = state.bookings.filter(x=>x.id!==id);
+  await saveState();
+  render();
+}
 
 function render(){
   const app = document.getElementById('app');
@@ -1185,6 +1191,7 @@ function renderAdmin(){
         </div>
         ${controls}
         ${action?`<div class="session-actions">${action}</div>`:''}
+        <button class="ghost small danger-ghost" data-cancel-booking="${b.id}" style="margin-top:8px;">Cancel booking</button>
       </div>`;
   }
 
@@ -1490,6 +1497,7 @@ function attachHandlers(){
       };
     });
     document.querySelectorAll('[data-skip-charge]').forEach(el=>{ el.onclick = ()=>skipCharge(el.getAttribute('data-skip-charge')); });
+    document.querySelectorAll('[data-cancel-booking]').forEach(el=>{ el.onclick = ()=>cancelBooking(el.getAttribute('data-cancel-booking')); });
     document.querySelectorAll('[data-start-timer]').forEach(el=>{ el.onclick = ()=>startTimer(el.getAttribute('data-start-timer')); });
     document.querySelectorAll('[data-join-start]').forEach(el=>{
       el.onclick = ()=>{
