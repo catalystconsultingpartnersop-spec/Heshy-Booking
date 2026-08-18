@@ -282,6 +282,8 @@
   .portal-session .top{display:flex;justify-content:space-between;font-size:13.5px;font-weight:500;}
   .portal-session .meta{font-size:12.5px;color:var(--muted);margin-top:2px;}
   .portal-session .summary{font-size:13.5px;line-height:1.6;margin-top:8px;color:var(--ink);}
+  .portal-summary-box{margin-top:12px;padding:14px 16px;background:#FAF9F6;border-left:3px solid #C9A961;border-radius:4px;font-size:13.5px;line-height:1.65;color:var(--ink);}
+  .portal-summary-label{font-size:10.5px;font-weight:600;letter-spacing:0.06em;text-transform:uppercase;color:#8A6D2F;margin-bottom:6px;}
 </style>
 </head>
 <body>
@@ -358,8 +360,13 @@ let confirmedLocation = '';
 let confirmedComped = false;
 let submitting = false;
 let portalEmail = '';
+let portalPhone = '';
 let portalClient = null;
 let portalError = '';
+let portalToken = (typeof localStorage !== 'undefined' && localStorage.getItem('heshyPortalToken')) || '';
+let portalShowCardForm = false;
+let portalCardError = '';
+let portalCardSaving = false;
 let expandedClientId = null;
 let viewingClientId = null;
 let clientSearch = '';
@@ -460,6 +467,11 @@ async function loadState(){
       if(adminUnlocked && adminToken) await loadAdminState();
       await loadCalendarBusy();
       await loadJewishHolidays();
+      render();
+      return;
+    }
+    if(view === 'portal'){
+      if(portalToken) await resumePortalSession();
       render();
       return;
     }
@@ -1043,14 +1055,36 @@ function renderAdminGate(){
 }
 
 async function checkPortal(){
+  if(!portalPhone.trim()){ portalError = 'Enter your phone number too — needed to keep your info private.'; render(); return; }
   try{
-    const r = await fetch('/api/portal-lookup?email='+encodeURIComponent(portalEmail));
+    const r = await fetch('/api/portal-lookup', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ action: 'login', email: portalEmail, phone: portalPhone })
+    });
     const data = await r.json();
-    if(!data.found){ portalError = "No profile found for that email."; portalClient = null; render(); return; }
-    portalError = ''; portalClient = data; render();
+    if(data.error){ portalError = data.error; portalClient = null; render(); return; }
+    if(!data.found){ portalError = "We couldn't find a match for that email and phone number."; portalClient = null; render(); return; }
+    portalError = ''; portalClient = data;
+    if(data.token){ portalToken = data.token; try{ localStorage.setItem('heshyPortalToken', data.token); }catch(e){} }
+    render();
   }catch(e){
     portalError = "Something went wrong. Try again."; render();
   }
+}
+async function resumePortalSession(){
+  if(!portalToken) return;
+  try{
+    const r = await fetch('/api/portal-lookup?action=session&token='+encodeURIComponent(portalToken));
+    const data = await r.json();
+    if(data.found){ portalClient = data; portalEmail = data.email || ''; render(); }
+    else { portalToken = ''; try{ localStorage.removeItem('heshyPortalToken'); }catch(e){} }
+  }catch(e){ /* if this fails, they just see the normal login form */ }
+}
+function portalLogout(){
+  portalToken = ''; portalClient = null; portalEmail=''; portalPhone='';
+  try{ localStorage.removeItem('heshyPortalToken'); }catch(e){}
+  render();
 }
 function portalBookAgain(){
   view = 'client'; history.replaceState(null, '', '#');
@@ -1065,8 +1099,11 @@ function renderPortal(){
       <div class="topbar"><div class="brand">Heshy — Clarity Sessions</div></div>
       <div class="portal-box">
         <h1>My sessions</h1>
+        <div class="note" style="margin-bottom:14px;">Enter both your email and phone number to keep your information private.</div>
         <label>Email</label>
         <input type="email" id="portal-email" value="${portalEmail}">
+        <label style="margin-top:12px;">Phone</label>
+        <input type="tel" id="portal-phone" value="${portalPhone}">
         <div class="card-error">${portalError}</div>
         <button class="primary" id="portal-go-btn" style="margin-top:14px;">View my sessions</button>
       </div>
@@ -1082,9 +1119,23 @@ function renderPortal(){
   past.forEach(b=>{
     pastHtml += `<div class="portal-session"><div class="top"><span>${fmtDate(b.date)}</span><span>${money(b.amount||0)}</span></div>
       <div class="meta">${b.actualMinutes||b.durationMin} min, ${b.type==='virtual'?'video call':'in person'}</div>
-      ${b.clientSummary?`<div class="summary">${b.clientSummary}</div>`:''}
+      ${b.clientSummary?`<div class="portal-summary-box"><div class="portal-summary-label">Session recap</div>${b.clientSummary}</div>`:''}
     </div>`;
   });
+  const cardSectionHtml = portalClient.hasCard ? `
+    <div class="section-title" style="margin-top:32px;">Payment method</div>
+    ${!portalShowCardForm ? `
+      <div class="note" style="margin-bottom:10px;">A card is on file.</div>
+      <button class="ghost small" id="portal-update-card-btn">Update card</button>
+    ` : `
+      <div id="portal-card-element" style="padding:12px;border:1px solid var(--line-strong);border-radius:6px;"></div>
+      <div class="card-error" id="portal-card-error">${portalCardError}</div>
+      <div style="display:flex;gap:8px;margin-top:12px;">
+        <button class="primary small" id="portal-save-card-btn" ${portalCardSaving?'disabled':''}>${portalCardSaving?'Saving…':'Save new card'}</button>
+        <button class="ghost small" id="portal-cancel-card-btn">Cancel</button>
+      </div>
+    `}
+  ` : '';
   return `
     <div class="topbar"><div class="brand">Heshy — Clarity Sessions</div></div>
     <h1>Hi ${portalClient.name.split(' ')[0]}</h1>
@@ -1093,6 +1144,8 @@ function renderPortal(){
     ${upHtml}
     <div class="section-title" style="margin-top:32px;">Past sessions</div>
     ${pastHtml}
+    ${cardSectionHtml}
+    <button class="ghost small" id="portal-logout-btn" style="margin-top:32px;">Log out</button>
   `;
 }
 
@@ -1400,7 +1453,7 @@ function renderAdmin(){
     const segments = b.recordingSegments || [];
     const totalSegMin = segments.reduce((sum,s)=>sum+s.minutes,0);
     const fmtClock = iso => new Date(iso).toLocaleTimeString('en-US', { hour:'numeric', minute:'2-digit' });
-    const segmentLogHtml = segments.length ? `
+    const segmentLogHtml = (b.type==='in-person' && segments.length) ? `
       <div class="note" style="margin-top:2px;margin-bottom:8px;">
         ${segments.map((s,i)=>`Part ${i+1}: ${fmtClock(s.start)}&ndash;${fmtClock(s.end)} (${s.minutes} min)`).join(' &middot; ')}
         ${segments.length>1 ? ` &middot; <strong>Total: ${totalSegMin} min</strong>` : ''}
@@ -1411,25 +1464,27 @@ function renderAdmin(){
         <span class="timer" id="timer-${b.id}">${String(Math.floor((timerDisplay[b.id]||0)/60)).padStart(2,'0')}:${String((timerDisplay[b.id]||0)%60).padStart(2,'0')}</span>
         ${running ? `<button class="ghost small" data-stop-timer="${b.id}">Stop</button>` : `<button class="${b.type==='in-person'?'primary':'ghost'} small" data-start-timer="${b.id}">Start</button>`}
         <span class="note" style="margin:0;">${b.type==='in-person' ? 'Tracks time & records using your mic' : 'Tracks time only'}</span>
-        ${isRecording ? `<span class="rec-indicator" title="Recording"><span class="rec-dot"></span>REC</span>` : ''}
+        ${b.type==='in-person' && isRecording ? `<span class="rec-indicator" title="Recording"><span class="rec-dot"></span>REC</span>` : ''}
       </div>
       ${segmentLogHtml}
-      ${recordingStatus[b.id] ? `<div class="note" style="margin-bottom:8px;color:${recordingStatus[b.id]==='error'?'#A5433A':(recordingStatus[b.id]==='done'?'#2E5B27':'var(--muted)')};">${
+      ${b.type==='in-person' && recordingStatus[b.id] ? `<div class="note" style="margin-bottom:8px;color:${recordingStatus[b.id]==='error'?'#A5433A':(recordingStatus[b.id]==='done'?'#2E5B27':'var(--muted)')};">${
         recordingStatus[b.id]==='recording' ? 'Recording…' :
         recordingStatus[b.id]==='processing' ? 'Processing notes… this can take a minute for longer sessions.' :
         recordingStatus[b.id]==='done' ? 'Notes ready below.' :
         'Recording failed: ' + (recordingError[b.id] || 'unknown error') + '. You can still add notes manually below.'
       }</div>` : ''}`;
+    // Virtual: plain Join Meeting (opens tab + starts timer only — no browser recording, since
+    // Gemini (native to Meet, works from any device) is the note-taker for virtual calls.
     const meetBlock = (b.meetLink && b.type==='virtual') ? `
       <label>Google Meet link</label>
       <input type="text" value="${b.meetLink||''}" data-meet="${b.id}">
-      ${!running ? `<button class="primary small" data-join-start="${b.id}" style="margin-top:10px;">Join meeting, start timer &amp; record</button>` : ''}
+      ${!running ? `<button class="primary small" data-join-start="${b.id}" style="margin-top:10px;">Join meeting &amp; start timer</button>` : ''}
     ` : '';
     const controls = `
         <div class="session-controls">
           ${b.status!=='cancelled' ? timerBlock : ''}
           ${b.status!=='cancelled' ? meetBlock : ''}
-          ${(b.status!=='cancelled' && b.type==='virtual' && (b.calendarEventId || b.meetLink)) ? `<button class="ghost small" data-fetch-gemini="${b.id}" style="margin-bottom:14px;">Fetch call duration</button><span id="gemini-msg-${b.id}" style="font-size:12.5px;margin-left:10px;"></span>` : ''}
+          ${(b.status!=='cancelled' && b.type==='virtual' && (b.calendarEventId || b.meetLink)) ? `<button class="ghost small" data-fetch-gemini="${b.id}" style="margin-bottom:14px;">Fetch notes &amp; duration</button><span id="gemini-msg-${b.id}" style="font-size:12.5px;margin-left:10px;"></span>` : ''}
           <label>Internal notes <span class="note" style="display:inline;">(private &mdash; only you see this)</span></label>
           <textarea class="notes-textarea" data-summary="${b.id}">${b.summary||''}</textarea>
           <label style="margin-top:14px;display:block;">Client-facing summary <span class="note" style="display:inline;">(shown to the client in their portal)</span></label>
@@ -1826,6 +1881,51 @@ function mountCardElementIfNeeded(){
   if(errEl) errEl.textContent = cardErrorMsg;
 }
 
+// Portal card update uses its own separate Elements group/card field (independent from the
+// booking flow's), since they're mounted at different times into different DOM nodes.
+let portalElements = null;
+let portalCardElement = null;
+function mountPortalCardElementIfNeeded(){
+  const mount = document.getElementById('portal-card-element');
+  if(!mount || !portalShowCardForm) return;
+  if(mount.childElementCount === 0){
+    portalElements = stripe.elements();
+    portalCardElement = portalElements.create('card', { style: { base: { fontSize: '14.5px', fontFamily: 'Inter, sans-serif', color: '#111111' } } });
+    portalCardElement.mount('#portal-card-element');
+    portalCardElement.on('change', (e)=>{
+      const errEl = document.getElementById('portal-card-error');
+      if(errEl) errEl.textContent = e.error ? e.error.message : '';
+    });
+  }
+}
+async function savePortalCard(){
+  if(!portalCardElement) return;
+  portalCardSaving = true; portalCardError = ''; render();
+  try{
+    const setupRes = await fetch('/api/create-setup-intent', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ customerId: portalClient.stripeCustomerId })
+    });
+    const setupData = await setupRes.json();
+    if(setupData.error){ portalCardError = setupData.error; portalCardSaving = false; render(); return; }
+    const result = await stripe.confirmCardSetup(setupData.clientSecret, { payment_method: { card: portalCardElement } });
+    if(result.error){ portalCardError = result.error.message; portalCardSaving = false; render(); return; }
+    const confirmRes = await fetch('/api/portal-lookup', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ action: 'confirm-card-update', token: portalToken, paymentMethodId: result.setupIntent.payment_method })
+    });
+    const confirmData = await confirmRes.json();
+    if(confirmData.error){ portalCardError = confirmData.error; portalCardSaving = false; render(); return; }
+    portalCardSaving = false; portalShowCardForm = false; portalCardError = '';
+    render();
+  }catch(e){
+    portalCardError = 'Something went wrong. Please try again.';
+    portalCardSaving = false; render();
+  }
+}
+
 function attachHandlers(){
   const $ = id => document.getElementById(id);
   const backBtn = $('backToClientBtn'); if(backBtn) backBtn.onclick = backToClient;
@@ -1838,7 +1938,17 @@ function attachHandlers(){
     portalEmailInput.oninput = e=> portalEmail = e.target.value;
     portalEmailInput.onkeydown = e=>{ if(e.key==='Enter') checkPortal(); };
   }
+  const portalPhoneInput = $('portal-phone');
+  if(portalPhoneInput){
+    portalPhoneInput.oninput = e=> portalPhone = e.target.value;
+    portalPhoneInput.onkeydown = e=>{ if(e.key==='Enter') checkPortal(); };
+  }
   const portalBookAgainBtn = $('portal-book-again'); if(portalBookAgainBtn) portalBookAgainBtn.onclick = portalBookAgain;
+  const portalLogoutBtn = $('portal-logout-btn'); if(portalLogoutBtn) portalLogoutBtn.onclick = portalLogout;
+  const portalUpdateCardBtn = $('portal-update-card-btn'); if(portalUpdateCardBtn) portalUpdateCardBtn.onclick = ()=>{ portalShowCardForm = true; portalCardError=''; render(); };
+  const portalCancelCardBtn = $('portal-cancel-card-btn'); if(portalCancelCardBtn) portalCancelCardBtn.onclick = ()=>{ portalShowCardForm = false; portalCardError=''; render(); };
+  const portalSaveCardBtn = $('portal-save-card-btn'); if(portalSaveCardBtn) portalSaveCardBtn.onclick = savePortalCard;
+  mountPortalCardElementIfNeeded();
 
   if(view==='admin' && !adminUnlocked) return;
   if(view==='portal') return;
@@ -2036,7 +2146,6 @@ function attachHandlers(){
         const b = state.bookings.find(x=>x.id===id);
         if(b && b.meetLink) window.open(b.meetLink, '_blank');
         startTimer(id);
-        startRecording(id, 'virtual');
       };
     });
     document.querySelectorAll('[data-fetch-gemini]').forEach(el=>{
@@ -2053,7 +2162,7 @@ function attachHandlers(){
           const data = await res.json();
           if(data.error){
             if(msg){ msg.style.color = '#A5433A'; msg.textContent = data.error; }
-            el.disabled = false; el.textContent = 'Fetch call duration';
+            el.disabled = false; el.textContent = 'Fetch notes & duration';
             return;
           }
           await loadAdminState();
@@ -2062,7 +2171,7 @@ function attachHandlers(){
           if(msg2 && data.note){ msg2.style.color = data.foundDuration ? '#2E5B27' : '#6E6E6E'; msg2.textContent = data.note; }
         }catch(e){
           if(msg){ msg.style.color = '#A5433A'; msg.textContent = 'Something went wrong.'; }
-          el.disabled = false; el.textContent = 'Fetch call duration';
+          el.disabled = false; el.textContent = 'Fetch notes & duration';
         }
       };
     });
