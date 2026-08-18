@@ -98,7 +98,7 @@ export default async function handler(req, res) {
       const accessToken = await getGoogleAccessToken();
       if (accessToken) {
         const endAt = addMinutes(slot.date, slot.time, slot.duration);
-        const evRes = await fetch('https://www.googleapis.com/calendar/v3/calendars/primary/events?conferenceDataVersion=1', {
+        const evRes = await fetch('https://www.googleapis.com/calendar/v3/calendars/primary/events?conferenceDataVersion=1&sendUpdates=none', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${accessToken}` },
           body: JSON.stringify({
@@ -106,6 +106,7 @@ export default async function handler(req, res) {
             location: slot.type === 'in-person' ? (data.settings?.location || '') : '',
             start: { dateTime: slot.date + 'T' + slot.time + ':00', timeZone: APP_TIMEZONE },
             end: { dateTime: endAt.date + 'T' + endAt.time + ':00', timeZone: APP_TIMEZONE },
+            attendees: [{ email }],
             conferenceData: {
               createRequest: {
                 requestId: booking.id,
