@@ -38,11 +38,19 @@ async function fetchActualDurationFromMeet(accessToken, meetLink) {
       return { minutes: null, reason: `Meet API error (${r.status}): ${body.slice(0, 200)}` };
     }
     const data = await r.json();
-    const record = (data.conferenceRecords || [])[0];
-    if (!record) return { minutes: null, reason: 'No Google Meet conference record found yet — it can take a few minutes to appear after the call ends.' };
-    if (!record.startTime || !record.endTime) return { minutes: null, reason: 'The call may still be in progress, or the record is incomplete.' };
-    const mins = Math.max(1, Math.round((new Date(record.endTime) - new Date(record.startTime)) / 60000));
-    return { minutes: mins, reason: null };
+    const records = data.conferenceRecords || [];
+    if (records.length === 0) return { minutes: null, reason: 'No Google Meet conference record found yet — it can take a few minutes to appear after the call ends.' };
+    // A single meeting link can generate MULTIPLE separate conference records if someone leaves
+    // and rejoins (a well-documented Google Meet API behavior) — sum every completed record's
+    // duration instead of only looking at the most recent one, or earlier time gets silently lost.
+    let totalMinutes = 0;
+    let anyStillInProgress = false;
+    for (const record of records) {
+      if (!record.startTime || !record.endTime) { anyStillInProgress = true; continue; }
+      totalMinutes += (new Date(record.endTime) - new Date(record.startTime)) / 60000;
+    }
+    if (totalMinutes === 0) return { minutes: null, reason: anyStillInProgress ? 'The call may still be in progress.' : 'The record is incomplete.' };
+    return { minutes: Math.max(1, Math.round(totalMinutes)), reason: null, recordCount: records.length };
   } catch (e) {
     return { minutes: null, reason: 'Could not reach the Meet API: ' + e.message };
   }
@@ -98,18 +106,21 @@ export default async function handler(req, res) {
     if (!accessToken) return res.status(400).json({ error: 'Google Calendar is not connected.' });
 
     // Duration — independent of whether Gemini's notes doc exists yet.
-    const { minutes: meetMinutes, reason } = await fetchActualDurationFromMeet(accessToken, booking.meetLink);
+    const { minutes: meetMinutes, reason, recordCount } = await fetchActualDurationFromMeet(accessToken, booking.meetLink);
     const hadManualDuration = booking.actualMinutes != null;
     let durationNote;
     if (meetMinutes) {
-      booking.actualMinutes = meetMinutes; // Google's own record is authoritative; safe to override the timer.
-      durationNote = `Duration confirmed by Google Meet: ${meetMinutes} min.`;
+      // Never let a re-check shrink an already-confirmed number — only ever increase it.
+      booking.actualMinutes = Math.max(booking.actualMinutes || 0, meetMinutes);
+      durationNote = `Duration confirmed by Google Meet: ${meetMinutes} min${recordCount > 1 ? ` (combined from ${recordCount} sessions on this call)` : ''}.`;
     } else {
       durationNote = reason || 'Could not confirm duration from Google Meet.';
       durationNote += hadManualDuration ? ` Keeping your timer's ${booking.actualMinutes} min for now.` : ' Use the Start/Stop timer to track actual time until this becomes available.';
     }
 
-    // Notes — from Gemini's notes doc attached to the Calendar event, if it's ready yet.
+    // Notes — from Gemini's notes doc attached to the Calendar event, if it's ready yet. If you
+    // rejoin the call later, Gemini's doc may only reflect the newest session — rather than
+    // silently overwrite whatever was already fetched, this keeps both if the content differs.
     let notesNote = '';
     if (booking.calendarEventId) {
       const evRes = await fetch(`https://www.googleapis.com/calendar/v3/calendars/primary/events/${booking.calendarEventId}`, {
@@ -124,10 +135,21 @@ export default async function handler(req, res) {
         if (exportRes.ok) {
           const text = await exportRes.text();
           const summary = extractSummary(text);
-          booking.summary = summary;
-          const clientVersion = await generateClientFacingSummary(summary);
+          const existingSummary = (booking.summary || '').trim();
+          if (!existingSummary) {
+            booking.summary = summary;
+            notesNote = 'Notes fetched.';
+          } else if (existingSummary === summary.trim()) {
+            notesNote = 'Notes fetched — no change since last time.';
+          } else if (existingSummary.includes(summary.trim())) {
+            notesNote = 'Notes fetched — nothing new beyond what you already have.';
+          } else {
+            const fmtNow = new Date().toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit', timeZone: 'America/New_York' });
+            booking.summary = `${existingSummary}\n\n---\n\nUpdate fetched at ${fmtNow}:\n${summary}`;
+            notesNote = 'New notes fetched and added below your existing ones.';
+          }
+          const clientVersion = await generateClientFacingSummary(booking.summary);
           if (clientVersion) booking.clientSummary = clientVersion;
-          notesNote = 'Notes fetched.';
         } else {
           notesNote = 'Found the notes doc, but could not read it yet.';
         }
