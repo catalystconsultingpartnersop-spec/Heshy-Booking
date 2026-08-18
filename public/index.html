@@ -233,6 +233,7 @@
   .session-top{display:flex;justify-content:space-between;align-items:flex-start;}
   .session-name{font-weight:600;font-size:14.5px;}
   .session-meta{font-size:12.5px;color:var(--muted);margin-top:2px;}
+  .session-time-big{font-size:22px;font-weight:600;font-family:Georgia,serif;margin-top:4px;line-height:1.2;}
   .session-format{font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:.04em;margin-top:4px;}
   .session-controls{margin-top:14px;padding:14px;background:#F7F7F5;border-radius:6px;}
   .session-controls label:first-of-type{margin-top:0;}
@@ -1130,7 +1131,7 @@ function renderDayDetail(){
       <div class="slot-chip-row" style="margin:10px 0 16px;">${chips}</div>
       ${!isHoliday ? `
       <div class="row2">
-        <div><label>Add a time</label><input type="text" id="quickAddTime" placeholder="HH:MM" value="${quickAddTime}"></div>
+        <div><label>Add a time</label><input type="time" id="quickAddTime" value="${quickAddTime}"></div>
         <div><label>Duration</label>
           <select id="quickAddDuration">
             <option value="30" ${quickAddDuration==30?'selected':''}>30 min</option>
@@ -1238,7 +1239,8 @@ function renderAdmin(){
         <div class="session-top">
           <div>
             <div class="session-name">${b.clientId?`<a class="client-link" data-view-client="${b.clientId}">${b.clientName}</a>`:b.clientName}</div>
-            <div class="session-meta">${fmtDate(b.date)}, ${fmtTime(b.time)}, ${b.durationMin} min scheduled${b.actualMinutes?', '+b.actualMinutes+' min actual':''}</div>
+            <div class="session-time-big">${fmtTime(b.time)}</div>
+            <div class="session-meta">${fmtDate(b.date)} &middot; ${b.durationMin} min scheduled${b.actualMinutes?', '+b.actualMinutes+' min actual':''}</div>
             <div class="session-format">${b.type==='virtual'?'Video call':'In person'}${b.comped?' &middot; comped ('+b.couponCode+')':''}</div>
           </div>
           <span class="tag status-${b.status}">${b.status}</span>
@@ -1360,8 +1362,8 @@ function renderAdmin(){
             ${DOW.map((d,i)=>`<div class="day-toggle ${newRule.days.includes(i)?'active':''}" data-rule-day="${i}">${d[0]}</div>`).join('')}
           </div>
           <div class="row2" style="margin-top:12px;">
-            <div><label>Start time</label><input type="text" id="nr-start" placeholder="HH:MM" value="${newRule.start}"></div>
-            <div><label>End time</label><input type="text" id="nr-end" placeholder="HH:MM" value="${newRule.end}"></div>
+            <div><label>Start time</label><input type="time" id="nr-start" value="${newRule.start}"></div>
+            <div><label>End time</label><input type="time" id="nr-end" value="${newRule.end}"></div>
           </div>
           <div style="margin-top:14px;"><button class="ghost small" id="addRuleBtn">Add pattern</button></div>
         </div>
