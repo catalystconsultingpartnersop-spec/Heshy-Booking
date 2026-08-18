@@ -46,6 +46,29 @@ async function getGoogleAccessToken() {
   return d.access_token || null;
 }
 
+async function handleCleanupLargePdfs(req, res) {
+  const data = await kv.get('app-data');
+  if (!data) return res.status(404).json({ error: 'No data found' });
+  const results = [];
+  for (const client of (data.clients || [])) {
+    if (client.wgPdfData && client.wgPdfData.startsWith('data:')) {
+      try {
+        const base64 = client.wgPdfData.split(',')[1];
+        const buffer = Buffer.from(base64, 'base64');
+        const safeName = (client.wgPdfName || 'working-genius.pdf').replace(/[^a-zA-Z0-9._-]/g, '_');
+        const blob = await put('wg-pdfs/' + Date.now() + '-' + safeName, buffer, { access: 'public', contentType: 'application/pdf' });
+        client.wgPdfData = blob.url;
+        results.push({ client: client.name, status: 'migrated to Blob storage' });
+      } catch (e) {
+        client.wgPdfData = '';
+        results.push({ client: client.name, status: 'could not migrate, PDF removed (re-upload manually): ' + e.message });
+      }
+    }
+  }
+  await kv.set('app-data', data);
+  res.status(200).json({ ok: true, results });
+}
+
 async function handleUploadPdf(req, res) {
   const { fileName, fileDataUrl } = req.body || {};
   if (!fileName || !fileDataUrl) return res.status(400).json({ error: 'Missing fileName or fileDataUrl.' });
@@ -177,6 +200,9 @@ export default async function handler(req, res) {
     }
     if (req.method === 'POST' && req.body && req.body.action === 'upload-pdf') {
       return handleUploadPdf(req, res);
+    }
+    if (req.method === 'POST' && req.body && req.body.action === 'cleanup-large-pdfs') {
+      return handleCleanupLargePdfs(req, res);
     }
 
     if (req.method === 'GET') {
