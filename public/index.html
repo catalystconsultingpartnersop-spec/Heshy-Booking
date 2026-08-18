@@ -228,6 +228,7 @@
   .tag.status-scheduled{color:var(--muted);border-color:var(--line-strong);}
   .tag.status-completed{color:var(--ink);border-color:var(--ink);}
   .tag.status-charged{background:var(--ink);color:#fff;border-color:var(--ink);}
+  .tag.status-cancelled{color:#A5433A;border-color:#A5433A;}
   .session{border-bottom:1px solid var(--line);padding:20px 0;}
   .session:last-child{border-bottom:none;}
   .session-top{display:flex;justify-content:space-between;align-items:flex-start;}
@@ -371,6 +372,7 @@ let expandedClientId = null;
 let viewingClientId = null;
 let clientSearch = '';
 let reschedulingId = null;
+let billingBasisChoice = {}; // bookingId -> 'actual' | 'minimum', overrides the global default per session
 let rescheduleType = {};
 let runningTimer = {};
 let timerDisplay = {};
@@ -607,7 +609,7 @@ function computeFreeRanges(ds, type){
     if(windows[i][0] <= last[1]) last[1] = Math.max(last[1], windows[i][1]);
     else merged.push(windows[i].slice());
   }
-  const busy = (state.bookings||[]).filter(b=>b.date===ds && b.type===type && b.status!=='cancelled').map(b=>{
+  const busy = (state.bookings||[]).filter(b=>b.date===ds && b.type===type && !b.cancelled).map(b=>{
     const s = timeToMinC(b.time); return [s, s+(b.durationMin||60)];
   });
   calendarBusy.forEach(b=>{
@@ -1294,7 +1296,7 @@ function renderDashboardCalendar(){
   const todayDs = dateStr(new Date());
 
   const countsByDate = {};
-  state.bookings.forEach(b=>{ if(b.status!=='cancelled') countsByDate[b.date] = (countsByDate[b.date]||0)+1; });
+  state.bookings.forEach(b=>{ if(!b.cancelled) countsByDate[b.date] = (countsByDate[b.date]||0)+1; });
 
   let cells = '';
   for(let i=0;i<firstDow;i++) cells += `<div class="cal-cell empty"></div>`;
@@ -1488,9 +1490,9 @@ function renderAdmin(){
     ` : '';
     const controls = `
         <div class="session-controls">
-          ${b.status!=='cancelled' ? timerBlock : ''}
-          ${b.status!=='cancelled' ? meetBlock : ''}
-          ${(b.status!=='cancelled' && b.type==='virtual' && (b.calendarEventId || b.meetLink)) ? `<button class="ghost small" data-fetch-gemini="${b.id}" style="margin-bottom:14px;">Fetch notes &amp; duration</button><span id="gemini-msg-${b.id}" style="font-size:12.5px;margin-left:10px;"></span>` : ''}
+          ${!b.cancelled ? timerBlock : ''}
+          ${!b.cancelled ? meetBlock : ''}
+          ${(!b.cancelled && b.type==='virtual' && (b.calendarEventId || b.meetLink)) ? `<button class="ghost small" data-fetch-gemini="${b.id}" style="margin-bottom:14px;">Fetch notes &amp; duration</button><span id="gemini-msg-${b.id}" style="font-size:12.5px;margin-left:10px;"></span>` : ''}
           <label>Internal notes <span class="note" style="display:inline;">(private &mdash; only you see this)</span></label>
           <textarea class="notes-textarea" data-summary="${b.id}">${b.summary||''}</textarea>
           <label style="margin-top:14px;display:block;">Client-facing summary <span class="note" style="display:inline;">(shown to the client in their portal)</span></label>
@@ -1499,15 +1501,23 @@ function renderAdmin(){
         </div>
     `;
     let action = '';
-    if(b.status!=='charged' && b.status!=='cancelled'){
-      const mins = b.actualMinutes || b.durationMin;
-      const hours = Math.round((mins/60)*100)/100;
+    if(b.status!=='charged' && !b.cancelled){
+      const actualMins = b.actualMinutes || b.durationMin;
+      const basis = billingBasisChoice[b.id] || state.settings.billingMode || 'actual';
+      const minsForBilling = basis==='minimum' ? b.durationMin : actualMins;
+      const hours = Math.round((minsForBilling/60)*100)/100;
       const defaultAmt = Math.round(hours*500*100)/100;
       const amt = (b.amount!=null) ? b.amount : defaultAmt;
       action = `
         <div class="charge-row">
+          <div class="note" style="margin-bottom:8px;">Actual time tracked: <strong>${actualMins} min</strong> &middot; Booked for: <strong>${b.durationMin} min</strong></div>
+          <label>Bill for</label>
+          <div class="type-toggle" style="margin-bottom:12px;">
+            <div class="type-btn ${basis==='actual'?'active':''}" data-billing-basis="${b.id}" data-basis-value="actual">Actual time (${actualMins} min)</div>
+            <div class="type-btn ${basis==='minimum'?'active':''}" data-billing-basis="${b.id}" data-basis-value="minimum">Full booked (${b.durationMin} min)</div>
+          </div>
           <div class="row2">
-            <div><label>Actual hours</label><input type="text" value="${hours}" data-actual-hours="${b.id}"></div>
+            <div><label>Hours to bill</label><input type="text" value="${hours}" data-actual-hours="${b.id}"></div>
             <div><label>Amount to charge</label><input type="text" value="${amt.toFixed(2)}" data-amount="${b.id}"></div>
           </div>
           <div style="margin-top:12px;"><button class="primary small" data-charge="${b.id}">Charge and send receipt</button></div>
@@ -1541,12 +1551,12 @@ function renderAdmin(){
             <div class="session-meta">${fmtDate(b.date)} &middot; ${b.durationMin} min scheduled${b.actualMinutes?', '+b.actualMinutes+' min actual':''}</div>
             <div class="session-format">${b.type==='virtual'?'Video call':'In person'}${b.comped?' &middot; comped ('+b.couponCode+')':''}</div>
           </div>
-          <span class="tag status-${b.status}">${b.status}</span>
+          <span class="tag status-${b.status}">${b.status}</span>${b.cancelled ? ` <span class="tag status-cancelled">cancelled</span>` : ''}
         </div>
-        ${b.status==='cancelled' ? `<div class="note" style="margin-top:8px;">Cancelled \u2014 the time was freed up. Any notes or billing from before cancelling are kept below for your records.</div>` : ''}
+        ${b.cancelled ? `<div class="note" style="margin-top:8px;">Cancelled${b.status==='charged' ? ' \u2014 this session was already charged, so it stays visible to the client and in your records.' : ' \u2014 the time was freed up. Any notes or billing from before cancelling are kept below for your records.'}</div>` : ''}
         ${controls}
         ${action?`<div class="session-actions">${action}</div>`:''}
-        ${b.status!=='cancelled' ? `
+        ${!b.cancelled ? `
         <div style="display:flex;gap:8px;margin-top:8px;">
           <button class="ghost small" data-reschedule-toggle="${b.id}">${isRescheduling?'Close':'Reschedule'}</button>
           <button class="ghost small danger-ghost" data-cancel-booking="${b.id}">Cancel booking</button>
@@ -1572,9 +1582,9 @@ function renderAdmin(){
     if(!selectedDashboardDate) selectedDashboardDate = todayDs;
     const weekAheadDs = dateStr(new Date(Date.now() + 7*86400000));
 
-    const todayBookings = state.bookings.filter(b=>b.date===todayDs && b.status!=='cancelled').sort((a,b)=>a.time.localeCompare(b.time));
-    const upcomingBookings = state.bookings.filter(b=>b.date>=todayDs && b.status!=='cancelled').sort((a,b)=> a.date===b.date ? a.time.localeCompare(b.time) : a.date.localeCompare(b.date));
-    const thisWeekBookings = state.bookings.filter(b=>b.date>=todayDs && b.date<=weekAheadDs && b.status!=='cancelled').sort((a,b)=> a.date===b.date ? a.time.localeCompare(b.time) : a.date.localeCompare(b.date));
+    const todayBookings = state.bookings.filter(b=>b.date===todayDs && !b.cancelled).sort((a,b)=>a.time.localeCompare(b.time));
+    const upcomingBookings = state.bookings.filter(b=>b.date>=todayDs && !b.cancelled).sort((a,b)=> a.date===b.date ? a.time.localeCompare(b.time) : a.date.localeCompare(b.date));
+    const thisWeekBookings = state.bookings.filter(b=>b.date>=todayDs && b.date<=weekAheadDs && !b.cancelled).sort((a,b)=> a.date===b.date ? a.time.localeCompare(b.time) : a.date.localeCompare(b.date));
     const unbilledBookings = state.bookings.filter(b=>b.date<todayDs && b.status==='scheduled').sort((a,b)=> a.date===b.date ? a.time.localeCompare(b.time) : a.date.localeCompare(b.date));
 
     if(!dashboardStatFilter) dashboardStatFilter = 'today';
@@ -1757,7 +1767,7 @@ function renderAdmin(){
       clientBookings.forEach(b=>{
         sessHtml += `
           <div class="hist-entry">
-            <div class="hist-line"><span><strong>${fmtDate(b.date)}, ${fmtTime(b.time)}</strong> &middot; ${b.type==='virtual'?'Video call':'In person'} &middot; ${b.actualMinutes||b.durationMin} min</span><span>${b.status==='charged'?money(b.amount||0):b.status}</span></div>
+            <div class="hist-line"><span><strong>${fmtDate(b.date)}, ${fmtTime(b.time)}</strong> &middot; ${b.type==='virtual'?'Video call':'In person'} &middot; ${b.actualMinutes||b.durationMin} min${b.cancelled?' &middot; cancelled':''}</span><span>${b.status==='charged'?money(b.amount||0):b.status}</span></div>
             ${b.summary ? `<div class="hist-notes">${b.summary}</div>` : ''}
           </div>`;
       });
@@ -1834,6 +1844,12 @@ function renderAdmin(){
         <div style="display:flex;gap:18px;">
           <label style="display:flex;align-items:center;gap:6px;font-weight:normal;"><input type="checkbox" id="dur-60" ${(state.settings.durationOptions||[60]).includes(60)?'checked':''}> 60 min</label>
           <label style="display:flex;align-items:center;gap:6px;font-weight:normal;"><input type="checkbox" id="dur-120" ${(state.settings.durationOptions||[60]).includes(120)?'checked':''}> 120 min (extended)</label>
+        </div>
+        <label>Default billing</label>
+        <div class="note" style="margin-bottom:8px;">Actual time tracked is always shown, regardless of this setting \u2014 this only controls what a new charge defaults to. You can always switch it for one session when charging.</div>
+        <div class="type-toggle" style="max-width:420px;">
+          <div class="type-btn ${(state.settings.billingMode||'actual')==='actual'?'active':''}" id="billing-mode-actual">Actual time</div>
+          <div class="type-btn ${state.settings.billingMode==='minimum'?'active':''}" id="billing-mode-minimum">Full booked length</div>
         </div>
         <label>Backup video call link</label>
         <div class="note" style="margin-bottom:8px;">Every booking gets its own unique Meet link automatically when Google Calendar is connected \u2014 this field is only used as a fallback for the rare case a booking happens while Calendar is disconnected.</div>
@@ -2052,6 +2068,9 @@ function attachHandlers(){
       };
     });
     const meetEl=$('set-meet'), locEl=$('set-location'), intakeEl=$('set-intake'), dur60El=$('dur-60'), dur120El=$('dur-120');
+    const billingActualBtn = $('billing-mode-actual'), billingMinimumBtn = $('billing-mode-minimum');
+    if(billingActualBtn) billingActualBtn.onclick = ()=>{ state.settings.billingMode = 'actual'; render(); };
+    if(billingMinimumBtn) billingMinimumBtn.onclick = ()=>{ state.settings.billingMode = 'minimum'; render(); };
     const saveSettingsBtn = $('save-settings-btn');
     if(saveSettingsBtn){
       saveSettingsBtn.onclick = async ()=>{
@@ -2093,6 +2112,12 @@ function attachHandlers(){
       };
     });
     document.querySelectorAll('[data-skip-charge]').forEach(el=>{ el.onclick = ()=>skipCharge(el.getAttribute('data-skip-charge')); });
+    document.querySelectorAll('[data-billing-basis]').forEach(el=>{
+      el.onclick = ()=>{
+        billingBasisChoice[el.getAttribute('data-billing-basis')] = el.getAttribute('data-basis-value');
+        render();
+      };
+    });
     document.querySelectorAll('[data-cancel-booking]').forEach(el=>{ el.onclick = ()=>cancelBooking(el.getAttribute('data-cancel-booking')); });
     document.querySelectorAll('[data-reschedule-toggle]').forEach(el=>{
       el.onclick = ()=>{
