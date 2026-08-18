@@ -1,0 +1,57 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Heshy Booking — Maintenance</title>
+<style>
+  body{font-family:Arial,sans-serif;max-width:480px;margin:60px auto;padding:0 20px;color:#111;}
+  h1{font-size:18px;}
+  input{width:100%;padding:10px;border:1px solid #ccc;border-radius:4px;font-size:14px;margin-bottom:10px;box-sizing:border-box;}
+  button{padding:10px 18px;border:none;border-radius:4px;background:#111;color:#fff;font-size:14px;cursor:pointer;}
+  button:disabled{opacity:0.5;cursor:default;}
+  pre{background:#f5f5f5;padding:12px;border-radius:4px;font-size:12.5px;white-space:pre-wrap;margin-top:16px;}
+  .note{color:#666;font-size:13px;margin-bottom:16px;}
+</style>
+</head>
+<body>
+  <h1>Data cleanup: shrink oversized client records</h1>
+  <div class="note">This finds any client with an old, directly-embedded PDF and moves it to proper file storage, replacing it with a short link. This is safe to run — it never touches bookings, slots, or settings, only the PDF field. Safe to run more than once.</div>
+  <input type="password" id="pw" placeholder="Admin password">
+  <button id="run">Run cleanup</button>
+  <pre id="out" style="display:none;"></pre>
+
+  <script>
+    document.getElementById('run').onclick = async () => {
+      const pw = document.getElementById('pw').value;
+      const out = document.getElementById('out');
+      const btn = document.getElementById('run');
+      if(!pw){ alert('Enter the admin password.'); return; }
+      btn.disabled = true; btn.textContent = 'Running…';
+      out.style.display = 'block';
+      out.textContent = 'Logging in…';
+      try {
+        const loginRes = await fetch('/api/admin-data', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ action: 'login', password: pw })
+        });
+        const loginData = await loginRes.json();
+        if (loginData.error) { out.textContent = 'Login failed: ' + loginData.error; btn.disabled = false; btn.textContent = 'Run cleanup'; return; }
+        out.textContent = 'Logged in. Cleaning up…';
+        const cleanupRes = await fetch('/api/admin-data', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', 'X-Admin-Token': loginData.token },
+          body: JSON.stringify({ action: 'cleanup-large-pdfs' })
+        });
+        const cleanupData = await cleanupRes.json();
+        if (cleanupData.error) { out.textContent = 'Cleanup failed: ' + cleanupData.error; }
+        else if (!cleanupData.results || cleanupData.results.length === 0) { out.textContent = 'Done. No oversized PDFs found — nothing to clean up.'; }
+        else { out.textContent = 'Done:\n\n' + cleanupData.results.map(r => '- ' + r.client + ': ' + r.status).join('\n'); }
+      } catch (e) {
+        out.textContent = 'Error: ' + e.message;
+      }
+      btn.disabled = false; btn.textContent = 'Run cleanup';
+    };
+  </script>
+</body>
+</html>
