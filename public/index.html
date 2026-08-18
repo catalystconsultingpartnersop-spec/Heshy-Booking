@@ -971,7 +971,7 @@ function renderClient(){
       });
       inner += `</div>`;
       const longestOffered = Math.max(...durationOptions);
-      inner += `<div class="note" style="margin-top:8px;">Think you'll need more than ${longestOffered} min? Book the ${longestOffered}-min session, and we'll figure out the rest together once we're talking.</div>`;
+      inner += `<div style="margin-top:10px;margin-bottom:24px;font-size:12.5px;color:var(--muted);font-style:italic;">Need more than ${longestOffered} min? Book the ${longestOffered}-min session &mdash; we'll sort out the rest together once we're talking.</div>`;
     }
     // Find the next ~56 days that have at least one valid start time for the chosen type+duration.
     const candidateDates = [];
