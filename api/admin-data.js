@@ -11,6 +11,22 @@ function defaultState() {
   };
 }
 
+// Compute date/time after adding minutes, using UTC arithmetic purely as scratch
+// math (never converted to a real timezone) so it's deterministic regardless of
+// what timezone the server process happens to run in.
+function addMinutes(dateStr, timeStr, minutesToAdd) {
+  const [y, mo, d] = dateStr.split('-').map(Number);
+  const [h, mi] = timeStr.split(':').map(Number);
+  const dt = new Date(Date.UTC(y, mo - 1, d, h, mi));
+  dt.setUTCMinutes(dt.getUTCMinutes() + minutesToAdd);
+  const pad = n => String(n).padStart(2, '0');
+  return {
+    date: dt.getUTCFullYear() + '-' + pad(dt.getUTCMonth() + 1) + '-' + pad(dt.getUTCDate()),
+    time: pad(dt.getUTCHours()) + ':' + pad(dt.getUTCMinutes())
+  };
+}
+const APP_TIMEZONE = 'America/New_York';
+
 async function getGoogleAccessToken() {
   const refreshToken = await kv.get('google-refresh-token');
   if (!refreshToken) return null;
@@ -93,9 +109,11 @@ async function handleRescheduleBooking(req, res) {
     try {
       const accessToken = await getGoogleAccessToken();
       if (accessToken) {
-        const startISO = new Date(targetDate + 'T' + targetTime + ':00').toISOString();
-        const endISO = new Date(new Date(startISO).getTime() + targetDuration * 60000).toISOString();
-        const patchBody = { start: { dateTime: startISO }, end: { dateTime: endISO } };
+        const endAt = addMinutes(targetDate, targetTime, targetDuration);
+        const patchBody = {
+          start: { dateTime: targetDate + 'T' + targetTime + ':00', timeZone: APP_TIMEZONE },
+          end: { dateTime: endAt.date + 'T' + endAt.time + ':00', timeZone: APP_TIMEZONE }
+        };
         if (targetType !== booking.type) {
           patchBody.location = targetType === 'in-person' ? (data.settings?.location || '') : '';
         }

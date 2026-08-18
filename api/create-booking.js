@@ -23,6 +23,22 @@ function uid() {
   return Math.random().toString(36).slice(2, 10);
 }
 
+// Compute date/time after adding minutes, using UTC arithmetic purely as scratch
+// math (never converted to a real timezone) so it's deterministic regardless of
+// what timezone the server process happens to run in.
+function addMinutes(dateStr, timeStr, minutesToAdd) {
+  const [y, mo, d] = dateStr.split('-').map(Number);
+  const [h, mi] = timeStr.split(':').map(Number);
+  const dt = new Date(Date.UTC(y, mo - 1, d, h, mi));
+  dt.setUTCMinutes(dt.getUTCMinutes() + minutesToAdd);
+  const pad = n => String(n).padStart(2, '0');
+  return {
+    date: dt.getUTCFullYear() + '-' + pad(dt.getUTCMonth() + 1) + '-' + pad(dt.getUTCDate()),
+    time: pad(dt.getUTCHours()) + ':' + pad(dt.getUTCMinutes())
+  };
+}
+const APP_TIMEZONE = 'America/New_York';
+
 export default async function handler(req, res) {
   if (req.method !== 'POST') return res.status(405).json({ error: 'Method not allowed' });
   try {
@@ -81,16 +97,15 @@ export default async function handler(req, res) {
     try {
       const accessToken = await getGoogleAccessToken();
       if (accessToken) {
-        const startISO = new Date(slot.date + 'T' + slot.time + ':00').toISOString();
-        const endISO = new Date(new Date(startISO).getTime() + slot.duration * 60000).toISOString();
+        const endAt = addMinutes(slot.date, slot.time, slot.duration);
         const evRes = await fetch('https://www.googleapis.com/calendar/v3/calendars/primary/events?conferenceDataVersion=1', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${accessToken}` },
           body: JSON.stringify({
             summary: 'Clarity session — ' + name,
             location: slot.type === 'in-person' ? (data.settings?.location || '') : '',
-            start: { dateTime: startISO },
-            end: { dateTime: endISO },
+            start: { dateTime: slot.date + 'T' + slot.time + ':00', timeZone: APP_TIMEZONE },
+            end: { dateTime: endAt.date + 'T' + endAt.time + ':00', timeZone: APP_TIMEZONE },
             conferenceData: {
               createRequest: {
                 requestId: booking.id,
