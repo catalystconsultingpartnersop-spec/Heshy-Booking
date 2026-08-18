@@ -21,7 +21,7 @@ export default async function handler(req, res) {
     // Lightweight, no client PII — just enough for the booking page to compute what's still free.
     // Cancelled bookings are excluded entirely so they never block a time slot.
     const futureBookings = (data.bookings || [])
-      .filter(b => b.date >= todayStr && b.status !== 'cancelled')
+      .filter(b => b.date >= todayStr && !b.cancelled)
       .map(b => ({ date: b.date, time: b.time, durationMin: b.durationMin, type: b.type }));
     const futureOverrides = (data.overrides || []).filter(o => o.date >= todayStr);
     const futureBlockedDates = (data.blockedDates || []).filter(bl => bl.date >= todayStr);

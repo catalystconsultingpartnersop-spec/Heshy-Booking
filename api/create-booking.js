@@ -56,7 +56,7 @@ function isRangeAvailable(data, date, time, durationMin, type, excludeBookingId,
   if (!fitsAWindow) return false;
 
   const conflicts = (data.bookings || [])
-    .filter(b => b.id !== excludeBookingId && b.date === date && b.type === type && b.status !== 'cancelled')
+    .filter(b => b.id !== excludeBookingId && b.date === date && b.type === type && !b.cancelled)
     .some(b => {
       const bs = timeToMin(b.time), be = bs + (b.durationMin || 60);
       return reqStart < be && reqEnd > bs;

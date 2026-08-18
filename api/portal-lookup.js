@@ -9,10 +9,14 @@ function normalizePhone(p) {
 }
 
 function clientSummary(client, bookings) {
-  const clientBookings = bookings.filter(b => b.clientId === client.id && b.status !== 'cancelled');
+  const clientBookings = bookings.filter(b => b.clientId === client.id);
+  // Upcoming: not cancelled, not already charged.
   const upcoming = clientBookings
-    .filter(b => b.status !== 'charged')
+    .filter(b => !b.cancelled && b.status !== 'charged')
     .map(b => ({ date: b.date, time: b.time, type: b.type }));
+  // Past/history: any session that was actually charged stays visible here regardless of
+  // whether it was later cancelled (e.g. cancelled afterward just to free up the original slot)
+  // — the client was billed for it, so they should always be able to see it.
   const past = clientBookings
     .filter(b => b.status === 'charged')
     .map(b => ({

@@ -228,7 +228,7 @@ async function handleDailyDigestAndReminders(req, res) {
   const tomorrow = new Date(now); tomorrow.setDate(tomorrow.getDate() + 1);
   const tomorrowDs = dateStrOf(tomorrow);
 
-  const active = (data.bookings || []).filter(b => b.status !== 'cancelled');
+  const active = (data.bookings || []).filter(b => !b.cancelled);
   const todayBookings = active.filter(b => b.date === todayDs).sort((a,b) => a.time.localeCompare(b.time));
   const tomorrowBookings = active.filter(b => b.date === tomorrowDs).sort((a,b) => a.time.localeCompare(b.time));
 
@@ -324,11 +324,12 @@ async function handleCancelBooking(req, res) {
     }
   }
 
-  // Mark as cancelled rather than deleting the record — the notes, recordings, and any billing
-  // already tied to this booking stay intact. The Calendar event deletion above is what actually
+  // Mark as cancelled via a separate flag rather than overwriting status — this preserves
+  // whatever billing state it already had (e.g. 'charged'), so a session you had to cancel
+  // after charging never loses that record. The Calendar event deletion above is what actually
   // frees the time; excluding cancelled bookings from availability checks (elsewhere) frees the
   // app's own slot too.
-  booking.status = 'cancelled';
+  booking.cancelled = true;
   await kv.set('app-data', data);
   res.status(200).json({ ok: true, warning: calendarWarning });
 }
