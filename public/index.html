@@ -613,11 +613,11 @@ function computeStartTimes(ds, type, durationMin){
   const ranges = computeFreeRanges(ds, type);
   const times = [];
   ranges.forEach(([s,e])=>{
-    let cursor = Math.ceil(s/15)*15;
+    let cursor = s;
     while(cursor + durationMin <= e){
       const t = minToTimeC(cursor);
       if(isFutureSlot({date:ds, time:t})) times.push(t);
-      cursor += 15;
+      cursor += durationMin;
     }
   });
   return times;
