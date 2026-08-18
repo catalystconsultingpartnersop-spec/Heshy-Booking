@@ -1783,7 +1783,7 @@ function attachHandlers(){
         const savedMsg = $('client-notes-saved-'+id);
         if(savedMsg) savedMsg.textContent = 'Saving\u2026';
         const ok = await saveState();
-        if(savedMsg) savedMsg.textContent = ok ? 'Saved' : 'Could not save \u2014 try again';
+        if(savedMsg) savedMsg.textContent = ok ? 'Saved' : 'Could not save \u2014 try logging out and back in.';
         if(ok && savedMsg) setTimeout(()=>{ if(savedMsg) savedMsg.textContent=''; }, 2000);
       };
     });
@@ -1799,7 +1799,7 @@ function attachHandlers(){
         if(savedMsg) savedMsg.textContent = 'Saving\u2026';
         const ok = await saveState();
         if(ok){ render(); } // re-render to refresh the big badge in the header
-        else if(savedMsg) savedMsg.textContent = 'Could not save \u2014 try again';
+        else if(savedMsg) savedMsg.textContent = 'Could not save \u2014 try logging out and back in.';
       };
     });
     document.querySelectorAll('[data-client-wg-file]').forEach(el=>{
@@ -1813,11 +1813,22 @@ function attachHandlers(){
         if(savedMsg) savedMsg.textContent = 'Uploading\u2026';
         const reader = new FileReader();
         reader.onload = async ()=>{
-          client.wgPdfData = reader.result;
-          client.wgPdfName = file.name;
-          const ok = await saveState();
-          if(ok){ render(); }
-          else if(savedMsg) savedMsg.textContent = 'Could not save \u2014 try again';
+          try{
+            const uploadRes = await fetch('/api/admin-data', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json', 'X-Admin-Token': adminToken },
+              body: JSON.stringify({ action: 'upload-pdf', fileName: file.name, fileDataUrl: reader.result })
+            });
+            const uploadData = await uploadRes.json();
+            if(uploadData.error){ if(savedMsg) savedMsg.textContent = uploadData.error; return; }
+            client.wgPdfData = uploadData.url;
+            client.wgPdfName = file.name;
+            const ok = await saveState();
+            if(ok){ render(); }
+            else if(savedMsg) savedMsg.textContent = 'Could not save \u2014 try logging out and back in.';
+          }catch(e){
+            if(savedMsg) savedMsg.textContent = 'Upload failed: ' + e.message;
+          }
         };
         reader.readAsDataURL(file);
       };
