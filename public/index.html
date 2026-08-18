@@ -1623,22 +1623,29 @@ function renderAdmin(){
       ? `<div class="empty">Nothing here.</div>`
       : active.list.map(b=>sessionCardHtml(b)).join('');
 
+    const todayOnlyBookings = state.bookings.filter(b=>b.date===todayDs).sort((a,b)=>a.time.localeCompare(b.time));
+    const todayOnlyHtml = todayOnlyBookings.length===0 ? `<div class="empty">No sessions today.</div>` : todayOnlyBookings.map(b=>sessionCardHtml(b)).join('');
+    const fixedTodayBlock = `
+      <div class="admin-block">
+        <h2 class="sect">Today</h2>
+        ${todayOnlyHtml}
+      </div>
+    `;
+
     const dayBookings = state.bookings.filter(b=>b.date===selectedDashboardDate).sort((a,b)=>a.time.localeCompare(b.time));
     let dayHtml = dayBookings.length===0 ? `<div class="empty">No sessions on this day.</div>` : '';
     dayBookings.forEach(b=>{
       dayHtml += sessionCardHtml(b);
     });
     const isSelectedToday = selectedDashboardDate === todayDs;
-    const todaySessionsBlock = `
-      <div class="admin-block">
-        <h2 class="sect">${isSelectedToday ? 'Today' : fmtDate(selectedDashboardDate)}</h2>
-        ${dayHtml}
-      </div>
-    `;
     const calendarBlock = `
       <div class="admin-block">
         <h2 class="sect">Calendar</h2>
         ${renderDashboardCalendar()}
+      </div>
+      <div class="admin-block">
+        <h2 class="sect">${isSelectedToday ? 'Today' : fmtDate(selectedDashboardDate)}</h2>
+        ${dayHtml}
       </div>
     `;
     const filteredBlock = `
@@ -1654,7 +1661,7 @@ function renderAdmin(){
         ${statsHtml}
       </div>
       ${dashboardStatFilter !== 'today' ? filteredBlock : ''}
-      ${todaySessionsBlock}
+      ${fixedTodayBlock}
       ${calendarBlock}
     `;
   }
