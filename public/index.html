@@ -934,7 +934,12 @@ async function stopRecording(bookingId){
 
 function startTimer(id){
   if(runningTimer[id]) return;
-  timerDisplay[id] = timerDisplay[id] || 0;
+  if(timerDisplay[id] === undefined){
+    // First start after a page load — pick up where the last saved duration left off,
+    // so a break that includes closing/reloading the page doesn't lose earlier time.
+    const b = state.bookings.find(x=>x.id===id);
+    timerDisplay[id] = (b && b.actualMinutes) ? b.actualMinutes * 60 : 0;
+  }
   runningTimer[id] = setInterval(()=>{ timerDisplay[id]++; renderTimerOnly(id); }, 1000);
   render();
 }
