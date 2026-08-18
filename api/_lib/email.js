@@ -44,14 +44,14 @@ function googleCalendarAddLink(booking, settings) {
   const dates = toCompact(booking.date, booking.time) + '/' + toCompact(end.date, end.time);
   const details = booking.type === 'virtual'
     ? (booking.meetLink ? 'Join: ' + booking.meetLink : '')
-    : (settings.location || '');
+    : (booking.location || settings.location || '');
   const params = new URLSearchParams({
     action: 'TEMPLATE',
     text: 'Clarity session with Heshy',
     dates,
     ctz: 'America/New_York',
     details,
-    location: booking.type === 'in-person' ? (settings.location || '') : ''
+    location: booking.type === 'in-person' ? (booking.location || settings.location || '') : ''
   });
   return 'https://calendar.google.com/calendar/render?' + params.toString();
 }
@@ -78,7 +78,7 @@ export function bookingConfirmationEmail(booking, settings) {
   const meetLink = booking.meetLink || settings.meetLink;
   const joinRow = booking.type === 'virtual'
     ? factRow('Join link', meetLink ? `<a href="${meetLink}">${meetLink}</a>` : 'Sent before the session')
-    : factRow('Location', (settings.location || 'Sent before the session').replace(/\n/g, '<br>'));
+    : factRow('Location', ((booking.location || settings.location) || 'Sent before the session').replace(/\n/g, '<br>'));
   return {
     subject: `You're booked with Heshy — ${dateStr} at ${timeStr}`,
     html: wrap(`
