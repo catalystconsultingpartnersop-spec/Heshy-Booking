@@ -1235,7 +1235,7 @@ function renderDashboardCalendar(){
   const todayDs = dateStr(new Date());
 
   const countsByDate = {};
-  state.bookings.forEach(b=>{ countsByDate[b.date] = (countsByDate[b.date]||0)+1; });
+  state.bookings.forEach(b=>{ if(b.status!=='cancelled') countsByDate[b.date] = (countsByDate[b.date]||0)+1; });
 
   let cells = '';
   for(let i=0;i<firstDow;i++) cells += `<div class="cal-cell empty"></div>`;
