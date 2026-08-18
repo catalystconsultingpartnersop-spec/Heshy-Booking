@@ -256,6 +256,7 @@
   .hist-entry:last-child{border-bottom:none;}
   .hist-notes{font-size:13px;color:var(--muted);margin-top:4px;line-height:1.5;}
   .wg-badge{display:inline-block;font-size:10px;font-weight:600;letter-spacing:0.03em;background:#FBF6EA;color:#8A6D2F;border:1px solid #C9A961;border-radius:4px;padding:1px 5px;margin-left:6px;vertical-align:middle;}
+  .wg-badge-big{display:inline-block;font-size:14px;font-weight:700;letter-spacing:0.06em;background:#FBF6EA;color:#8A6D2F;border:1px solid #C9A961;border-radius:5px;padding:2px 8px;vertical-align:middle;}
   .q-block label:first-of-type{margin-top:14px;}
   .wg-block{border-top:1px solid var(--line);padding-top:18px;margin-top:24px;}
   .wg-block p{font-size:13.5px;line-height:1.6;color:var(--muted);margin:0 0 10px;}
@@ -1392,7 +1393,7 @@ function renderAdmin(){
       clientsHtml += `
         <div class="client-row" data-view-client-profile="${c.id}">
           <div>
-            <div class="main">${c.name}${c.wgPdfData ? ' <span class="wg-badge" title="Working Genius on file">WG</span>' : ''}</div>
+            <div class="main">${c.name}${c.wgLetters ? ` <span class="wg-badge" title="Working Genius">${c.wgLetters.toUpperCase()}</span>` : (c.wgPdfData ? ' <span class="wg-badge" title="Working Genius PDF on file">WG</span>' : '')}</div>
             <div class="sub">${c.email} &middot; ${sessionCount} session${sessionCount!==1?'s':''}${lastDate ? ' &middot; last met ' + fmtDate(lastDate) : ''}</div>
           </div>
           ${c.blocked ? `<span class="tag blocked">blocked</span>` : ''}
@@ -1440,18 +1441,20 @@ function renderAdmin(){
       clientBookings.forEach(b=>{
         sessHtml += `
           <div class="hist-entry">
-            <div class="hist-line"><span>${fmtDate(b.date)}, ${fmtTime(b.time)} &middot; ${b.type==='virtual'?'Video call':'In person'} &middot; ${b.actualMinutes||b.durationMin} min</span><span>${b.status==='charged'?money(b.amount||0):b.status}</span></div>
+            <div class="hist-line"><span><strong>${fmtDate(b.date)}, ${fmtTime(b.time)}</strong> &middot; ${b.type==='virtual'?'Video call':'In person'} &middot; ${b.actualMinutes||b.durationMin} min</span><span>${b.status==='charged'?money(b.amount||0):b.status}</span></div>
             ${b.summary ? `<div class="hist-notes">${b.summary}</div>` : ''}
           </div>`;
       });
+
+      const wgLetters = (c.wgLetters||'').toUpperCase();
 
       body = `
         <div class="admin-block">
           <button class="ghost small" data-back-to-clients="1">&larr; Back to clients</button>
           <div style="margin-top:18px;display:flex;justify-content:space-between;align-items:start;">
             <div>
-              <div style="font-size:24px;font-family:Georgia,serif;">${c.name}</div>
-              <div class="sub" style="margin-top:4px;">${c.email}${c.phone ? ' &middot; ' + c.phone : ''}</div>
+              <div style="font-size:26px;font-weight:600;font-family:Georgia,serif;">${c.name}${wgLetters ? ` <span class="wg-badge-big" title="Working Genius">${wgLetters}</span>` : ''}</div>
+              <div class="sub" style="margin-top:4px;">${c.email}${c.phone ? ' &middot; <strong>' + c.phone + '</strong>' : ''}</div>
             </div>
             ${c.blocked ? `<span class="tag blocked">blocked</span>` : ''}
           </div>
@@ -1459,11 +1462,27 @@ function renderAdmin(){
         </div>
 
         <div class="admin-block">
-          <h2 class="sect">Working Genius</h2>
-          ${c.wgPdfData
-            ? `<a class="wg-link" href="${c.wgPdfData}" download="${c.wgPdfName||'working-genius.pdf'}">${c.wgPdfName||'Download PDF'}</a>`
-            : `<div class="empty">Not on file.</div>`}
+          <h2 class="sect">My notes</h2>
+          <div class="note" style="margin-bottom:8px;">Private &mdash; only you see this. Never shown to the client.</div>
+          <textarea id="client-notes-${c.id}" data-client-notes="${c.id}" placeholder="Anything you want to remember about this client&hellip;" style="min-height:100px;">${c.notes||''}</textarea>
+          <div id="client-notes-saved-${c.id}" style="font-size:12px;color:var(--muted);margin-top:4px;"></div>
         </div>
+
+        <div class="admin-block">
+          <h2 class="sect">Working Genius</h2>
+          <label style="font-weight:600;">Letters</label>
+          <div class="note" style="margin-bottom:8px;">Type them directly once you know their results, e.g. <strong>WDTIEG</strong>.</div>
+          <input type="text" id="client-wg-letters-${c.id}" data-client-wg-letters="${c.id}" value="${wgLetters}" placeholder="e.g. WDTIEG" style="max-width:220px;text-transform:uppercase;letter-spacing:0.08em;font-weight:600;">
+          <div id="client-wg-letters-saved-${c.id}" style="font-size:12px;color:var(--muted);margin-top:4px;"></div>
+
+          <label style="font-weight:600;margin-top:18px;display:block;">PDF report</label>
+          ${c.wgPdfData
+            ? `<div style="margin-bottom:8px;"><a class="wg-link" href="${c.wgPdfData}" download="${c.wgPdfName||'working-genius.pdf'}"><strong>${c.wgPdfName||'Download PDF'}</strong></a></div>`
+            : `<div class="empty" style="margin-bottom:8px;">Not on file.</div>`}
+          <input type="file" id="client-wg-file-${c.id}" data-client-wg-file="${c.id}" accept="application/pdf">
+          <div id="client-wg-file-saved-${c.id}" style="font-size:12px;color:var(--muted);margin-top:4px;"></div>
+        </div>
+
 
         <div class="admin-block">
           <h2 class="sect">Intake answers</h2>
@@ -1753,6 +1772,55 @@ function attachHandlers(){
     });
     document.querySelectorAll('[data-back-to-clients]').forEach(el=>{
       el.onclick = ()=>{ adminView = 'clients'; render(); };
+    });
+    document.querySelectorAll('[data-client-notes]').forEach(el=>{
+      el.onblur = async ()=>{
+        const id = el.getAttribute('data-client-notes');
+        const client = state.clients.find(x=>x.id===id);
+        if(!client) return;
+        if(client.notes === el.value) return; // nothing changed
+        client.notes = el.value;
+        const savedMsg = $('client-notes-saved-'+id);
+        if(savedMsg) savedMsg.textContent = 'Saving\u2026';
+        const ok = await saveState();
+        if(savedMsg) savedMsg.textContent = ok ? 'Saved' : 'Could not save \u2014 try again';
+        if(ok && savedMsg) setTimeout(()=>{ if(savedMsg) savedMsg.textContent=''; }, 2000);
+      };
+    });
+    document.querySelectorAll('[data-client-wg-letters]').forEach(el=>{
+      el.onblur = async ()=>{
+        const id = el.getAttribute('data-client-wg-letters');
+        const client = state.clients.find(x=>x.id===id);
+        if(!client) return;
+        const newVal = el.value.toUpperCase().trim();
+        if((client.wgLetters||'') === newVal) return;
+        client.wgLetters = newVal;
+        const savedMsg = $('client-wg-letters-saved-'+id);
+        if(savedMsg) savedMsg.textContent = 'Saving\u2026';
+        const ok = await saveState();
+        if(ok){ render(); } // re-render to refresh the big badge in the header
+        else if(savedMsg) savedMsg.textContent = 'Could not save \u2014 try again';
+      };
+    });
+    document.querySelectorAll('[data-client-wg-file]').forEach(el=>{
+      el.onchange = ()=>{
+        const id = el.getAttribute('data-client-wg-file');
+        const file = el.files[0];
+        if(!file) return;
+        const client = state.clients.find(x=>x.id===id);
+        if(!client) return;
+        const savedMsg = $('client-wg-file-saved-'+id);
+        if(savedMsg) savedMsg.textContent = 'Uploading\u2026';
+        const reader = new FileReader();
+        reader.onload = async ()=>{
+          client.wgPdfData = reader.result;
+          client.wgPdfName = file.name;
+          const ok = await saveState();
+          if(ok){ render(); }
+          else if(savedMsg) savedMsg.textContent = 'Could not save \u2014 try again';
+        };
+        reader.readAsDataURL(file);
+      };
     });
     const clientSearchEl = $('client-search');
     if(clientSearchEl){
