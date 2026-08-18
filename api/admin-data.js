@@ -132,9 +132,11 @@ async function handleFinalizeRecording(req, res) {
     const segEnd = segmentEnd || new Date().toISOString();
     const segMinutes = Math.max(1, Math.round((new Date(segEnd) - new Date(segStart)) / 60000));
     booking.recordingSegments.push({ start: segStart, end: segEnd, minutes: segMinutes });
-    // The precisely-logged segment times are more reliable than the client-side stopwatch
-    // (which can drift if the browser tab is backgrounded), so they become the billing duration.
-    booking.actualMinutes = booking.recordingSegments.reduce((sum, s) => sum + s.minutes, 0);
+    // Recording segments and the real Google Meet duration (from a separate "Fetch call
+    // duration" check) are two independent sources of truth — never let a new segment shrink an
+    // already-confirmed number, only ever increase it.
+    const segmentsSum = booking.recordingSegments.reduce((sum, s) => sum + s.minutes, 0);
+    booking.actualMinutes = Math.max(booking.actualMinutes || 0, segmentsSum);
 
     if (!transcript) {
       await kv.set('app-data', data);
@@ -176,6 +178,9 @@ If a section has nothing to report, write "None." under it. Stay factual and con
       ? `${existingSummary}\n\n---\n\n${partHeader}\n${segmentSummary}`
       : `${partHeader}\n${segmentSummary}`;
 
+    const clientVersion = await generateClientFacingSummary(booking.summary);
+    if (clientVersion) booking.clientSummary = clientVersion;
+
     await kv.set('app-data', data);
     await kv.del(key);
     res.status(200).json({ ok: true, summary: booking.summary });
@@ -185,6 +190,31 @@ If a section has nothing to report, write "None." under it. Stay factual and con
 }
 
 function dateStrOf(d) { return d.getFullYear() + '-' + String(d.getMonth()+1).padStart(2,'0') + '-' + String(d.getDate()).padStart(2,'0'); }
+
+// Generates a short, warm, client-appropriate version of the notes — separate wording from the
+// internal notes, since internal notes may include things not meant for a client to read verbatim.
+async function generateClientFacingSummary(internalNotes) {
+  if (!process.env.OPENAI_API_KEY || !internalNotes) return '';
+  try {
+    const gptRes = await fetch('https://api.openai.com/v1/chat/completions', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${process.env.OPENAI_API_KEY}` },
+      body: JSON.stringify({
+        model: 'gpt-4o-mini',
+        messages: [
+          { role: 'system', content: 'You write a short, warm summary of a coaching/consulting session for the CLIENT to read themselves in their portal. 2-4 sentences, plain language, no headers or bullet points, no internal admin details (billing, scheduling notes, "Part 1/Part 2" labels, anything not meant for the client). Just a friendly recap of what was covered.' },
+          { role: 'user', content: internalNotes }
+        ],
+        temperature: 0.4
+      })
+    });
+    if (!gptRes.ok) return '';
+    const gptData = await gptRes.json();
+    return gptData.choices?.[0]?.message?.content || '';
+  } catch (e) {
+    return '';
+  }
+}
 
 // Runs once a day via Vercel Cron: emails Heshy a summary of today + tomorrow, and sends each
 // client with a session tomorrow a reminder (tracked via booking.reminderSent so it only goes

@@ -166,10 +166,11 @@ export default async function handler(req, res) {
       client = {
         id: uid(), name, email, phone,
         intakeAnswers: intakeAnswers || [], wgPdfName: wgPdfName || '', wgPdfData: storedWgPdfData,
-        blocked: false, createdAt: Date.now()
+        blocked: false, createdAt: Date.now(), stripeCustomerId
       };
       data.clients.push(client);
     }
+    client.stripeCustomerId = stripeCustomerId; // keep this current even for a returning client
 
     let comped = false;
     let appliedCoupon = null;
