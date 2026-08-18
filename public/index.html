@@ -181,6 +181,13 @@
   .client-link{color:var(--ink);text-decoration:underline;text-underline-offset:2px;cursor:pointer;}
   .admin-block{margin-bottom:44px;padding-bottom:44px;border-bottom:1px solid var(--line);}
   .admin-block:last-child{border-bottom:none;}
+  .dash-stats{display:grid;grid-template-columns:repeat(4,1fr);gap:12px;margin-top:16px;}
+  .dash-stat{border:1px solid var(--line-strong);border-radius:8px;padding:16px 12px;text-align:center;}
+  .dash-stat-num{font-size:26px;font-weight:600;line-height:1;}
+  .dash-stat-label{font-size:12px;color:var(--muted);margin-top:6px;}
+  .dash-stat-alert{border-color:#C9A961;background:#FBF6EA;}
+  .dash-stat-alert .dash-stat-num{color:#8A6D2F;}
+  @media (max-width:640px){ .dash-stats{grid-template-columns:1fr 1fr;} }
   .admin-grid{display:grid;grid-template-columns:1fr 1fr 1fr;gap:10px;align-items:end;}
   select{
     width:100%;padding:10px;border:1px solid var(--line-strong);border-radius:4px;font-size:14px;
@@ -1215,6 +1222,44 @@ function renderAdmin(){
   if(adminView==='dashboard'){
     const todayDs = dateStr(new Date());
     if(!selectedDashboardDate) selectedDashboardDate = todayDs;
+    const weekAheadDs = dateStr(new Date(Date.now() + 7*86400000));
+
+    const todayBookings = state.bookings.filter(b=>b.date===todayDs);
+    const upcomingBookings = state.bookings.filter(b=>b.date>=todayDs).sort((a,b)=> a.date===b.date ? a.time.localeCompare(b.time) : a.date.localeCompare(b.date));
+    const thisWeekBookings = state.bookings.filter(b=>b.date>=todayDs && b.date<=weekAheadDs);
+    const unbilledBookings = state.bookings.filter(b=>b.date<todayDs && b.status==='scheduled').sort((a,b)=> a.date===b.date ? a.time.localeCompare(b.time) : a.date.localeCompare(b.date));
+
+    const statsHtml = `
+      <div class="dash-stats">
+        <div class="dash-stat">
+          <div class="dash-stat-num">${todayBookings.length}</div>
+          <div class="dash-stat-label">Today</div>
+        </div>
+        <div class="dash-stat">
+          <div class="dash-stat-num">${thisWeekBookings.length}</div>
+          <div class="dash-stat-label">Next 7 days</div>
+        </div>
+        <div class="dash-stat ${unbilledBookings.length ? 'dash-stat-alert' : ''}">
+          <div class="dash-stat-num">${unbilledBookings.length}</div>
+          <div class="dash-stat-label">Needs billing</div>
+        </div>
+        <div class="dash-stat">
+          <div class="dash-stat-num">${upcomingBookings.length}</div>
+          <div class="dash-stat-label">Upcoming total</div>
+        </div>
+      </div>
+    `;
+
+    let needsBillingHtml = '';
+    if(unbilledBookings.length){
+      needsBillingHtml = `
+        <div class="admin-block">
+          <h2 class="sect">Needs billing</h2>
+          ${unbilledBookings.map(b=>sessionCardHtml(b)).join('')}
+        </div>
+      `;
+    }
+
     const dayBookings = state.bookings.filter(b=>b.date===selectedDashboardDate).sort((a,b)=>a.time.localeCompare(b.time));
     let dayHtml = dayBookings.length===0 ? `<div class="empty">No sessions on this day.</div>` : '';
     dayBookings.forEach(b=>{
@@ -1237,6 +1282,11 @@ function renderAdmin(){
     body = `
       <div class="admin-block">
         <h2 class="sect">Dashboard</h2>
+        ${statsHtml}
+      </div>
+      ${needsBillingHtml}
+      <div class="admin-block">
+        <h2 class="sect">Full schedule</h2>
         ${renderDashboardCalendar()}
       </div>
       <div class="admin-block">
