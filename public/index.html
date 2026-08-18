@@ -804,6 +804,106 @@ async function updateBooking(id, patch){
   const b = state.bookings.find(x=>x.id===id); if(!b) return;
   Object.assign(b, patch); await saveState(); render();
 }
+// --- Session recording (in-person: mic only; virtual: mic + tab audio mixed) ---
+// Chunks upload every 60s so a single request never gets large, regardless of session length.
+let activeRecordings = {}; // bookingId -> { recorder, chunkIndex, audioContext, stream }
+let recordingStatus = {}; // bookingId -> 'recording' | 'processing' | 'done' | 'error'
+
+function blobToBase64(blob){
+  return new Promise((resolve, reject)=>{
+    const reader = new FileReader();
+    reader.onloadend = ()=> resolve(reader.result.split(',')[1]);
+    reader.onerror = reject;
+    reader.readAsDataURL(blob);
+  });
+}
+
+async function uploadRecordingChunk(bookingId, chunkIndex, blob){
+  try{
+    const base64 = await blobToBase64(blob);
+    await fetch('/api/admin-data', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'X-Admin-Token': adminToken },
+      body: JSON.stringify({ action: 'upload-recording-chunk', bookingId, chunkIndex, chunkBase64: base64 })
+    });
+  }catch(e){ console.error('chunk upload failed', e); }
+}
+
+async function startRecording(bookingId, type){
+  try{
+    const micStream = await navigator.mediaDevices.getUserMedia({ audio: true });
+    let finalStream = micStream;
+    let audioContext = null;
+
+    if(type === 'virtual'){
+      // Capture the shared tab's audio (the other participant's voice) and mix it with the mic
+      // (your own voice), since a tab's own audio output normally excludes your outgoing mic audio.
+      try{
+        const tabStream = await navigator.mediaDevices.getDisplayMedia({ video: true, audio: true });
+        const tabAudioTracks = tabStream.getAudioTracks();
+        if(tabAudioTracks.length > 0){
+          audioContext = new (window.AudioContext || window.webkitAudioContext)();
+          const dest = audioContext.createMediaStreamDestination();
+          audioContext.createMediaStreamSource(micStream).connect(dest);
+          audioContext.createMediaStreamSource(new MediaStream(tabAudioTracks)).connect(dest);
+          finalStream = dest.stream;
+        }
+        tabStream.getVideoTracks().forEach(t=>t.stop()); // never need the video itself
+      }catch(e){
+        console.error('tab audio capture declined or failed, recording mic only', e);
+      }
+    }
+
+    const recorder = new MediaRecorder(finalStream, { mimeType: 'audio/webm;codecs=opus', audioBitsPerSecond: 24000 });
+    let chunkIndex = 0;
+    recorder.ondataavailable = (e)=>{
+      if(e.data && e.data.size > 0){
+        uploadRecordingChunk(bookingId, chunkIndex, e.data);
+        chunkIndex++;
+      }
+    };
+    recorder.start(60000); // one chunk per minute
+    activeRecordings[bookingId] = { recorder, stream: finalStream, micStream, audioContext };
+    recordingStatus[bookingId] = 'recording';
+  }catch(e){
+    console.error('could not start recording', e);
+    recordingStatus[bookingId] = 'error';
+  }
+}
+
+async function stopRecording(bookingId){
+  const rec = activeRecordings[bookingId];
+  if(!rec) return;
+  rec.recorder.stop();
+  rec.stream.getTracks().forEach(t=>t.stop());
+  if(rec.micStream) rec.micStream.getTracks().forEach(t=>t.stop());
+  if(rec.audioContext) rec.audioContext.close();
+  delete activeRecordings[bookingId];
+  // Give the final ondataavailable chunk a moment to fire and upload before finalizing.
+  recordingStatus[bookingId] = 'processing';
+  render();
+  await new Promise(r=>setTimeout(r, 1500));
+  try{
+    const res = await fetch('/api/admin-data', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'X-Admin-Token': adminToken },
+      body: JSON.stringify({ action: 'finalize-recording', bookingId })
+    });
+    const data = await res.json();
+    if(data.error){
+      recordingStatus[bookingId] = 'error';
+      console.error('finalize recording failed', data.error);
+    } else {
+      recordingStatus[bookingId] = 'done';
+      await loadAdminState();
+    }
+  }catch(e){
+    recordingStatus[bookingId] = 'error';
+    console.error('finalize recording failed', e);
+  }
+  render();
+}
+
 function startTimer(id){
   if(runningTimer[id]) return;
   timerDisplay[id] = timerDisplay[id] || 0;
@@ -1024,7 +1124,7 @@ function renderClient(){
         <div class="fact-row"><span>Time</span><span>${fmtDate(selectedDay)}, ${fmtTime(selectedStartTime)}</span></div>
         <div class="fact-row"><span>Length</span><span>${selectedDuration} min</span></div>
         <div class="fact-row"><span>Format</span><span>${selectedType==='virtual'?'Video call':'In person'}</span></div>
-        <div class="fact-row"><span>Rate</span><span>${selectedDuration===60 ? '$500/hour' : '$500/hour (' + money(selectedDuration/60*500) + ' total)'}</span></div>
+        <div class="fact-row"><span>Rate</span><span>$500/hour</span></div>
         <div class="fact-row"><span>Charged</span><span>After the session, for actual time used</span></div>
         <div class="fact-row"><span>Receipt</span><span>Emailed automatically once charged</span></div>
       </div>
@@ -1063,7 +1163,7 @@ function renderClient(){
           <div class="fact-row"><span>Time</span><span>${fmtDate(selectedDay)}, ${fmtTime(selectedStartTime)}</span></div>
           <div class="fact-row"><span>Length</span><span>${selectedDuration} min</span></div>
           <div class="fact-row"><span>Format</span><span>${selectedType==='virtual'?'Video call':'In person'}</span></div>
-          <div class="fact-row"><span>Rate</span><span>${confirmedComped ? 'Complimentary — no charge' : (selectedDuration===60 ? '$500/hour' : '$500/hour (' + money(selectedDuration/60*500) + ' total)')}</span></div>
+          <div class="fact-row"><span>Rate</span><span>${confirmedComped ? 'Complimentary — no charge' : '$500/hour'}</span></div>
           ${confirmedComped ? `<div class="fact-row"><span>Coupon</span><span>${clientForm.couponCode}</span></div>` : ''}
         </div>
         ${selectedType==='virtual'
@@ -1240,17 +1340,23 @@ function renderAdmin(){
         <span class="timer" id="timer-${b.id}">${String(Math.floor((timerDisplay[b.id]||0)/60)).padStart(2,'0')}:${String((timerDisplay[b.id]||0)%60).padStart(2,'0')}</span>
         ${running ? `<button class="ghost small" data-stop-timer="${b.id}">Stop</button>` : `<button class="ghost small" data-start-timer="${b.id}">Start</button>`}
         <span class="note" style="margin:0;">Tracks actual time for billing</span>
-      </div>`;
+      </div>
+      ${recordingStatus[b.id] ? `<div class="note" style="margin-bottom:8px;color:${recordingStatus[b.id]==='error'?'#A5433A':(recordingStatus[b.id]==='done'?'#2E5B27':'var(--muted)')};">${
+        recordingStatus[b.id]==='recording' ? 'Recording…' :
+        recordingStatus[b.id]==='processing' ? 'Processing notes… this can take a minute for longer sessions.' :
+        recordingStatus[b.id]==='done' ? 'Notes ready below.' :
+        'Recording failed \u2014 you can still add notes manually below.'
+      }</div>` : ''}`;
     const meetBlock = b.meetLink ? `
       <label>${b.type==='virtual' ? 'Google Meet link' : 'Google Meet link (for your own recording/notes)'}</label>
       <input type="text" value="${b.meetLink||''}" data-meet="${b.id}">
-      ${!running ? `<button class="primary small" data-join-start="${b.id}" style="margin-top:10px;">${b.type==='virtual'?'Join meeting':'Start Meet'} &amp; start timer</button>` : ''}
+      ${!running ? `<button class="primary small" data-join-start="${b.id}" style="margin-top:10px;">${b.type==='virtual'?'Join meeting, start timer & record':'Start Meet, timer & record'}</button>` : ''}
     ` : '';
     const controls = `
         <div class="session-controls">
           ${timerBlock}
           ${meetBlock}
-          ${(b.calendarEventId || b.meetLink) ? `<button class="ghost small" data-fetch-gemini="${b.id}" style="margin-bottom:14px;">Fetch notes & duration</button><span id="gemini-msg-${b.id}" style="font-size:12.5px;margin-left:10px;"></span>` : ''}
+          ${(b.type==='virtual' && (b.calendarEventId || b.meetLink)) ? `<button class="ghost small" data-fetch-gemini="${b.id}" style="margin-bottom:14px;">Fetch call duration</button><span id="gemini-msg-${b.id}" style="font-size:12.5px;margin-left:10px;"></span>` : ''}
           <label>Internal notes <span class="note" style="display:inline;">(private &mdash; only you see this)</span></label>
           <textarea class="notes-textarea" data-summary="${b.id}">${b.summary||''}</textarea>
           <label style="margin-top:14px;display:block;">Client-facing summary <span class="note" style="display:inline;">(shown to the client in their portal)</span></label>
@@ -1814,13 +1920,21 @@ function attachHandlers(){
         }
       };
     });
-    document.querySelectorAll('[data-start-timer]').forEach(el=>{ el.onclick = ()=>startTimer(el.getAttribute('data-start-timer')); });
+    document.querySelectorAll('[data-start-timer]').forEach(el=>{
+      el.onclick = ()=>{
+        const id = el.getAttribute('data-start-timer');
+        const b = state.bookings.find(x=>x.id===id);
+        startTimer(id);
+        if(b) startRecording(id, b.type);
+      };
+    });
     document.querySelectorAll('[data-join-start]').forEach(el=>{
       el.onclick = ()=>{
         const id = el.getAttribute('data-join-start');
         const b = state.bookings.find(x=>x.id===id);
         if(b && b.meetLink) window.open(b.meetLink, '_blank');
         startTimer(id);
+        if(b) startRecording(id, b.type);
       };
     });
     document.querySelectorAll('[data-fetch-gemini]').forEach(el=>{
@@ -1837,7 +1951,7 @@ function attachHandlers(){
           const data = await res.json();
           if(data.error){
             if(msg){ msg.style.color = '#A5433A'; msg.textContent = data.error; }
-            el.disabled = false; el.textContent = 'Fetch notes & duration';
+            el.disabled = false; el.textContent = 'Fetch call duration';
             return;
           }
           await loadAdminState();
@@ -1846,11 +1960,17 @@ function attachHandlers(){
           if(msg2 && data.note){ msg2.style.color = data.foundDuration ? '#2E5B27' : '#6E6E6E'; msg2.textContent = data.note; }
         }catch(e){
           if(msg){ msg.style.color = '#A5433A'; msg.textContent = 'Something went wrong.'; }
-          el.disabled = false; el.textContent = 'Fetch notes & duration';
+          el.disabled = false; el.textContent = 'Fetch call duration';
         }
       };
     });
-    document.querySelectorAll('[data-stop-timer]').forEach(el=>{ el.onclick = ()=>stopTimer(el.getAttribute('data-stop-timer')); });
+    document.querySelectorAll('[data-stop-timer]').forEach(el=>{
+      el.onclick = ()=>{
+        const id = el.getAttribute('data-stop-timer');
+        stopTimer(id);
+        stopRecording(id);
+      };
+    });
     document.querySelectorAll('[data-meet]').forEach(el=>{ el.onchange = ()=>updateBooking(el.getAttribute('data-meet'), { meetLink: el.value }); });
     document.querySelectorAll('[data-summary]').forEach(el=>{ el.onchange = ()=>updateBooking(el.getAttribute('data-summary'), { summary: el.value }); });
     document.querySelectorAll('[data-clientsummary]').forEach(el=>{ el.onchange = ()=>updateBooking(el.getAttribute('data-clientsummary'), { clientSummary: el.value }); });
