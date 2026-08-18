@@ -1298,20 +1298,7 @@ function renderAdmin(){
     const dayBookings = state.bookings.filter(b=>b.date===selectedDashboardDate).sort((a,b)=>a.time.localeCompare(b.time));
     let dayHtml = dayBookings.length===0 ? `<div class="empty">No sessions on this day.</div>` : '';
     dayBookings.forEach(b=>{
-      if(b.status==='charged'){
-        dayHtml += `<div class="session">
-          <div class="session-top">
-            <div>
-              <div class="session-name">${b.clientId?`<a class="client-link" data-view-client="${b.clientId}">${b.clientName}</a>`:b.clientName}</div>
-              <div class="session-meta">${fmtTime(b.time)}, ${b.actualMinutes||b.durationMin} min &middot; ${money(b.amount||0)} charged</div>
-              <div class="session-format">${b.type==='virtual'?'Video call':'In person'}</div>
-            </div>
-            <span class="tag status-charged">charged</span>
-          </div>
-        </div>`;
-      } else {
-        dayHtml += sessionCardHtml(b);
-      }
+      dayHtml += sessionCardHtml(b);
     });
     const isSelectedToday = selectedDashboardDate === todayDs;
     body = `
