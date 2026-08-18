@@ -409,9 +409,11 @@ function intakeRegionHtml(){
     });
     html += `</div>`;
     html += `
-      <div class="wg-block">
-        <div class="section-title">Six Types of Working Genius</div>
-        <p>If you've taken the assessment, it helps me understand how you think before we even start. Not required for this session &mdash; you can always add it later. <a class="wg-link" href="https://www.workinggenius.com" target="_blank" rel="noopener">Take the assessment</a>, then upload your results PDF here if you have it.</p>
+      <div class="wg-block" style="border:1.5px solid #C9A961;background:#FBF6EA;border-radius:8px;padding:16px;margin-top:16px;">
+        <div class="section-title" style="display:flex;align-items:center;gap:8px;">
+          <span style="font-size:16px;">&#9733;</span> Six Types of Working Genius
+        </div>
+        <p>${clientForm.wgPdfName ? 'Attached &mdash; thank you.' : "This helps me understand how you think before we even start &mdash; most clients find it's worth the few minutes. Not required, and you can always add it later."} ${clientForm.wgPdfName ? '' : '<a class="wg-link" href="https://www.workinggenius.com" target="_blank" rel="noopener">Take the assessment</a>, then upload your results PDF here if you have it.'}</p>
         <input type="file" id="wg-file" accept="application/pdf">
         <div class="file-name" id="wg-file-name">${clientForm.wgPdfName||''}</div>
       </div>
@@ -633,6 +635,10 @@ async function tryAdminLogin(){
 async function confirmBooking(){
   if(!clientForm.name || !clientForm.email || !clientForm.phone || !cardComplete || submitting) return;
   if(isCurrentEmailBlocked()) return;
+  if(clientForm.isNew && !clientForm.wgPdfData){
+    const proceed = confirm("You haven't attached your Working Genius results yet. It's not required, but it helps a lot before your first session.\n\nContinue booking without it?");
+    if(!proceed) return;
+  }
   submitting = true;
   const btn = document.getElementById('confirmBtn');
   const backBtn = document.getElementById('backTo1');
@@ -1156,7 +1162,7 @@ function renderAdmin(){
         <div class="session-controls">
           ${timerBlock}
           ${meetBlock}
-          ${b.calendarEventId ? `<button class="ghost small" data-fetch-gemini="${b.id}" style="margin-bottom:14px;">Fetch Gemini notes</button><span id="gemini-msg-${b.id}" style="font-size:12.5px;margin-left:10px;"></span>` : ''}
+          ${(b.calendarEventId || b.meetLink) ? `<button class="ghost small" data-fetch-gemini="${b.id}" style="margin-bottom:14px;">Fetch notes & duration</button><span id="gemini-msg-${b.id}" style="font-size:12.5px;margin-left:10px;"></span>` : ''}
           <label>Internal notes</label>
           <textarea class="notes-textarea" data-summary="${b.id}">${b.summary||''}</textarea>
           <label>Client-facing summary</label>
@@ -1521,14 +1527,16 @@ function attachHandlers(){
           const data = await res.json();
           if(data.error){
             if(msg){ msg.style.color = '#A5433A'; msg.textContent = data.error; }
-            el.disabled = false; el.textContent = 'Fetch Gemini notes';
+            el.disabled = false; el.textContent = 'Fetch notes & duration';
             return;
           }
           await loadAdminState();
           render();
+          const msg2 = document.getElementById('gemini-msg-'+id);
+          if(msg2 && data.note){ msg2.style.color = data.foundDuration ? '#2E5B27' : '#6E6E6E'; msg2.textContent = data.note; }
         }catch(e){
           if(msg){ msg.style.color = '#A5433A'; msg.textContent = 'Something went wrong.'; }
-          el.disabled = false; el.textContent = 'Fetch Gemini notes';
+          el.disabled = false; el.textContent = 'Fetch notes & duration';
         }
       };
     });
