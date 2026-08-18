@@ -25,6 +25,37 @@ export async function sendEmail({ to, subject, html }) {
   }
 }
 
+function addMinutesLocal(dateStr, timeStr, minutesToAdd) {
+  const [y, mo, d] = dateStr.split('-').map(Number);
+  const [h, mi] = timeStr.split(':').map(Number);
+  const dt = new Date(Date.UTC(y, mo - 1, d, h, mi));
+  dt.setUTCMinutes(dt.getUTCMinutes() + minutesToAdd);
+  const pad = n => String(n).padStart(2, '0');
+  return {
+    date: dt.getUTCFullYear() + '-' + pad(dt.getUTCMonth() + 1) + '-' + pad(dt.getUTCDate()),
+    time: pad(dt.getUTCHours()) + ':' + pad(dt.getUTCMinutes())
+  };
+}
+function toCompact(dateStr, timeStr) {
+  return dateStr.replace(/-/g, '') + 'T' + timeStr.replace(':', '') + '00';
+}
+function googleCalendarAddLink(booking, settings) {
+  const end = addMinutesLocal(booking.date, booking.time, booking.durationMin || 60);
+  const dates = toCompact(booking.date, booking.time) + '/' + toCompact(end.date, end.time);
+  const details = booking.type === 'virtual'
+    ? (booking.meetLink ? 'Join: ' + booking.meetLink : '')
+    : (settings.location || '');
+  const params = new URLSearchParams({
+    action: 'TEMPLATE',
+    text: 'Clarity session with Heshy',
+    dates,
+    ctz: 'America/New_York',
+    details,
+    location: booking.type === 'in-person' ? (settings.location || '') : ''
+  });
+  return 'https://calendar.google.com/calendar/render?' + params.toString();
+}
+
 function factRow(label, value) {
   return `<tr><td style="padding:9px 0;border-bottom:1px solid #DEDEDE;color:#6E6E6E;font-size:13.5px;vertical-align:top;width:110px;">${label}</td><td style="padding:9px 0;border-bottom:1px solid #DEDEDE;text-align:right;font-size:13.5px;vertical-align:top;">${value}</td></tr>`;
 }
@@ -59,6 +90,9 @@ export function bookingConfirmationEmail(booking, settings) {
         ${factRow('Rate', booking.comped ? 'Complimentary — no charge' : '$500 per hour, charged after the session')}
         ${joinRow}
       </table>
+      <div style="margin-top:20px;font-family:Arial,sans-serif;font-size:13.5px;">
+        <a href="${googleCalendarAddLink(booking, settings)}" style="color:#111111;text-decoration:underline;">Add to calendar</a>
+      </div>
     `)
   };
 }
