@@ -1,6 +1,7 @@
 import { kv } from '@vercel/kv';
 import { put } from '@vercel/blob';
 import { verifyAdminToken, randomToken } from './_lib/auth.js';
+import { sendEmail, reminderEmail, dailyDigestEmail } from './_lib/email.js';
 
 export const maxDuration = 60;
 
@@ -183,6 +184,44 @@ If a section has nothing to report, write "None." under it. Stay factual and con
   }
 }
 
+function dateStrOf(d) { return d.getFullYear() + '-' + String(d.getMonth()+1).padStart(2,'0') + '-' + String(d.getDate()).padStart(2,'0'); }
+
+// Runs once a day via Vercel Cron: emails Heshy a summary of today + tomorrow, and sends each
+// client with a session tomorrow a reminder (tracked via booking.reminderSent so it only goes
+// out once, even though this job runs every day).
+async function handleDailyDigestAndReminders(req, res) {
+  const data = await kv.get('app-data');
+  if (!data) return res.status(200).json({ ok: true, note: 'No data yet.' });
+
+  const now = new Date();
+  const todayDs = dateStrOf(now);
+  const tomorrow = new Date(now); tomorrow.setDate(tomorrow.getDate() + 1);
+  const tomorrowDs = dateStrOf(tomorrow);
+
+  const active = (data.bookings || []).filter(b => b.status !== 'cancelled');
+  const todayBookings = active.filter(b => b.date === todayDs).sort((a,b) => a.time.localeCompare(b.time));
+  const tomorrowBookings = active.filter(b => b.date === tomorrowDs).sort((a,b) => a.time.localeCompare(b.time));
+
+  try {
+    const digest = dailyDigestEmail(todayBookings, tomorrowBookings);
+    await sendEmail({ to: 'heshy@catalystconsultingnyc.com', subject: digest.subject, html: digest.html });
+  } catch (e) { /* best-effort */ }
+
+  let remindersSent = 0;
+  for (const booking of tomorrowBookings) {
+    if (booking.reminderSent) continue;
+    try {
+      const reminder = reminderEmail(booking, data.settings || {});
+      await sendEmail({ to: booking.clientEmail, subject: reminder.subject, html: reminder.html });
+      booking.reminderSent = true;
+      remindersSent++;
+    } catch (e) { /* best-effort, try again tomorrow's run won't help since booking will have passed — log and move on */ }
+  }
+  if (remindersSent > 0) await kv.set('app-data', data);
+
+  res.status(200).json({ ok: true, digestSentFor: { today: todayBookings.length, tomorrow: tomorrowBookings.length }, remindersSent });
+}
+
 async function handleCleanupLargePdfs(req, res) {
   const data = await kv.get('app-data');
   if (!data) return res.status(404).json({ error: 'No data found' });
@@ -310,6 +349,12 @@ async function handleRescheduleBooking(req, res) {
 
 export default async function handler(req, res) {
   try {
+    // Vercel Cron hits this on a schedule with a bearer token it generates from CRON_SECRET —
+    // it can't send our normal admin session token, so this gets its own check, checked first.
+    if (req.headers['authorization'] === `Bearer ${process.env.CRON_SECRET}` && process.env.CRON_SECRET) {
+      return handleDailyDigestAndReminders(req, res);
+    }
+
     if (req.method === 'POST' && req.body && req.body.action === 'login') {
       const { password } = req.body;
       if (!password || password !== process.env.ADMIN_PASSWORD) {
