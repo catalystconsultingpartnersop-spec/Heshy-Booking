@@ -182,7 +182,9 @@
   .admin-block{margin-bottom:44px;padding-bottom:44px;border-bottom:1px solid var(--line);}
   .admin-block:last-child{border-bottom:none;}
   .dash-stats{display:grid;grid-template-columns:repeat(4,1fr);gap:12px;margin-top:16px;}
-  .dash-stat{border:1px solid var(--line-strong);border-radius:8px;padding:16px 12px;text-align:center;}
+  .dash-stat{border:1px solid var(--line-strong);border-radius:8px;padding:16px 12px;text-align:center;cursor:pointer;transition:border-color 0.15s,background 0.15s;}
+  .dash-stat:hover{border-color:var(--ink);}
+  .dash-stat-active{border-color:var(--ink);border-width:2px;background:#F7F5F0;}
   .dash-stat-num{font-size:26px;font-weight:600;line-height:1;}
   .dash-stat-label{font-size:12px;color:var(--muted);margin-top:6px;}
   .dash-stat-alert{border-color:#C9A961;background:#FBF6EA;}
@@ -249,6 +251,10 @@
   .client-total{font-size:12.5px;color:var(--muted);}
   .hist-line{display:flex;justify-content:space-between;font-size:13.5px;padding:6px 0;color:var(--ink);}
   .hist-line span:last-child{color:var(--muted);}
+  .hist-entry{padding:10px 0;border-bottom:1px solid var(--line);}
+  .hist-entry:last-child{border-bottom:none;}
+  .hist-notes{font-size:13px;color:var(--muted);margin-top:4px;line-height:1.5;}
+  .wg-badge{display:inline-block;font-size:10px;font-weight:600;letter-spacing:0.03em;background:#FBF6EA;color:#8A6D2F;border:1px solid #C9A961;border-radius:4px;padding:1px 5px;margin-left:6px;vertical-align:middle;}
   .q-block label:first-of-type{margin-top:14px;}
   .wg-block{border-top:1px solid var(--line);padding-top:18px;margin-top:24px;}
   .wg-block p{font-size:13.5px;line-height:1.6;color:var(--muted);margin:0 0 10px;}
@@ -384,6 +390,8 @@ let portalEmail = '';
 let portalClient = null;
 let portalError = '';
 let expandedClientId = null;
+let viewingClientId = null;
+let clientSearch = '';
 let reschedulingId = null;
 let rescheduleType = {};
 let runningTimer = {};
@@ -399,6 +407,7 @@ let quickAddTime = '';
 let quickAddDuration = 60;
 let dashboardCalMonth = (()=>{ const d = new Date(); d.setDate(1); d.setHours(0,0,0,0); return d; })();
 let selectedDashboardDate = null;
+let dashboardStatFilter = null;
 function selectAdminType(t){ adminType = t; newSlot.type = t; selectedScheduleDate = null; render(); }
 
 function uid(){ return Math.random().toString(36).slice(2,10); }
@@ -531,7 +540,8 @@ function fmtDate(d){
   return dt.toLocaleDateString('en-US',{weekday:'short', month:'short', day:'numeric'});
 }
 function fmtTime(t){
-  const [h,m] = t.split(':').map(Number);
+  const [h,m] = (t||'').split(':').map(Number);
+  if(isNaN(h) || isNaN(m)) return t ? '(invalid time: ' + t + ')' : '(no time set)';
   const ampm = h>=12?'PM':'AM';
   const h12 = h%12===0?12:h%12;
   return h12+':'+String(m).padStart(2,'0')+' '+ampm;
@@ -1247,7 +1257,7 @@ function renderAdmin(){
     <div class="admin-nav">
       <button class="admin-nav-btn ${adminView==='dashboard'?'active':''}" data-admin-view="dashboard">Dashboard</button>
       <button class="admin-nav-btn ${adminView==='schedule'?'active':''}" data-admin-view="schedule">Schedule</button>
-      <button class="admin-nav-btn ${adminView==='clients'?'active':''}" data-admin-view="clients">Clients</button>
+      <button class="admin-nav-btn ${(adminView==='clients'||adminView==='client-detail')?'active':''}" data-admin-view="clients">Clients</button>
       <button class="admin-nav-btn ${adminView==='settings'?'active':''}" data-admin-view="settings">Settings</button>
     </div>
   `;
@@ -1259,41 +1269,44 @@ function renderAdmin(){
     if(!selectedDashboardDate) selectedDashboardDate = todayDs;
     const weekAheadDs = dateStr(new Date(Date.now() + 7*86400000));
 
-    const todayBookings = state.bookings.filter(b=>b.date===todayDs);
+    const todayBookings = state.bookings.filter(b=>b.date===todayDs).sort((a,b)=>a.time.localeCompare(b.time));
     const upcomingBookings = state.bookings.filter(b=>b.date>=todayDs).sort((a,b)=> a.date===b.date ? a.time.localeCompare(b.time) : a.date.localeCompare(b.date));
-    const thisWeekBookings = state.bookings.filter(b=>b.date>=todayDs && b.date<=weekAheadDs);
+    const thisWeekBookings = state.bookings.filter(b=>b.date>=todayDs && b.date<=weekAheadDs).sort((a,b)=> a.date===b.date ? a.time.localeCompare(b.time) : a.date.localeCompare(b.date));
     const unbilledBookings = state.bookings.filter(b=>b.date<todayDs && b.status==='scheduled').sort((a,b)=> a.date===b.date ? a.time.localeCompare(b.time) : a.date.localeCompare(b.date));
+
+    if(!dashboardStatFilter) dashboardStatFilter = 'today';
 
     const statsHtml = `
       <div class="dash-stats">
-        <div class="dash-stat">
+        <div class="dash-stat ${dashboardStatFilter==='today'?'dash-stat-active':''}" data-dash-filter="today">
           <div class="dash-stat-num">${todayBookings.length}</div>
           <div class="dash-stat-label">Today</div>
         </div>
-        <div class="dash-stat">
+        <div class="dash-stat ${dashboardStatFilter==='week'?'dash-stat-active':''}" data-dash-filter="week">
           <div class="dash-stat-num">${thisWeekBookings.length}</div>
           <div class="dash-stat-label">Next 7 days</div>
         </div>
-        <div class="dash-stat ${unbilledBookings.length ? 'dash-stat-alert' : ''}">
+        <div class="dash-stat ${unbilledBookings.length ? 'dash-stat-alert' : ''} ${dashboardStatFilter==='billing'?'dash-stat-active':''}" data-dash-filter="billing">
           <div class="dash-stat-num">${unbilledBookings.length}</div>
           <div class="dash-stat-label">Needs billing</div>
         </div>
-        <div class="dash-stat">
+        <div class="dash-stat ${dashboardStatFilter==='upcoming'?'dash-stat-active':''}" data-dash-filter="upcoming">
           <div class="dash-stat-num">${upcomingBookings.length}</div>
           <div class="dash-stat-label">Upcoming total</div>
         </div>
       </div>
     `;
 
-    let needsBillingHtml = '';
-    if(unbilledBookings.length){
-      needsBillingHtml = `
-        <div class="admin-block">
-          <h2 class="sect">Needs billing</h2>
-          ${unbilledBookings.map(b=>sessionCardHtml(b)).join('')}
-        </div>
-      `;
-    }
+    const filterMeta = {
+      today:    { title: 'Today',          caption: '', list: todayBookings },
+      week:     { title: 'Next 7 days',    caption: '', list: thisWeekBookings },
+      billing:  { title: 'Needs billing',  caption: 'Sessions whose date has already passed, that you haven\u2019t charged or marked complete yet. Charging or comping a session removes it from this list.', list: unbilledBookings },
+      upcoming: { title: 'Upcoming total', caption: 'Every session booked from today onward.', list: upcomingBookings }
+    };
+    const active = filterMeta[dashboardStatFilter];
+    const filteredListHtml = active.list.length===0
+      ? `<div class="empty">Nothing here.</div>`
+      : active.list.map(b=>sessionCardHtml(b)).join('');
 
     const dayBookings = state.bookings.filter(b=>b.date===selectedDashboardDate).sort((a,b)=>a.time.localeCompare(b.time));
     let dayHtml = dayBookings.length===0 ? `<div class="empty">No sessions on this day.</div>` : '';
@@ -1306,9 +1319,13 @@ function renderAdmin(){
         <h2 class="sect">Dashboard</h2>
         ${statsHtml}
       </div>
-      ${needsBillingHtml}
       <div class="admin-block">
-        <h2 class="sect">Full schedule</h2>
+        <h2 class="sect">${active.title}</h2>
+        ${active.caption ? `<div class="note" style="margin-bottom:16px;">${active.caption}</div>` : ''}
+        ${filteredListHtml}
+      </div>
+      <div class="admin-block">
+        <h2 class="sect">Browse by date</h2>
         ${renderDashboardCalendar()}
       </div>
       <div class="admin-block">
@@ -1354,49 +1371,115 @@ function renderAdmin(){
   }
 
   if(adminView==='clients'){
-    let clientsHtml = state.clients.length===0 ? `<div class="empty">No client profiles yet.</div>` : '';
-    state.clients.slice().sort((a,b)=>b.createdAt-a.createdAt).forEach(c=>{
+    const search = clientSearch.trim().toLowerCase();
+    const clientsWithMeta = state.clients.map(c=>{
       const clientBookings = state.bookings.filter(b=>b.clientId===c.id);
       const sessionCount = clientBookings.length;
-      const totalBilled = clientBookings.filter(b=>b.status==='charged').reduce((sum,b)=>sum+(b.amount||0),0);
+      const lastBooking = clientBookings.slice().sort((a,b)=>(b.date+b.time).localeCompare(a.date+a.time))[0];
+      return { c, sessionCount, lastDate: lastBooking ? lastBooking.date : null };
+    }).filter(({c})=> !search || c.name.toLowerCase().includes(search) || (c.email||'').toLowerCase().includes(search));
+    clientsWithMeta.sort((a,b)=>{
+      const aKey = a.lastDate || '0';
+      const bKey = b.lastDate || '0';
+      if(aKey !== bKey) return bKey.localeCompare(aKey);
+      return b.c.createdAt - a.c.createdAt;
+    });
+
+    let clientsHtml = clientsWithMeta.length===0 ? `<div class="empty">${search ? 'No clients match that search.' : 'No client profiles yet.'}</div>` : '';
+    clientsWithMeta.forEach(({c, sessionCount, lastDate})=>{
       clientsHtml += `
-        <div class="client-row" data-toggle-client="${c.id}">
-          <div><div class="main">${c.name}</div><div class="sub">${c.email} &middot; ${sessionCount} session${sessionCount!==1?'s':''}${totalBilled>0?' &middot; '+money(totalBilled)+' total':''}</div></div>
+        <div class="client-row" data-view-client-profile="${c.id}">
+          <div>
+            <div class="main">${c.name}${c.wgPdfData ? ' <span class="wg-badge" title="Working Genius on file">WG</span>' : ''}</div>
+            <div class="sub">${c.email} &middot; ${sessionCount} session${sessionCount!==1?'s':''}${lastDate ? ' &middot; last met ' + fmtDate(lastDate) : ''}</div>
+          </div>
           ${c.blocked ? `<span class="tag blocked">blocked</span>` : ''}
         </div>`;
-      if(expandedClientId === c.id){
-        const questions = state.settings.intakeQuestions || [];
-        let qaHtml = '';
-        questions.forEach((q,i)=>{
-          if(c.intakeAnswers && c.intakeAnswers[i]){
-            qaHtml += `<div class="qa"><div class="q">${q}</div><div>${c.intakeAnswers[i]}</div></div>`;
-          }
-        });
-        let sessHtml = '';
-        clientBookings.sort((a,b)=>b.createdAt-a.createdAt).forEach(b=>{
-          sessHtml += `<div class="hist-line"><span>${fmtDate(b.date)} &middot; ${b.type==='virtual'?'Video':'In person'} &middot; ${b.status}</span><span>${b.status==='charged'?money(b.amount||0):''}</span></div>`;
-          if(b.summary) sessHtml += `<div class="qa"><div class="q">Notes</div><div>${b.summary}</div></div>`;
-        });
-        clientsHtml += `
-          <div class="client-detail">
-            ${qaHtml || `<div class="empty">No intake answers on file.</div>`}
-            ${c.wgPdfData ? `<div class="qa"><div class="q">Working Genius</div><a class="wg-link" href="${c.wgPdfData}" download="${c.wgPdfName||'working-genius.pdf'}">${c.wgPdfName||'Download PDF'}</a></div>` : ''}
-            <div class="section-title" style="margin-top:18px;">Session history</div>
-            ${sessHtml || `<div class="empty">No sessions yet.</div>`}
-            <div style="margin-top:14px;">
-              ${c.blocked
-                ? `<button class="ghost small" data-unblock-client="${c.id}">Unblock</button>`
-                : `<button class="ghost small danger-ghost" data-block-client="${c.id}">Block from booking</button>`}
-            </div>
-          </div>`;
-      }
     });
     body = `
       <div class="admin-block">
         <h2 class="sect">Clients</h2>
+        <input type="text" id="client-search" placeholder="Search by name or email" value="${clientSearch}" style="margin-bottom:16px;">
         ${clientsHtml}
       </div>
     `;
+  }
+
+  if(adminView==='client-detail'){
+    const c = state.clients.find(x=>x.id===viewingClientId);
+    if(!c){
+      body = `<div class="admin-block"><button class="ghost small" data-back-to-clients="1">&larr; Back to clients</button><div class="empty" style="margin-top:16px;">Client not found.</div></div>`;
+    } else {
+      const clientBookings = state.bookings.filter(b=>b.clientId===c.id).sort((a,b)=>(b.date+b.time).localeCompare(a.date+a.time));
+      const sessionCount = clientBookings.length;
+      const totalBilled = clientBookings.filter(b=>b.status==='charged').reduce((sum,b)=>sum+(b.amount||0),0);
+      const firstBooking = clientBookings.slice().sort((a,b)=>(a.date+a.time).localeCompare(b.date+b.time))[0];
+      const lastBooking = clientBookings[0];
+
+      let storyLine = '';
+      if(sessionCount===0){
+        storyLine = `You haven\u2019t had a session with ${c.name.split(' ')[0]} yet.`;
+      } else if(sessionCount===1){
+        storyLine = `You\u2019ve met ${c.name.split(' ')[0]} once, on ${fmtDate(firstBooking.date)}.`;
+      } else {
+        storyLine = `You\u2019ve met with ${c.name.split(' ')[0]} ${sessionCount} times since ${fmtDate(firstBooking.date)}. Your most recent session was ${fmtDate(lastBooking.date)}.`;
+      }
+      if(totalBilled>0) storyLine += ` ${money(totalBilled)} billed in total.`;
+
+      const questions = state.settings.intakeQuestions || [];
+      let qaHtml = '';
+      questions.forEach((q,i)=>{
+        if(c.intakeAnswers && c.intakeAnswers[i]){
+          qaHtml += `<div class="qa"><div class="q">${q}</div><div>${c.intakeAnswers[i]}</div></div>`;
+        }
+      });
+
+      let sessHtml = '';
+      clientBookings.forEach(b=>{
+        sessHtml += `
+          <div class="hist-entry">
+            <div class="hist-line"><span>${fmtDate(b.date)}, ${fmtTime(b.time)} &middot; ${b.type==='virtual'?'Video call':'In person'} &middot; ${b.actualMinutes||b.durationMin} min</span><span>${b.status==='charged'?money(b.amount||0):b.status}</span></div>
+            ${b.summary ? `<div class="hist-notes">${b.summary}</div>` : ''}
+          </div>`;
+      });
+
+      body = `
+        <div class="admin-block">
+          <button class="ghost small" data-back-to-clients="1">&larr; Back to clients</button>
+          <div style="margin-top:18px;display:flex;justify-content:space-between;align-items:start;">
+            <div>
+              <div style="font-size:24px;font-family:Georgia,serif;">${c.name}</div>
+              <div class="sub" style="margin-top:4px;">${c.email}${c.phone ? ' &middot; ' + c.phone : ''}</div>
+            </div>
+            ${c.blocked ? `<span class="tag blocked">blocked</span>` : ''}
+          </div>
+          <div class="note" style="margin-top:16px;font-size:14.5px;line-height:1.6;">${storyLine}</div>
+        </div>
+
+        <div class="admin-block">
+          <h2 class="sect">Working Genius</h2>
+          ${c.wgPdfData
+            ? `<a class="wg-link" href="${c.wgPdfData}" download="${c.wgPdfName||'working-genius.pdf'}">${c.wgPdfName||'Download PDF'}</a>`
+            : `<div class="empty">Not on file.</div>`}
+        </div>
+
+        <div class="admin-block">
+          <h2 class="sect">Intake answers</h2>
+          ${qaHtml || `<div class="empty">No intake answers on file.</div>`}
+        </div>
+
+        <div class="admin-block">
+          <h2 class="sect">Session history</h2>
+          ${sessHtml || `<div class="empty">No sessions yet.</div>`}
+        </div>
+
+        <div class="admin-block">
+          ${c.blocked
+            ? `<button class="ghost small" data-unblock-client="${c.id}">Unblock</button>`
+            : `<button class="ghost small danger-ghost" data-block-client="${c.id}">Block from booking</button>`}
+        </div>
+      `;
+    }
   }
 
   if(adminView==='settings'){
@@ -1409,7 +1492,8 @@ function renderAdmin(){
           <a class="wg-link" href="/api/google-auth-url?token=${encodeURIComponent(adminToken)}">${calendarConnected?'Reconnect':'Connect Google Calendar'}</a>
         </div>
         <div class="note">When connected, times that conflict with your personal calendar won't show as bookable, and booked sessions get added to your calendar automatically.</div>
-        <label>Video call link (Google Meet)</label>
+        <label>Backup video call link</label>
+        <div class="note" style="margin-bottom:8px;">Every booking gets its own unique Meet link automatically when Google Calendar is connected \u2014 this field is only used as a fallback for the rare case a booking happens while Calendar is disconnected.</div>
         <input type="text" id="set-meet" placeholder="https://meet.google.com/xxx-xxxx-xxx" value="${state.settings.meetLink}">
         <label>In-person location and instructions</label>
         <textarea id="set-location" placeholder="Address, parking, floor, buzzer code, etc.">${state.settings.location}</textarea>
@@ -1504,7 +1588,7 @@ function attachHandlers(){
     const toggleSchedBtn = $('toggleScheduleEditor'); if(toggleSchedBtn) toggleSchedBtn.onclick = ()=>{ showScheduleEditor = !showScheduleEditor; render(); };
     document.querySelectorAll('[data-admin-view]').forEach(el=>{ el.onclick = ()=>{ adminView = el.getAttribute('data-admin-view'); render(); }; });
     document.querySelectorAll('[data-view-client]').forEach(el=>{
-      el.onclick = ()=>{ adminView = 'clients'; expandedClientId = el.getAttribute('data-view-client'); render(); };
+      el.onclick = ()=>{ adminView = 'client-detail'; viewingClientId = el.getAttribute('data-view-client'); render(); };
     });
     document.querySelectorAll('[data-rule-day]').forEach(el=>{ el.onclick = ()=>toggleRuleDay(Number(el.getAttribute('data-rule-day'))); });
     document.querySelectorAll('[data-remove-rule]').forEach(el=>{ el.onclick = ()=>removeRule(el.getAttribute('data-remove-rule')); });
@@ -1521,6 +1605,9 @@ function attachHandlers(){
     if(calNext) calNext.onclick = ()=>{ scheduleCalMonth = new Date(scheduleCalMonth.getFullYear(), scheduleCalMonth.getMonth()+1, 1); render(); };
     document.querySelectorAll('[data-dash-day]').forEach(el=>{
       el.onclick = ()=>{ selectedDashboardDate = el.getAttribute('data-dash-day'); render(); };
+    });
+    document.querySelectorAll('[data-dash-filter]').forEach(el=>{
+      el.onclick = ()=>{ dashboardStatFilter = el.getAttribute('data-dash-filter'); render(); };
     });
     const dashCalPrev = $('dashCalPrevMonth');
     if(dashCalPrev) dashCalPrev.onclick = ()=>{ dashboardCalMonth = new Date(dashboardCalMonth.getFullYear(), dashboardCalMonth.getMonth()-1, 1); render(); };
@@ -1659,7 +1746,16 @@ function attachHandlers(){
     document.querySelectorAll('[data-meet]').forEach(el=>{ el.onchange = ()=>updateBooking(el.getAttribute('data-meet'), { meetLink: el.value }); });
     document.querySelectorAll('[data-summary]').forEach(el=>{ el.onchange = ()=>updateBooking(el.getAttribute('data-summary'), { summary: el.value }); });
     document.querySelectorAll('[data-clientsummary]').forEach(el=>{ el.onchange = ()=>updateBooking(el.getAttribute('data-clientsummary'), { clientSummary: el.value }); });
-    document.querySelectorAll('[data-toggle-client]').forEach(el=>{ el.onclick = ()=>toggleExpandClient(el.getAttribute('data-toggle-client')); });
+    document.querySelectorAll('[data-view-client-profile]').forEach(el=>{
+      el.onclick = ()=>{ adminView = 'client-detail'; viewingClientId = el.getAttribute('data-view-client-profile'); render(); };
+    });
+    document.querySelectorAll('[data-back-to-clients]').forEach(el=>{
+      el.onclick = ()=>{ adminView = 'clients'; render(); };
+    });
+    const clientSearchEl = $('client-search');
+    if(clientSearchEl){
+      clientSearchEl.oninput = e=>{ clientSearch = e.target.value; render(); const el2 = $('client-search'); if(el2){ el2.focus(); el2.setSelectionRange(el2.value.length, el2.value.length); } };
+    }
     document.querySelectorAll('[data-block-client]').forEach(el=>{ el.onclick = (e)=>{ e.stopPropagation(); setClientBlocked(el.getAttribute('data-block-client'), true); }; });
     document.querySelectorAll('[data-unblock-client]').forEach(el=>{ el.onclick = (e)=>{ e.stopPropagation(); setClientBlocked(el.getAttribute('data-unblock-client'), false); }; });
   }
