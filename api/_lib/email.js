@@ -151,3 +151,51 @@ export function receiptEmail(booking) {
     `)
   };
 }
+
+export function reminderEmail(booking, settings) {
+  const dateStr = new Date(booking.date + 'T' + booking.time + ':00').toLocaleDateString('en-US', { weekday:'long', month:'short', day:'numeric' });
+  const timeStr = new Date(booking.date + 'T' + booking.time + ':00').toLocaleTimeString('en-US', { hour:'numeric', minute:'2-digit' });
+  const firstName = (booking.clientName || '').split(' ')[0];
+  const meetLink = booking.meetLink || settings.meetLink;
+  const joinRow = booking.type === 'virtual'
+    ? factRow('Join link', meetLink ? `<a href="${meetLink}">${meetLink}</a>` : 'Sent before the session')
+    : factRow('Location', ((booking.location || settings.location) || 'Sent before the session').replace(/\n/g, '<br>'));
+  return {
+    subject: `Reminder — your session with Heshy is tomorrow`,
+    html: wrap(`
+      <div style="font-size:22px;font-family:Georgia,serif;margin-bottom:8px;">See you tomorrow.</div>
+      <div style="font-size:14px;font-family:Arial,sans-serif;color:#6E6E6E;margin-bottom:20px;">Hi ${firstName || 'there'} &mdash; just a reminder about your upcoming session:</div>
+      <table style="width:100%;border-collapse:collapse;font-family:Arial,sans-serif;">
+        ${factRow('Time', `${dateStr}, ${timeStr}`)}
+        ${factRow('Format', booking.type === 'virtual' ? 'Video call' : 'In person')}
+        ${joinRow}
+      </table>
+      <div style="margin-top:20px;font-family:Arial,sans-serif;font-size:13.5px;">
+        <a href="${googleCalendarAddLink(booking, settings)}" style="color:#111111;text-decoration:underline;">Add to calendar</a>
+      </div>
+    `)
+  };
+}
+
+export function dailyDigestEmail(todayBookings, tomorrowBookings) {
+  const row = b => {
+    const timeStr = new Date(b.date + 'T' + b.time + ':00').toLocaleTimeString('en-US', { hour:'numeric', minute:'2-digit' });
+    return `<div style="padding:8px 0;border-bottom:1px solid #DEDEDE;font-family:Arial,sans-serif;font-size:13.5px;">
+      <strong>${timeStr}</strong> &mdash; ${b.clientName} &middot; ${b.type === 'virtual' ? 'Video call' : 'In person'}
+    </div>`;
+  };
+  const section = (label, list) => `
+    <div style="margin-top:20px;">
+      <div style="font-size:14px;font-weight:bold;font-family:Arial,sans-serif;margin-bottom:6px;">${label} (${list.length})</div>
+      ${list.length ? list.map(row).join('') : `<div style="font-family:Arial,sans-serif;font-size:13.5px;color:#6E6E6E;">Nothing scheduled.</div>`}
+    </div>`;
+  return {
+    subject: `Your schedule: ${todayBookings.length} today, ${tomorrowBookings.length} tomorrow`,
+    html: wrap(`
+      <div style="font-size:22px;font-family:Georgia,serif;margin-bottom:8px;">Good morning.</div>
+      <div style="font-size:14px;font-family:Arial,sans-serif;color:#6E6E6E;">Here's your schedule for today and tomorrow.</div>
+      ${section('Today', todayBookings)}
+      ${section('Tomorrow', tomorrowBookings)}
+    `)
+  };
+}
