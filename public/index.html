@@ -243,6 +243,9 @@
     font-family:'Inter',sans-serif;min-height:56px;resize:vertical;
   }
   .timer{font-family:'Source Serif 4',serif;font-size:20px;}
+  .rec-indicator{display:inline-flex;align-items:center;gap:5px;font-size:12px;font-weight:700;letter-spacing:0.04em;color:#A5433A;}
+  .rec-dot{width:9px;height:9px;border-radius:50%;background:#D6473C;animation:rec-pulse 1.3s ease-in-out infinite;}
+  @keyframes rec-pulse{0%,100%{opacity:1;}50%{opacity:0.25;}}
   .notes-textarea{min-height:160px;}
   .note{font-size:12px;color:var(--muted);margin-top:6px;}
   .client-block{border-bottom:1px solid var(--line);padding:20px 0;}
@@ -464,6 +467,7 @@ async function loadState(){
     const data = await r.json();
     state.bookings = data.bookings || [];
     state.overrides = data.overrides || [];
+    state.blockedDates = data.blockedDates || [];
     state.settings = data.settings || { meetLink:'', location:'', intakeQuestions:[], durationOptions:[60] };
     state.availability = data.availability || { virtual: [], 'in-person': [] };
     await loadCalendarBusy();
@@ -487,6 +491,7 @@ async function loadAdminState(){
     if(!state.settings.coupons) state.settings.coupons = [];
     if(!state.availability) state.availability = { virtual: [], 'in-person': [] };
     if(!state.overrides) state.overrides = [];
+    if(!state.blockedDates) state.blockedDates = [];
   }catch(e){ console.error('admin load failed', e); }
 }
 async function saveState(){
@@ -577,7 +582,10 @@ function dowOf(ds){ const [y,mo,d]=ds.split('-').map(Number); return new Date(y,
 function computeFreeRanges(ds, type){
   const weekday = dowOf(ds);
   const windows = [];
-  (state.availability[type]||[]).filter(r=>r.days.includes(weekday)).forEach(r=>windows.push([timeToMinC(r.start), timeToMinC(r.end)]));
+  const isBlocked = (state.blockedDates||[]).some(bl=>bl.date===ds && bl.type===type);
+  if(!isBlocked){
+    (state.availability[type]||[]).filter(r=>r.days.includes(weekday)).forEach(r=>windows.push([timeToMinC(r.start), timeToMinC(r.end)]));
+  }
   (state.overrides||[]).filter(o=>o.date===ds && o.type===type).forEach(o=>windows.push([timeToMinC(o.start), timeToMinC(o.end)]));
   if(windows.length===0) return [];
   windows.sort((a,b)=>a[0]-b[0]);
@@ -587,7 +595,7 @@ function computeFreeRanges(ds, type){
     if(windows[i][0] <= last[1]) last[1] = Math.max(last[1], windows[i][1]);
     else merged.push(windows[i].slice());
   }
-  const busy = (state.bookings||[]).filter(b=>b.date===ds && b.type===type).map(b=>{
+  const busy = (state.bookings||[]).filter(b=>b.date===ds && b.type===type && b.status!=='cancelled').map(b=>{
     const s = timeToMinC(b.time); return [s, s+(b.durationMin||60)];
   });
   calendarBusy.forEach(b=>{
@@ -808,6 +816,7 @@ async function updateBooking(id, patch){
 // Chunks upload every 60s so a single request never gets large, regardless of session length.
 let activeRecordings = {}; // bookingId -> { recorder, chunkIndex, audioContext, stream }
 let recordingStatus = {}; // bookingId -> 'recording' | 'processing' | 'done' | 'error'
+let recordingSegmentStart = {}; // bookingId -> ISO timestamp of when the current segment started
 
 function blobToBase64(blob){
   return new Promise((resolve, reject)=>{
@@ -887,6 +896,7 @@ async function startRecording(bookingId, type){
     };
     recorder.start(60000); // one chunk per minute
     activeRecordings[bookingId] = { recorder, stream: finalStream, micStream, audioContext };
+    recordingSegmentStart[bookingId] = new Date().toISOString();
     delete recordingError[bookingId];
     recordingStatus[bookingId] = 'recording';
   }catch(e){
@@ -900,11 +910,14 @@ async function startRecording(bookingId, type){
 async function stopRecording(bookingId){
   const rec = activeRecordings[bookingId];
   if(!rec) return;
+  const segmentStart = recordingSegmentStart[bookingId] || new Date().toISOString();
+  const segmentEnd = new Date().toISOString();
   rec.recorder.stop();
   rec.stream.getTracks().forEach(t=>t.stop());
   if(rec.micStream) rec.micStream.getTracks().forEach(t=>t.stop());
   if(rec.audioContext) rec.audioContext.close();
   delete activeRecordings[bookingId];
+  delete recordingSegmentStart[bookingId];
   // Give the final ondataavailable chunk a moment to fire and upload before finalizing.
   recordingStatus[bookingId] = 'processing';
   render();
@@ -913,7 +926,7 @@ async function stopRecording(bookingId){
     const res = await fetch('/api/admin-data', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', 'X-Admin-Token': adminToken },
-      body: JSON.stringify({ action: 'finalize-recording', bookingId })
+      body: JSON.stringify({ action: 'finalize-recording', bookingId, segmentStart, segmentEnd })
     });
     const data = await res.json();
     if(data.error){
@@ -1269,7 +1282,8 @@ function renderScheduleCalendar(){
     const d = new Date(today0); d.setDate(d.getDate()+i);
     const ds = dateStr(d);
     const weekday = d.getDay();
-    const hasRule = (state.availability[adminType]||[]).some(r=>r.days.includes(weekday));
+    const isBlocked = (state.blockedDates||[]).some(bl=>bl.date===ds && bl.type===adminType);
+    const hasRule = !isBlocked && (state.availability[adminType]||[]).some(r=>r.days.includes(weekday));
     const hasOverride = (state.overrides||[]).some(o=>o.date===ds && o.type===adminType);
     if(hasRule || hasOverride) countsForType[ds] = true;
   }
@@ -1312,9 +1326,23 @@ function renderDayDetail(){
   const ds = selectedScheduleDate;
   const isHoliday = jewishHolidayDates.has(ds);
   const weekday = dowOf(ds);
+  const isBlocked = (state.blockedDates||[]).some(bl=>bl.date===ds && bl.type===adminType);
   const recurring = (state.availability[adminType]||[]).filter(r=>r.days.includes(weekday));
   const dayOverrides = (state.overrides||[]).filter(o=>o.date===ds && o.type===adminType);
-  let recurringHtml = recurring.length===0 ? '' : recurring.map(r=>`<div class="row"><div><div class="main">${fmtTimeShort(r.start)} &ndash; ${fmtTimeShort(r.end)}</div><div class="sub">From your weekly pattern${r.generalArea?' &middot; '+r.generalArea:''}</div></div></div>`).join('');
+  let recurringHtml = '';
+  if(recurring.length && !isBlocked){
+    recurringHtml = recurring.map(r=>`
+      <div class="row">
+        <div><div class="main">${fmtTimeShort(r.start)} &ndash; ${fmtTimeShort(r.end)}</div><div class="sub">From your weekly pattern${r.generalArea?' &middot; '+r.generalArea:''}</div></div>
+        <button class="chip-x" data-block-date="${ds}" title="Not available this day">&times;</button>
+      </div>`).join('');
+  } else if(recurring.length && isBlocked){
+    recurringHtml = `
+      <div class="row">
+        <div><div class="main" style="color:var(--muted);">Not available this day</div><div class="sub">Your usual ${fmtTimeShort(recurring[0].start)}&ndash;${fmtTimeShort(recurring[0].end)} pattern is blocked just for ${fmtDate(ds)}</div></div>
+        <button class="ghost small" data-unblock-date="${ds}">Undo</button>
+      </div>`;
+  }
   let overrideHtml = dayOverrides.length===0 ? '' : dayOverrides.map(o=>`
     <div class="row">
       <div><div class="main">${fmtTimeShort(o.start)} &ndash; ${fmtTimeShort(o.end)}</div><div class="sub">One-off, this date only${o.generalArea?' &middot; '+o.generalArea:''}</div></div>
@@ -1369,12 +1397,23 @@ function renderAdmin(){
   function sessionCardHtml(b){
     const running = !!runningTimer[b.id];
     const isRecording = recordingStatus[b.id]==='recording';
+    const segments = b.recordingSegments || [];
+    const totalSegMin = segments.reduce((sum,s)=>sum+s.minutes,0);
+    const fmtClock = iso => new Date(iso).toLocaleTimeString('en-US', { hour:'numeric', minute:'2-digit' });
+    const segmentLogHtml = segments.length ? `
+      <div class="note" style="margin-top:2px;margin-bottom:8px;">
+        ${segments.map((s,i)=>`Part ${i+1}: ${fmtClock(s.start)}&ndash;${fmtClock(s.end)} (${s.minutes} min)`).join(' &middot; ')}
+        ${segments.length>1 ? ` &middot; <strong>Total: ${totalSegMin} min</strong>` : ''}
+      </div>
+    ` : '';
     const timerBlock = `
       <div style="display:flex;align-items:center;gap:16px;margin-bottom:8px;">
         <span class="timer" id="timer-${b.id}">${String(Math.floor((timerDisplay[b.id]||0)/60)).padStart(2,'0')}:${String((timerDisplay[b.id]||0)%60).padStart(2,'0')}</span>
         ${running ? `<button class="ghost small" data-stop-timer="${b.id}">Stop</button>` : `<button class="${b.type==='in-person'?'primary':'ghost'} small" data-start-timer="${b.id}">Start</button>`}
         <span class="note" style="margin:0;">${b.type==='in-person' ? 'Tracks time & records using your mic' : 'Tracks time only'}</span>
+        ${isRecording ? `<span class="rec-indicator" title="Recording"><span class="rec-dot"></span>REC</span>` : ''}
       </div>
+      ${segmentLogHtml}
       ${recordingStatus[b.id] ? `<div class="note" style="margin-bottom:8px;color:${recordingStatus[b.id]==='error'?'#A5433A':(recordingStatus[b.id]==='done'?'#2E5B27':'var(--muted)')};">${
         recordingStatus[b.id]==='recording' ? 'Recording…' :
         recordingStatus[b.id]==='processing' ? 'Processing notes… this can take a minute for longer sessions.' :
@@ -1388,9 +1427,9 @@ function renderAdmin(){
     ` : '';
     const controls = `
         <div class="session-controls">
-          ${timerBlock}
-          ${meetBlock}
-          ${(b.type==='virtual' && (b.calendarEventId || b.meetLink)) ? `<button class="ghost small" data-fetch-gemini="${b.id}" style="margin-bottom:14px;">Fetch call duration</button><span id="gemini-msg-${b.id}" style="font-size:12.5px;margin-left:10px;"></span>` : ''}
+          ${b.status!=='cancelled' ? timerBlock : ''}
+          ${b.status!=='cancelled' ? meetBlock : ''}
+          ${(b.status!=='cancelled' && b.type==='virtual' && (b.calendarEventId || b.meetLink)) ? `<button class="ghost small" data-fetch-gemini="${b.id}" style="margin-bottom:14px;">Fetch call duration</button><span id="gemini-msg-${b.id}" style="font-size:12.5px;margin-left:10px;"></span>` : ''}
           <label>Internal notes <span class="note" style="display:inline;">(private &mdash; only you see this)</span></label>
           <textarea class="notes-textarea" data-summary="${b.id}">${b.summary||''}</textarea>
           <label style="margin-top:14px;display:block;">Client-facing summary <span class="note" style="display:inline;">(shown to the client in their portal)</span></label>
@@ -1399,7 +1438,7 @@ function renderAdmin(){
         </div>
     `;
     let action = '';
-    if(b.status!=='charged'){
+    if(b.status!=='charged' && b.status!=='cancelled'){
       const mins = b.actualMinutes || b.durationMin;
       const hours = Math.round((mins/60)*100)/100;
       const defaultAmt = Math.round(hours*500*100)/100;
@@ -1443,13 +1482,16 @@ function renderAdmin(){
           </div>
           <span class="tag status-${b.status}">${b.status}</span>
         </div>
+        ${b.status==='cancelled' ? `<div class="note" style="margin-top:8px;">Cancelled \u2014 the time was freed up. Any notes or billing from before cancelling are kept below for your records.</div>` : ''}
         ${controls}
         ${action?`<div class="session-actions">${action}</div>`:''}
+        ${b.status!=='cancelled' ? `
         <div style="display:flex;gap:8px;margin-top:8px;">
           <button class="ghost small" data-reschedule-toggle="${b.id}">${isRescheduling?'Close':'Reschedule'}</button>
           <button class="ghost small danger-ghost" data-cancel-booking="${b.id}">Cancel booking</button>
         </div>
         ${rescheduleBlock}
+        ` : ''}
       </div>`;
   }
 
@@ -1469,9 +1511,9 @@ function renderAdmin(){
     if(!selectedDashboardDate) selectedDashboardDate = todayDs;
     const weekAheadDs = dateStr(new Date(Date.now() + 7*86400000));
 
-    const todayBookings = state.bookings.filter(b=>b.date===todayDs).sort((a,b)=>a.time.localeCompare(b.time));
-    const upcomingBookings = state.bookings.filter(b=>b.date>=todayDs).sort((a,b)=> a.date===b.date ? a.time.localeCompare(b.time) : a.date.localeCompare(b.date));
-    const thisWeekBookings = state.bookings.filter(b=>b.date>=todayDs && b.date<=weekAheadDs).sort((a,b)=> a.date===b.date ? a.time.localeCompare(b.time) : a.date.localeCompare(b.date));
+    const todayBookings = state.bookings.filter(b=>b.date===todayDs && b.status!=='cancelled').sort((a,b)=>a.time.localeCompare(b.time));
+    const upcomingBookings = state.bookings.filter(b=>b.date>=todayDs && b.status!=='cancelled').sort((a,b)=> a.date===b.date ? a.time.localeCompare(b.time) : a.date.localeCompare(b.date));
+    const thisWeekBookings = state.bookings.filter(b=>b.date>=todayDs && b.date<=weekAheadDs && b.status!=='cancelled').sort((a,b)=> a.date===b.date ? a.time.localeCompare(b.time) : a.date.localeCompare(b.date));
     const unbilledBookings = state.bookings.filter(b=>b.date<todayDs && b.status==='scheduled').sort((a,b)=> a.date===b.date ? a.time.localeCompare(b.time) : a.date.localeCompare(b.date));
 
     if(!dashboardStatFilter) dashboardStatFilter = 'today';
@@ -1620,19 +1662,26 @@ function renderAdmin(){
       body = `<div class="admin-block"><button class="ghost small" data-back-to-clients="1">&larr; Back to clients</button><div class="empty" style="margin-top:16px;">Client not found.</div></div>`;
     } else {
       const clientBookings = state.bookings.filter(b=>b.clientId===c.id).sort((a,b)=>(b.date+b.time).localeCompare(a.date+a.time));
-      const sessionCount = clientBookings.length;
       const totalBilled = clientBookings.filter(b=>b.status==='charged').reduce((sum,b)=>sum+(b.amount||0),0);
-      const firstBooking = clientBookings.slice().sort((a,b)=>(a.date+a.time).localeCompare(b.date+b.time))[0];
-      const lastBooking = clientBookings[0];
+      const nowDs = dateStr(new Date());
+      const nowTimeStr = (()=>{ const d=new Date(); return String(d.getHours()).padStart(2,'0')+':'+String(d.getMinutes()).padStart(2,'0'); })();
+      const pastBookings = clientBookings.filter(b=> b.date < nowDs || (b.date===nowDs && b.time <= nowTimeStr));
+      const upcomingBookings = clientBookings.filter(b=> b.date > nowDs || (b.date===nowDs && b.time > nowTimeStr));
+      const sessionCount = pastBookings.length;
+      const firstBooking = pastBookings.slice().sort((a,b)=>(a.date+a.time).localeCompare(b.date+b.time))[0];
+      const lastBooking = pastBookings[0];
 
       let storyLine = '';
       if(sessionCount===0){
-        storyLine = `You haven\u2019t had a session with ${c.name.split(' ')[0]} yet.`;
+        storyLine = upcomingBookings.length
+          ? `You haven\u2019t met with ${c.name.split(' ')[0]} yet \u2014 first session is ${fmtDate(upcomingBookings[upcomingBookings.length-1].date)}.`
+          : `You haven\u2019t had a session with ${c.name.split(' ')[0]} yet.`;
       } else if(sessionCount===1){
         storyLine = `You\u2019ve met ${c.name.split(' ')[0]} once, on ${fmtDate(firstBooking.date)}.`;
       } else {
         storyLine = `You\u2019ve met with ${c.name.split(' ')[0]} ${sessionCount} times since ${fmtDate(firstBooking.date)}. Your most recent session was ${fmtDate(lastBooking.date)}.`;
       }
+      if(upcomingBookings.length) storyLine += ` Next session: ${fmtDate(upcomingBookings[0].date)}.`;
       if(totalBilled>0) storyLine += ` ${money(totalBilled)} billed in total.`;
 
       const questions = state.settings.intakeQuestions || [];
@@ -1865,6 +1914,23 @@ function attachHandlers(){
     document.querySelectorAll('[data-remove-override]').forEach(el=>{
       el.onclick = async ()=>{
         state.overrides = (state.overrides||[]).filter(o=>o.id!==el.getAttribute('data-remove-override'));
+        await saveState(); render();
+      };
+    });
+    document.querySelectorAll('[data-block-date]').forEach(el=>{
+      el.onclick = async ()=>{
+        const date = el.getAttribute('data-block-date');
+        if(!state.blockedDates) state.blockedDates = [];
+        if(!state.blockedDates.some(bl=>bl.date===date && bl.type===adminType)){
+          state.blockedDates.push({ id: uid(), date, type: adminType });
+        }
+        await saveState(); render();
+      };
+    });
+    document.querySelectorAll('[data-unblock-date]').forEach(el=>{
+      el.onclick = async ()=>{
+        const date = el.getAttribute('data-unblock-date');
+        state.blockedDates = (state.blockedDates||[]).filter(bl=>!(bl.date===date && bl.type===adminType));
         await saveState(); render();
       };
     });
