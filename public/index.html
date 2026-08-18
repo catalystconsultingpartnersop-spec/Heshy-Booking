@@ -1427,7 +1427,7 @@ function renderAdmin(){
           <div style="margin-top:10px;"><label>General area <span class="note" style="display:inline;">(shown to clients before they book)</span></label><input type="text" id="nr-area" value="${newRule.generalArea}" placeholder="e.g. Boro Park"></div>
           <div style="margin-top:10px;"><label>Full address &amp; instructions <span class="note" style="display:inline;">(sent after booking)</span></label><textarea id="nr-address" placeholder="Address, parking, floor, buzzer code, etc.">${newRule.address}</textarea></div>
           ` : ''}
-          <div style="margin-top:14px;"><button class="ghost small" id="addRuleBtn">Add pattern</button></div>
+          <div style="margin-top:14px;"><button class="ghost small" id="addRuleBtn" ${(newRule.days.length && newRule.start && newRule.end) ? '' : 'disabled'}>Add pattern</button>${!newRule.days.length ? '<span class="note" style="margin-left:10px;">Pick at least one day above first</span>' : (!newRule.start || !newRule.end ? '<span class="note" style="margin-left:10px;">Set a start and end time</span>' : '')}</div>
         </div>
         <div style="margin-top:24px;padding-top:20px;border-top:1px solid var(--line);">
           <div class="section-title">Upcoming one-off dates</div>
