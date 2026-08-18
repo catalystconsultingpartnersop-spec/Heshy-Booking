@@ -1629,24 +1629,33 @@ function renderAdmin(){
       dayHtml += sessionCardHtml(b);
     });
     const isSelectedToday = selectedDashboardDate === todayDs;
-    body = `
+    const todaySessionsBlock = `
       <div class="admin-block">
-        <h2 class="sect">Dashboard</h2>
-        ${statsHtml}
+        <h2 class="sect">${isSelectedToday ? 'Today' : fmtDate(selectedDashboardDate)}</h2>
+        ${dayHtml}
       </div>
+    `;
+    const calendarBlock = `
+      <div class="admin-block">
+        <h2 class="sect">Calendar</h2>
+        ${renderDashboardCalendar()}
+      </div>
+    `;
+    const filteredBlock = `
       <div class="admin-block">
         <h2 class="sect">${active.title}</h2>
         ${active.caption ? `<div class="note" style="margin-bottom:16px;">${active.caption}</div>` : ''}
         ${filteredListHtml}
       </div>
+    `;
+    body = `
       <div class="admin-block">
-        <h2 class="sect">Browse by date</h2>
-        ${renderDashboardCalendar()}
+        <h2 class="sect">Dashboard</h2>
+        ${statsHtml}
       </div>
-      <div class="admin-block">
-        <h2 class="sect">${isSelectedToday ? 'Today' : fmtDate(selectedDashboardDate)}</h2>
-        ${dayHtml}
-      </div>
+      ${dashboardStatFilter !== 'today' ? filteredBlock : ''}
+      ${todaySessionsBlock}
+      ${calendarBlock}
     `;
   }
 
