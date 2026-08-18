@@ -1226,15 +1226,17 @@ function renderClient(){
     }
   } else if(bookingStep===2){
     inner += `<h1>Your details</h1>`;
+    const isMinimumBilling = state.settings.billingMode === 'minimum';
     inner += `
       <div class="fact">
         <div class="fact-row"><span>Time</span><span>${fmtDate(selectedDay)}, ${fmtTime(selectedStartTime)}</span></div>
         <div class="fact-row"><span>Length</span><span>${selectedDuration} min</span></div>
         <div class="fact-row"><span>Format</span><span>${selectedType==='virtual'?'Video call':'In person'}</span></div>
         <div class="fact-row"><span>Rate</span><span>$500/hour</span></div>
-        <div class="fact-row"><span>Charged</span><span>After the session, for actual time used</span></div>
+        <div class="fact-row"><span>Charged</span><span>${isMinimumBilling ? `After the session, for at least the ${selectedDuration} min booked` : 'After the session, for actual time used'}</span></div>
         <div class="fact-row"><span>Receipt</span><span>Emailed automatically once charged</span></div>
       </div>
+      ${isMinimumBilling ? `<div class="note" style="margin-top:-10px;margin-bottom:20px;">If the session runs shorter than ${selectedDuration} min, you're still billed for the full ${selectedDuration} min booked \u2014 sessions running longer are billed for the actual time.</div>` : ''}
       <div class="form-section">
         <div class="section-title">Contact</div>
         <label>Name <span class="required-mark">*</span></label>
