@@ -29,6 +29,7 @@
       btn.disabled = true; btn.textContent = 'Running…';
       out.style.display = 'block';
       out.textContent = 'Logging in…';
+      const log = [];
       try {
         const loginRes = await fetch('/api/admin-data', {
           method: 'POST',
@@ -37,18 +38,25 @@
         });
         const loginData = await loginRes.json();
         if (loginData.error) { out.textContent = 'Login failed: ' + loginData.error; btn.disabled = false; btn.textContent = 'Run cleanup'; return; }
-        out.textContent = 'Logged in. Cleaning up…';
-        const cleanupRes = await fetch('/api/admin-data', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json', 'X-Admin-Token': loginData.token },
-          body: JSON.stringify({ action: 'cleanup-large-pdfs' })
-        });
-        const cleanupData = await cleanupRes.json();
-        if (cleanupData.error) { out.textContent = 'Cleanup failed: ' + cleanupData.error; }
-        else if (!cleanupData.results || cleanupData.results.length === 0) { out.textContent = 'Done. No oversized PDFs found — nothing to clean up.'; }
-        else { out.textContent = 'Done:\n\n' + cleanupData.results.map(r => '- ' + r.client + ': ' + r.status).join('\n'); }
+        const token = loginData.token;
+
+        let safetyLimit = 50; // avoid an infinite loop if something's wrong
+        while (safetyLimit-- > 0) {
+          out.textContent = log.join('\n') + '\n\nProcessing next record…';
+          const res = await fetch('/api/admin-data', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', 'X-Admin-Token': token },
+            body: JSON.stringify({ action: 'cleanup-large-pdfs' })
+          });
+          const data = await res.json();
+          if (data.error) { log.push('Error: ' + data.error); break; }
+          if (!data.migrated) { log.push('Done — nothing left to clean up.'); break; }
+          log.push('- ' + data.migrated.client + ': ' + data.migrated.status);
+          if (data.remaining === 0) { log.push('\nAll done!'); break; }
+        }
+        out.textContent = log.join('\n');
       } catch (e) {
-        out.textContent = 'Error: ' + e.message;
+        out.textContent = log.join('\n') + '\n\nError: ' + e.message;
       }
       btn.disabled = false; btn.textContent = 'Run cleanup';
     };
