@@ -818,19 +818,39 @@ function blobToBase64(blob){
   });
 }
 
-async function uploadRecordingChunk(bookingId, chunkIndex, blob){
+async function uploadRecordingChunk(bookingId, chunkIndex, blob, mimeType){
   try{
     const base64 = await blobToBase64(blob);
     await fetch('/api/admin-data', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', 'X-Admin-Token': adminToken },
-      body: JSON.stringify({ action: 'upload-recording-chunk', bookingId, chunkIndex, chunkBase64: base64 })
+      body: JSON.stringify({ action: 'upload-recording-chunk', bookingId, chunkIndex, chunkBase64: base64, mimeType })
     });
   }catch(e){ console.error('chunk upload failed', e); }
 }
 
+let recordingError = {}; // bookingId -> human-readable reason, shown when status is 'error'
+
+function pickSupportedMimeType(){
+  const candidates = [
+    'audio/webm;codecs=opus',
+    'audio/webm',
+    'audio/mp4',
+    'audio/mp4;codecs=mp4a.40.2',
+    'audio/ogg;codecs=opus'
+  ];
+  for(const c of candidates){
+    if(window.MediaRecorder && MediaRecorder.isTypeSupported && MediaRecorder.isTypeSupported(c)) return c;
+  }
+  return null; // let the browser pick its own default rather than force an unsupported one
+}
+
 async function startRecording(bookingId, type){
   try{
+    if(!window.MediaRecorder){
+      recordingError[bookingId] = 'This browser doesn\u2019t support recording.';
+      recordingStatus[bookingId] = 'error'; render(); return;
+    }
     const micStream = await navigator.mediaDevices.getUserMedia({ audio: true });
     let finalStream = micStream;
     let audioContext = null;
@@ -854,21 +874,27 @@ async function startRecording(bookingId, type){
       }
     }
 
-    const recorder = new MediaRecorder(finalStream, { mimeType: 'audio/webm;codecs=opus', audioBitsPerSecond: 24000 });
+    const mimeType = pickSupportedMimeType();
+    const recorder = mimeType
+      ? new MediaRecorder(finalStream, { mimeType, audioBitsPerSecond: 24000 })
+      : new MediaRecorder(finalStream);
     let chunkIndex = 0;
     recorder.ondataavailable = (e)=>{
       if(e.data && e.data.size > 0){
-        uploadRecordingChunk(bookingId, chunkIndex, e.data);
+        uploadRecordingChunk(bookingId, chunkIndex, e.data, recorder.mimeType);
         chunkIndex++;
       }
     };
     recorder.start(60000); // one chunk per minute
     activeRecordings[bookingId] = { recorder, stream: finalStream, micStream, audioContext };
+    delete recordingError[bookingId];
     recordingStatus[bookingId] = 'recording';
   }catch(e){
     console.error('could not start recording', e);
+    recordingError[bookingId] = e.name === 'NotAllowedError' ? 'Microphone access was blocked \u2014 check your browser permissions.' : (e.message || 'Unknown error starting the recorder.');
     recordingStatus[bookingId] = 'error';
   }
+  render();
 }
 
 async function stopRecording(bookingId){
@@ -892,6 +918,7 @@ async function stopRecording(bookingId){
     const data = await res.json();
     if(data.error){
       recordingStatus[bookingId] = 'error';
+      recordingError[bookingId] = data.error;
       console.error('finalize recording failed', data.error);
     } else {
       recordingStatus[bookingId] = 'done';
@@ -899,6 +926,7 @@ async function stopRecording(bookingId){
     }
   }catch(e){
     recordingStatus[bookingId] = 'error';
+    recordingError[bookingId] = e.message || 'Could not reach the server to process the recording.';
     console.error('finalize recording failed', e);
   }
   render();
@@ -1335,22 +1363,23 @@ function renderAdmin(){
 
   function sessionCardHtml(b){
     const running = !!runningTimer[b.id];
+    const isRecording = recordingStatus[b.id]==='recording';
     const timerBlock = `
       <div style="display:flex;align-items:center;gap:16px;margin-bottom:8px;">
         <span class="timer" id="timer-${b.id}">${String(Math.floor((timerDisplay[b.id]||0)/60)).padStart(2,'0')}:${String((timerDisplay[b.id]||0)%60).padStart(2,'0')}</span>
-        ${running ? `<button class="ghost small" data-stop-timer="${b.id}">Stop</button>` : `<button class="ghost small" data-start-timer="${b.id}">Start</button>`}
-        <span class="note" style="margin:0;">Tracks actual time for billing</span>
+        ${running ? `<button class="ghost small" data-stop-timer="${b.id}">Stop</button>` : `<button class="${b.type==='in-person'?'primary':'ghost'} small" data-start-timer="${b.id}">Start</button>`}
+        <span class="note" style="margin:0;">${b.type==='in-person' ? 'Tracks time & records using your mic' : 'Tracks time only'}</span>
       </div>
       ${recordingStatus[b.id] ? `<div class="note" style="margin-bottom:8px;color:${recordingStatus[b.id]==='error'?'#A5433A':(recordingStatus[b.id]==='done'?'#2E5B27':'var(--muted)')};">${
         recordingStatus[b.id]==='recording' ? 'Recording…' :
         recordingStatus[b.id]==='processing' ? 'Processing notes… this can take a minute for longer sessions.' :
         recordingStatus[b.id]==='done' ? 'Notes ready below.' :
-        'Recording failed \u2014 you can still add notes manually below.'
+        'Recording failed: ' + (recordingError[b.id] || 'unknown error') + '. You can still add notes manually below.'
       }</div>` : ''}`;
-    const meetBlock = b.meetLink ? `
-      <label>${b.type==='virtual' ? 'Google Meet link' : 'Google Meet link (for your own recording/notes)'}</label>
+    const meetBlock = (b.meetLink && b.type==='virtual') ? `
+      <label>Google Meet link</label>
       <input type="text" value="${b.meetLink||''}" data-meet="${b.id}">
-      ${!running ? `<button class="primary small" data-join-start="${b.id}" style="margin-top:10px;">${b.type==='virtual'?'Join meeting, start timer & record':'Start Meet, timer & record'}</button>` : ''}
+      ${!running ? `<button class="primary small" data-join-start="${b.id}" style="margin-top:10px;">Join meeting, start timer &amp; record</button>` : ''}
     ` : '';
     const controls = `
         <div class="session-controls">
@@ -1925,7 +1954,9 @@ function attachHandlers(){
         const id = el.getAttribute('data-start-timer');
         const b = state.bookings.find(x=>x.id===id);
         startTimer(id);
-        if(b) startRecording(id, b.type);
+        // In-person: one physical event, so Start naturally drives both timing and recording together.
+        // Virtual keeps recording as its own separate action (needs the tab-share consent step).
+        if(b && b.type === 'in-person') startRecording(id, 'in-person');
       };
     });
     document.querySelectorAll('[data-join-start]').forEach(el=>{
@@ -1934,7 +1965,7 @@ function attachHandlers(){
         const b = state.bookings.find(x=>x.id===id);
         if(b && b.meetLink) window.open(b.meetLink, '_blank');
         startTimer(id);
-        if(b) startRecording(id, b.type);
+        startRecording(id, 'virtual');
       };
     });
     document.querySelectorAll('[data-fetch-gemini]').forEach(el=>{
@@ -1968,7 +1999,7 @@ function attachHandlers(){
       el.onclick = ()=>{
         const id = el.getAttribute('data-stop-timer');
         stopTimer(id);
-        stopRecording(id);
+        if(activeRecordings[id]) stopRecording(id);
       };
     });
     document.querySelectorAll('[data-meet]').forEach(el=>{ el.onchange = ()=>updateBooking(el.getAttribute('data-meet'), { meetLink: el.value }); });
