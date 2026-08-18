@@ -84,7 +84,7 @@ async function handleUploadRecordingChunk(req, res) {
 }
 
 async function handleFinalizeRecording(req, res) {
-  const { bookingId } = req.body || {};
+  const { bookingId, segmentStart, segmentEnd } = req.body || {};
   if (!bookingId) return res.status(400).json({ error: 'Missing bookingId.' });
 
   const data = await kv.get('app-data');
@@ -123,12 +123,24 @@ async function handleFinalizeRecording(req, res) {
     }
     const whisperData = await whisperRes.json();
     const transcript = (whisperData.text || '').trim();
+
+    // Log this segment's precise start/stop time regardless of whether speech was detected,
+    // so the timing log stays accurate even for a silent test.
+    if (!Array.isArray(booking.recordingSegments)) booking.recordingSegments = [];
+    const segStart = segmentStart || new Date().toISOString();
+    const segEnd = segmentEnd || new Date().toISOString();
+    const segMinutes = Math.max(1, Math.round((new Date(segEnd) - new Date(segStart)) / 60000));
+    booking.recordingSegments.push({ start: segStart, end: segEnd, minutes: segMinutes });
+    // The precisely-logged segment times are more reliable than the client-side stopwatch
+    // (which can drift if the browser tab is backgrounded), so they become the billing duration.
+    booking.actualMinutes = booking.recordingSegments.reduce((sum, s) => sum + s.minutes, 0);
+
     if (!transcript) {
+      await kv.set('app-data', data);
       await kv.del(key);
-      return res.status(200).json({ ok: true, summary: '', note: 'No speech was detected in the recording.' });
+      return res.status(200).json({ ok: true, summary: booking.summary || '', note: 'No speech was detected in this segment, but the time was still logged.' });
     }
 
-    const existingSummary = (booking.summary || '').trim();
     const systemPrompt = `You write short, plain, clear session notes for a consultant named Heshy. The transcript may mix English and Yiddish — understand all of it, but write the notes in English. Always structure your response in exactly three short sections with these exact headers, each with 1-4 brief bullet points. No long paragraphs, no flowery language, no fluff.
 
 What we discussed
@@ -136,9 +148,6 @@ Key points
 Next steps
 
 If a section has nothing to report, write "None." under it. Stay factual and concise.`;
-    const userContent = existingSummary
-      ? `Here are the notes so far from earlier in this same session (e.g. before a short break):\n\n${existingSummary}\n\nHere is the transcript of the next part of the conversation, continuing the same session:\n\n${transcript}\n\nUpdate the notes to reflect the FULL conversation so far. Merge both parts into one clean, de-duplicated set of notes in the same three-section format — don't just append the new part underneath, combine them as one coherent session.`
-      : transcript;
     const gptRes = await fetch('https://api.openai.com/v1/chat/completions', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${process.env.OPENAI_API_KEY}` },
@@ -146,7 +155,7 @@ If a section has nothing to report, write "None." under it. Stay factual and con
         model: 'gpt-4o-mini',
         messages: [
           { role: 'system', content: systemPrompt },
-          { role: 'user', content: userContent }
+          { role: 'user', content: transcript }
         ],
         temperature: 0.3
       })
@@ -156,12 +165,19 @@ If a section has nothing to report, write "None." under it. Stay factual and con
       return res.status(500).json({ error: 'Summary failed: ' + errText.slice(0, 300) });
     }
     const gptData = await gptRes.json();
-    const summary = gptData.choices?.[0]?.message?.content || '';
+    const segmentSummary = gptData.choices?.[0]?.message?.content || '';
 
-    booking.summary = summary;
+    const partNumber = booking.recordingSegments.length;
+    const fmtClock = iso => new Date(iso).toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit', timeZone: 'America/New_York' });
+    const partHeader = `Part ${partNumber} (${fmtClock(segStart)}\u2013${fmtClock(segEnd)}, ${segMinutes} min)`;
+    const existingSummary = (booking.summary || '').trim();
+    booking.summary = existingSummary
+      ? `${existingSummary}\n\n---\n\n${partHeader}\n${segmentSummary}`
+      : `${partHeader}\n${segmentSummary}`;
+
     await kv.set('app-data', data);
     await kv.del(key);
-    res.status(200).json({ ok: true, summary });
+    res.status(200).json({ ok: true, summary: booking.summary });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
@@ -239,7 +255,11 @@ async function handleCancelBooking(req, res) {
     }
   }
 
-  data.bookings = data.bookings.filter(b => b.id !== bookingId);
+  // Mark as cancelled rather than deleting the record — the notes, recordings, and any billing
+  // already tied to this booking stay intact. The Calendar event deletion above is what actually
+  // frees the time; excluding cancelled bookings from availability checks (elsewhere) frees the
+  // app's own slot too.
+  booking.status = 'cancelled';
   await kv.set('app-data', data);
   res.status(200).json({ ok: true, warning: calendarWarning });
 }

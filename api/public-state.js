@@ -19,13 +19,16 @@ export default async function handler(req, res) {
     const today = new Date(); today.setHours(0,0,0,0);
     const todayStr = today.getFullYear() + '-' + String(today.getMonth()+1).padStart(2,'0') + '-' + String(today.getDate()).padStart(2,'0');
     // Lightweight, no client PII — just enough for the booking page to compute what's still free.
+    // Cancelled bookings are excluded entirely so they never block a time slot.
     const futureBookings = (data.bookings || [])
-      .filter(b => b.date >= todayStr)
+      .filter(b => b.date >= todayStr && b.status !== 'cancelled')
       .map(b => ({ date: b.date, time: b.time, durationMin: b.durationMin, type: b.type }));
     const futureOverrides = (data.overrides || []).filter(o => o.date >= todayStr);
+    const futureBlockedDates = (data.blockedDates || []).filter(bl => bl.date >= todayStr);
     res.status(200).json({
       bookings: futureBookings,
       overrides: futureOverrides,
+      blockedDates: futureBlockedDates,
       settings: {
         meetLink: data.settings?.meetLink || '',
         location: data.settings?.location || '',

@@ -44,7 +44,10 @@ function resolveAddress(data, date) {
 function isRangeAvailable(data, date, time, durationMin, type, excludeBookingId, calendarBusyRanges) {
   const weekday = dowOf(date);
   const windows = [];
-  (data.availability?.[type] || []).filter(r => r.days.includes(weekday)).forEach(r => windows.push([timeToMin(r.start), timeToMin(r.end)]));
+  const isBlocked = (data.blockedDates || []).some(bl => bl.date === date && bl.type === type);
+  if (!isBlocked) {
+    (data.availability?.[type] || []).filter(r => r.days.includes(weekday)).forEach(r => windows.push([timeToMin(r.start), timeToMin(r.end)]));
+  }
   (data.overrides || []).filter(o => o.date === date && o.type === type).forEach(o => windows.push([timeToMin(o.start), timeToMin(o.end)]));
   if (windows.length === 0) return false;
 
@@ -53,7 +56,7 @@ function isRangeAvailable(data, date, time, durationMin, type, excludeBookingId,
   if (!fitsAWindow) return false;
 
   const conflicts = (data.bookings || [])
-    .filter(b => b.id !== excludeBookingId && b.date === date && b.type === type)
+    .filter(b => b.id !== excludeBookingId && b.date === date && b.type === type && b.status !== 'cancelled')
     .some(b => {
       const bs = timeToMin(b.time), be = bs + (b.durationMin || 60);
       return reqStart < be && reqEnd > bs;
