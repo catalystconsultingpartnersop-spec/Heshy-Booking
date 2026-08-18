@@ -311,7 +311,7 @@ cardElement.on('change', (e)=>{
   updateConfirmButtonState();
 });
 
-let state = { slots: [], bookings: [], clients: [], settings: { meetLink: '', location: '', intakeQuestions: [
+let state = { bookings: [], clients: [], overrides: [], settings: { meetLink: '', location: '', durationOptions: [60], intakeQuestions: [
   "What's your name and what do you do?",
   "What's the main challenge or decision you're facing right now?",
   "What does success look like if this session goes well?",
@@ -336,42 +336,6 @@ const DOW = ['Sun','Mon','Tue','Wed','Thu','Fri','Sat'];
 function timeToMin(t){ const [h,m] = t.split(':').map(Number); return h*60+m; }
 function pad2(n){ return String(n).padStart(2,'0'); }
 function dateStr(d){ return d.getFullYear()+'-'+pad2(d.getMonth()+1)+'-'+pad2(d.getDate()); }
-function generateSlotsFromRules(weeksAhead){
-  const bookedSlotIds = new Set(state.bookings.map(b=>b.slotId));
-  const existingMap = new Map();
-  state.slots.forEach(s=> existingMap.set(s.date+'|'+s.time+'|'+s.type, s));
-  const today = new Date(); today.setHours(0,0,0,0);
-  const added = [];
-  for(let i=0;i<weeksAhead*7;i++){
-    const d = new Date(today); d.setDate(d.getDate()+i);
-    const dow = d.getDay();
-    const ds = dateStr(d);
-    ['virtual','in-person'].forEach(type=>{
-      (state.availability[type]||[]).forEach(rule=>{
-        if(rule.days.includes(dow)){
-          let cursor = timeToMin(rule.start);
-          const endMin = timeToMin(rule.end);
-          while(cursor + 60 <= endMin){
-            const timeStr = pad2(Math.floor(cursor/60))+':'+pad2(cursor%60);
-            const key = ds+'|'+timeStr+'|'+type;
-            const existing = existingMap.get(key);
-            if(!existing){
-              const slot = { id: uid(), date: ds, time: timeStr, duration: 60, type };
-              state.slots.push(slot);
-              existingMap.set(key, slot);
-              added.push(slot);
-            } else if(existing.duration !== 60 && !bookedSlotIds.has(existing.id)){
-              existing.duration = 60;
-              added.push(existing);
-            }
-            cursor += 60;
-          }
-        }
-      });
-    });
-  }
-  return added;
-}
 let adminToken = (typeof sessionStorage !== 'undefined' && sessionStorage.getItem('heshyAdminToken')) || '';
 let adminUnlocked = !!adminToken;
 let view = (() => {
@@ -381,11 +345,13 @@ let view = (() => {
   return 'client';
 })();
 let bookingStep = 1;
-let selectedSlot = null;
+let selectedDuration = 60;
+let selectedStartTime = null;
 let selectedDay = null;
 let selectedType = 'virtual';
 let clientForm = { name:'', email:'', phone:'', intakeAnswers:[], wgPdfName:'', wgPdfData:'', checkedEmail:'', isNew:false, blocked:false, couponCode:'' };
 let confirmedMeetLink = '';
+let confirmedLocation = '';
 let confirmedComped = false;
 let submitting = false;
 let portalEmail = '';
@@ -398,19 +364,20 @@ let reschedulingId = null;
 let rescheduleType = {};
 let runningTimer = {};
 let timerDisplay = {};
-let newSlot = { date:'', time:'', duration:60, type:'virtual' };
 let newCoupon = { code:'', description:'', maxUses:'' };
 let adminType = 'virtual';
 let adminView = 'dashboard';
 let showScheduleEditor = false;
 let scheduleCalMonth = (()=>{ const d = new Date(); d.setDate(1); d.setHours(0,0,0,0); return d; })();
 let selectedScheduleDate = null;
-let quickAddTime = '';
-let quickAddDuration = 60;
+let overrideStart = '';
+let overrideEnd = '';
+let overrideArea = '';
+let overrideAddress = '';
 let dashboardCalMonth = (()=>{ const d = new Date(); d.setDate(1); d.setHours(0,0,0,0); return d; })();
 let selectedDashboardDate = null;
 let dashboardStatFilter = null;
-function selectAdminType(t){ adminType = t; newSlot.type = t; selectedScheduleDate = null; render(); }
+function selectAdminType(t){ adminType = t; selectedScheduleDate = null; render(); }
 
 function uid(){ return Math.random().toString(36).slice(2,10); }
 function intakeRegionHtml(){
@@ -493,12 +460,11 @@ async function loadState(){
       render();
       return;
     }
-    await fetch('/api/generate-slots', { method: 'POST' }).catch(()=>{});
     const r = await fetch('/api/public-state');
     const data = await r.json();
-    state.slots = data.slots || [];
-    state.bookings = (data.bookedSlotIds || []).map(id => ({ slotId: id }));
-    state.settings = data.settings || { meetLink:'', location:'', intakeQuestions:[] };
+    state.bookings = data.bookings || [];
+    state.overrides = data.overrides || [];
+    state.settings = data.settings || { meetLink:'', location:'', intakeQuestions:[], durationOptions:[60] };
     state.availability = data.availability || { virtual: [], 'in-person': [] };
     await loadCalendarBusy();
     await loadJewishHolidays();
@@ -515,10 +481,12 @@ async function loadAdminState(){
     }
     const data = await r.json();
     state = data;
-    if(!state.settings) state.settings = { meetLink:'', location:'', intakeQuestions:[] };
+    if(!state.settings) state.settings = { meetLink:'', location:'', intakeQuestions:[], durationOptions:[60] };
+    if(!state.settings.durationOptions) state.settings.durationOptions = [60];
     if(!state.clients) state.clients = [];
     if(!state.settings.coupons) state.settings.coupons = [];
     if(!state.availability) state.availability = { virtual: [], 'in-person': [] };
+    if(!state.overrides) state.overrides = [];
   }catch(e){ console.error('admin load failed', e); }
 }
 async function saveState(){
@@ -599,25 +567,84 @@ function isFutureSlot(s){
   const nowTime = String(now.getHours()).padStart(2,'0')+':'+String(now.getMinutes()).padStart(2,'0');
   return s.time > nowTime;
 }
-function openSlots(){
-  const bookedIds = new Set(state.bookings.map(b=>b.slotId));
-  return state.slots.filter(s=>!bookedIds.has(s.id) && s.type===selectedType && !slotOverlapsBusy(s) && !jewishHolidayDates.has(s.date) && isFutureSlot(s)).sort((a,b)=>(a.date+a.time).localeCompare(b.date+b.time));
+function timeToMinC(t){ const [h,m]=t.split(':').map(Number); return h*60+m; }
+function minToTimeC(m){ return String(Math.floor(m/60)).padStart(2,'0')+':'+String(m%60).padStart(2,'0'); }
+function dowOf(ds){ const [y,mo,d]=ds.split('-').map(Number); return new Date(y,mo-1,d).getDay(); }
+
+// Free [startMin,endMin] ranges for a date+type: open windows (recurring weekly rules + one-off
+// overrides for that exact date), minus already-booked times of the same type, minus real Google
+// Calendar busy time. Two clients can book into the same window as long as their times don't overlap.
+function computeFreeRanges(ds, type){
+  const weekday = dowOf(ds);
+  const windows = [];
+  (state.availability[type]||[]).filter(r=>r.days.includes(weekday)).forEach(r=>windows.push([timeToMinC(r.start), timeToMinC(r.end)]));
+  (state.overrides||[]).filter(o=>o.date===ds && o.type===type).forEach(o=>windows.push([timeToMinC(o.start), timeToMinC(o.end)]));
+  if(windows.length===0) return [];
+  windows.sort((a,b)=>a[0]-b[0]);
+  const merged = [windows[0].slice()];
+  for(let i=1;i<windows.length;i++){
+    const last = merged[merged.length-1];
+    if(windows[i][0] <= last[1]) last[1] = Math.max(last[1], windows[i][1]);
+    else merged.push(windows[i].slice());
+  }
+  const busy = (state.bookings||[]).filter(b=>b.date===ds && b.type===type).map(b=>{
+    const s = timeToMinC(b.time); return [s, s+(b.durationMin||60)];
+  });
+  calendarBusy.forEach(b=>{
+    const bs = new Date(b.start), be = new Date(b.end);
+    const dayStart = new Date(ds+'T00:00:00'), dayEnd = new Date(ds+'T23:59:59');
+    if(be <= dayStart || bs >= dayEnd) return;
+    busy.push([Math.max(0, Math.round((bs - dayStart)/60000)), Math.min(24*60, Math.round((be - dayStart)/60000))]);
+  });
+  let free = merged;
+  busy.forEach(([bs,be])=>{
+    const next = [];
+    free.forEach(([fs,fe])=>{
+      if(be<=fs || bs>=fe){ next.push([fs,fe]); return; }
+      if(bs>fs) next.push([fs,bs]);
+      if(be<fe) next.push([be,fe]);
+    });
+    free = next;
+  });
+  return free.filter(([s,e])=>e>s);
 }
-function groupByDate(slots){
-  const g = {};
-  slots.forEach(s=>{ (g[s.date]=g[s.date]||[]).push(s); });
-  return g;
+// Valid start times (15-min granularity) for a chosen duration on a given date, excluding past times.
+function computeStartTimes(ds, type, durationMin){
+  const ranges = computeFreeRanges(ds, type);
+  const times = [];
+  ranges.forEach(([s,e])=>{
+    let cursor = Math.ceil(s/15)*15;
+    while(cursor + durationMin <= e){
+      const t = minToTimeC(cursor);
+      if(isFutureSlot({date:ds, time:t})) times.push(t);
+      cursor += 15;
+    }
+  });
+  return times;
+}
+// Resolves which location applies for a given date+type: a one-off override for that exact date
+// takes priority over the matching recurring weekly rule, so e.g. Mon-Thu can be one office and
+// Friday another.
+function resolveLocation(ds, type){
+  if(type!=='in-person') return null;
+  const override = (state.overrides||[]).find(o=>o.date===ds && o.type===type && (o.generalArea||o.address));
+  if(override) return { generalArea: override.generalArea||'', address: override.address||'' };
+  const weekday = dowOf(ds);
+  const rule = (state.availability[type]||[]).find(r=>r.days.includes(weekday) && (r.generalArea||r.address));
+  if(rule) return { generalArea: rule.generalArea||'', address: rule.address||'' };
+  return { generalArea: '', address: state.settings.location||'' };
 }
 
-function selectSlot(id){ selectedSlot = state.slots.find(s=>s.id===id); render(); }
-function selectDay(d){ selectedDay = d; selectedSlot = null; render(); }
-function selectType(t){ selectedType = t; selectedDay = null; selectedSlot = null; render(); }
+function selectDay(d){ selectedDay = d; selectedStartTime = null; render(); }
+function selectType(t){ selectedType = t; selectedDay = null; selectedStartTime = null; render(); }
+function selectDuration(d){ selectedDuration = d; selectedDay = null; selectedStartTime = null; render(); }
+function selectStartTime(t){ selectedStartTime = t; render(); }
 function goStep(n){ bookingStep = n; render(); }
 function backToClient(){
   view = 'client'; history.replaceState(null, '', '#');
-  bookingStep=1; selectedSlot=null;
+  bookingStep=1; selectedStartTime=null;
   clientForm={name:'',email:'',phone:'',intakeAnswers:[],wgPdfName:'',wgPdfData:'',checkedEmail:'',isNew:false,blocked:false,couponCode:''};
-  confirmedMeetLink=''; confirmedComped=false;
+  confirmedMeetLink=''; confirmedLocation=''; confirmedComped=false;
   cardComplete=false; cardErrorMsg=''; if(cardElement) cardElement.clear();
   render();
 }
@@ -687,7 +714,8 @@ async function confirmBooking(){
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
-        slotId: selectedSlot.id, name: clientForm.name, email: clientForm.email, phone: clientForm.phone,
+        date: selectedDay, time: selectedStartTime, durationMin: selectedDuration, type: selectedType,
+        name: clientForm.name, email: clientForm.email, phone: clientForm.phone,
         intakeAnswers: clientForm.intakeAnswers, wgPdfName: clientForm.wgPdfName, wgPdfData: clientForm.wgPdfData,
         stripeCustomerId: setupData.customerId, couponCode: clientForm.couponCode
       })
@@ -695,6 +723,7 @@ async function confirmBooking(){
     const bookingData = await bookingRes.json();
     if(bookingData.error){ throw new Error(bookingData.error); }
     if(bookingData.meetLink) confirmedMeetLink = bookingData.meetLink;
+    if(bookingData.location) confirmedLocation = bookingData.location;
     confirmedComped = !!bookingData.comped;
 
     submitting = false;
@@ -708,7 +737,7 @@ async function confirmBooking(){
   }
 }
 
-let newRule = { days: [], start:'', end:'' };
+let newRule = { days: [], start:'', end:'', generalArea:'', address:'' };
 function toggleRuleDay(d){
   const i = newRule.days.indexOf(d);
   if(i>-1) newRule.days.splice(i,1); else newRule.days.push(d);
@@ -716,9 +745,10 @@ function toggleRuleDay(d){
 }
 async function addRule(){
   if(newRule.days.length===0 || !newRule.start || !newRule.end) return;
-  state.availability[adminType].push({ id: uid(), days: newRule.days.slice(), start: newRule.start, end: newRule.end });
-  newRule = { days: [], start:'', end:'' };
-  generateSlotsFromRules(8);
+  const rule = { id: uid(), days: newRule.days.slice(), start: newRule.start, end: newRule.end };
+  if(adminType==='in-person'){ rule.generalArea = newRule.generalArea.trim(); rule.address = newRule.address.trim(); }
+  state.availability[adminType].push(rule);
+  newRule = { days: [], start:'', end:'', generalArea:'', address:'' };
   await saveState(); render();
 }
 async function removeRule(id){
@@ -748,12 +778,6 @@ async function removeCoupon(code){
   state.settings.coupons = (state.settings.coupons||[]).filter(c=>c.code!==code);
   await saveState(); render();
 }
-async function addSlot(){
-  if(!newSlot.date || !newSlot.time) return;
-  state.slots.push({ id: uid(), date:newSlot.date, time:newSlot.time, duration:Number(newSlot.duration), type:adminType });
-  newSlot = { date:'', time:'', duration:60, type:adminType };
-  await saveState(); render();
-}
 async function updateSettings(field, val, sourceElId){
   state.settings[field] = val;
   const ok = await saveState();
@@ -775,7 +799,7 @@ async function setClientBlocked(id, blocked){
   c.blocked = blocked;
   await saveState(); render();
 }
-async function removeSlot(id){ state.slots = state.slots.filter(s=>s.id!==id); await saveState(); render(); }
+async function removeOverride(id){ state.overrides = (state.overrides||[]).filter(o=>o.id!==id); await saveState(); render(); }
 async function updateBooking(id, patch){
   const b = state.bookings.find(x=>x.id===id); if(!b) return;
   Object.assign(b, patch); await saveState(); render();
@@ -884,7 +908,7 @@ async function checkPortal(){
 }
 function portalBookAgain(){
   view = 'client'; history.replaceState(null, '', '#');
-  bookingStep = 1; selectedSlot = null;
+  bookingStep = 1; selectedStartTime = null;
   clientForm = { name: portalClient.name, email: portalEmail, phone: portalClient.phone||'', intakeAnswers: [], wgPdfName:'', wgPdfData:'', checkedEmail:'', isNew:false, blocked:false };
   render();
 }
@@ -928,9 +952,8 @@ function renderPortal(){
 
 function renderClient(){
   const pct = bookingStep===1 ? 10 : bookingStep===2 ? 55 : 100;
-  const slots = openSlots();
-  const grouped = groupByDate(slots);
-  const dates = Object.keys(grouped).sort();
+  const durationOptions = (state.settings.durationOptions && state.settings.durationOptions.length) ? state.settings.durationOptions : [60];
+  if(!durationOptions.includes(selectedDuration)) selectedDuration = durationOptions[0];
 
   let inner = '';
   if(bookingStep===1){
@@ -939,41 +962,67 @@ function renderClient(){
       <div class="type-btn ${selectedType==='virtual'?'active':''}" data-type="virtual">Online</div>
       <div class="type-btn ${selectedType==='in-person'?'active':''}" data-type="in-person">In person</div>
     </div>`;
-    if(dates.length===0){
-      inner += `<div class="empty">No open ${selectedType==='virtual'?'online':'in-person'} times right now.</div>`;
+    if(durationOptions.length > 1){
+      inner += `<div class="section-title" style="margin-top:20px;">Session length</div>`;
+      inner += `<div class="type-toggle">`;
+      durationOptions.slice().sort((a,b)=>a-b).forEach(d=>{
+        const label = d===60 ? '60 min <span class="std-mark">(standard)</span>' : `${d} min <span class="std-mark">(extended)</span>`;
+        inner += `<div class="type-btn ${selectedDuration===d?'active':''}" data-duration="${d}">${label}</div>`;
+      });
+      inner += `</div>`;
+    }
+    // Find the next ~56 days that have at least one valid start time for the chosen type+duration.
+    const candidateDates = [];
+    for(let i=0;i<56;i++){
+      const d = new Date(); d.setDate(d.getDate()+i);
+      const ds = dateStr(d);
+      if(jewishHolidayDates.has(ds)) continue;
+      const times = computeStartTimes(ds, selectedType, selectedDuration);
+      if(times.length>0) candidateDates.push({ date: ds, times });
+    }
+    if(candidateDates.length===0){
+      inner += `<div class="empty">No open ${selectedType==='virtual'?'online':'in-person'} times right now for a ${selectedDuration}-min session.</div>`;
     } else {
-      if(!selectedDay || !dates.includes(selectedDay)) selectedDay = dates[0];
+      if(!selectedDay || !candidateDates.some(c=>c.date===selectedDay)) selectedDay = candidateDates[0].date;
       inner += `<div class="day-strip">`;
-      dates.forEach(d=>{
-        const dt = new Date(d+'T00:00:00');
+      candidateDates.forEach(c=>{
+        const dt = new Date(c.date+'T00:00:00');
         const dow = dt.toLocaleDateString('en-US',{weekday:'short'});
         const dnum = dt.getDate();
-        const active = d===selectedDay ? 'active' : '';
-        inner += `<div class="day-cell ${active}" data-day="${d}">
+        const active = c.date===selectedDay ? 'active' : '';
+        inner += `<div class="day-cell ${active}" data-day="${c.date}">
           <div class="dow">${dow}</div>
           <div class="dnum">${dnum}</div>
-          <div class="dcount">${grouped[d].length}</div>
+          <div class="dcount">${c.times.length}</div>
         </div>`;
       });
       inner += `</div>`;
+      if(selectedType==='in-person'){
+        const loc = resolveLocation(selectedDay, 'in-person');
+        if(loc && loc.generalArea){
+          inner += `<div class="note" style="margin-bottom:14px;">In-person sessions this day: <strong>${loc.generalArea}</strong>. Exact address sent once you book.</div>`;
+        }
+      }
+      const dayTimes = (candidateDates.find(c=>c.date===selectedDay) || {times:[]}).times;
       inner += `<div class="time-grid">`;
-      grouped[selectedDay].forEach(s=>{
-        const sel = selectedSlot && selectedSlot.id===s.id ? 'selected' : '';
-        inner += `<div class="time-cell ${sel}" data-slot="${s.id}">
-          <div class="time">${fmtTime(s.time)}</div>
-          <div class="format">${s.duration} min</div>
+      dayTimes.forEach(t=>{
+        const sel = selectedStartTime===t ? 'selected' : '';
+        inner += `<div class="time-cell ${sel}" data-start-time="${t}">
+          <div class="time">${fmtTime(t)}</div>
+          <div class="format">${selectedDuration} min</div>
         </div>`;
       });
       inner += `</div>`;
-      inner += `<div class="btn-row"><button class="primary" id="toStep2" ${selectedSlot?'':'disabled'}>Continue</button></div>`;
+      inner += `<div class="btn-row"><button class="primary" id="toStep2" ${selectedStartTime?'':'disabled'}>Continue</button></div>`;
     }
   } else if(bookingStep===2){
     inner += `<h1>Your details</h1>`;
     inner += `
       <div class="fact">
-        <div class="fact-row"><span>Time</span><span>${fmtDate(selectedSlot.date)}, ${fmtTime(selectedSlot.time)}</span></div>
-        <div class="fact-row"><span>Format</span><span>${selectedSlot.type==='virtual'?'Video call':'In person'}</span></div>
-        <div class="fact-row"><span>Rate</span><span>$500 per hour</span></div>
+        <div class="fact-row"><span>Time</span><span>${fmtDate(selectedDay)}, ${fmtTime(selectedStartTime)}</span></div>
+        <div class="fact-row"><span>Length</span><span>${selectedDuration} min</span></div>
+        <div class="fact-row"><span>Format</span><span>${selectedType==='virtual'?'Video call':'In person'}</span></div>
+        <div class="fact-row"><span>Rate</span><span>$500/hour &mdash; about ${money(selectedDuration/60*500)} for this session</span></div>
         <div class="fact-row"><span>Charged</span><span>After the session, for actual time used</span></div>
         <div class="fact-row"><span>Receipt</span><span>Emailed automatically once charged</span></div>
       </div>
@@ -1009,14 +1058,15 @@ function renderClient(){
         <h1>Booked.</h1>
         <p>A confirmation is on its way to your email.</p>
         <div class="fact">
-          <div class="fact-row"><span>Time</span><span>${fmtDate(selectedSlot.date)}, ${fmtTime(selectedSlot.time)}</span></div>
-          <div class="fact-row"><span>Format</span><span>${selectedSlot.type==='virtual'?'Video call':'In person'}</span></div>
-          <div class="fact-row"><span>Rate</span><span>${confirmedComped ? 'Complimentary — no charge' : '$500 per hour, charged after the session'}</span></div>
+          <div class="fact-row"><span>Time</span><span>${fmtDate(selectedDay)}, ${fmtTime(selectedStartTime)}</span></div>
+          <div class="fact-row"><span>Length</span><span>${selectedDuration} min</span></div>
+          <div class="fact-row"><span>Format</span><span>${selectedType==='virtual'?'Video call':'In person'}</span></div>
+          <div class="fact-row"><span>Rate</span><span>${confirmedComped ? 'Complimentary — no charge' : '$500/hour, about ' + money(selectedDuration/60*500) + ' for this session'}</span></div>
           ${confirmedComped ? `<div class="fact-row"><span>Coupon</span><span>${clientForm.couponCode}</span></div>` : ''}
         </div>
-        ${selectedSlot.type==='virtual'
+        ${selectedType==='virtual'
           ? `<div class="join-block"><div class="section-title">Join link</div><a href="${confirmedMeetLink||'#'}" class="join-link">${confirmedMeetLink||'Link will be sent before the session'}</a></div>`
-          : `<div class="join-block"><div class="section-title">Location</div><div class="location-text">${(state.settings.location||'Address will be sent before the session').replace(/\n/g,'<br>')}</div></div>`}
+          : `<div class="join-block"><div class="section-title">Location</div><div class="location-text">${(confirmedLocation||'Address will be sent before the session').replace(/\n/g,'<br>')}</div></div>`}
       </div>
     `;
   }
@@ -1079,7 +1129,15 @@ function renderScheduleCalendar(){
   const todayDs = dateStr(today);
 
   const countsForType = {};
-  state.slots.forEach(s=>{ if(s.type===adminType && isFutureSlot(s)) countsForType[s.date] = (countsForType[s.date]||0)+1; });
+  const today0 = new Date(); today0.setHours(0,0,0,0);
+  for(let i=0;i<60;i++){
+    const d = new Date(today0); d.setDate(d.getDate()+i);
+    const ds = dateStr(d);
+    const weekday = d.getDay();
+    const hasRule = (state.availability[adminType]||[]).some(r=>r.days.includes(weekday));
+    const hasOverride = (state.overrides||[]).some(o=>o.date===ds && o.type===adminType);
+    if(hasRule || hasOverride) countsForType[ds] = true;
+  }
 
   let cells = '';
   for(let i=0;i<firstDow;i++) cells += `<div class="cal-cell empty"></div>`;
@@ -1117,61 +1175,57 @@ function renderScheduleCalendar(){
 function renderDayDetail(){
   if(!selectedScheduleDate) return '';
   const ds = selectedScheduleDate;
-  const daySlots = state.slots.filter(s=>s.type===adminType && s.date===ds).sort((a,b)=>a.time.localeCompare(b.time));
-  const bookedIds = new Set(state.bookings.map(b=>b.slotId));
   const isHoliday = jewishHolidayDates.has(ds);
-  let chips = daySlots.length===0 ? `<div class="empty">No times set for this day.</div>` : '';
-  daySlots.forEach(s=>{
-    const isBooked = bookedIds.has(s.id);
-    chips += `<span class="slot-chip ${isBooked?'booked':''}">${fmtTime(s.time)}${isBooked?'':`<button class="chip-x" data-remove-slot="${s.id}" title="Remove">&times;</button>`}</span>`;
-  });
+  const weekday = dowOf(ds);
+  const recurring = (state.availability[adminType]||[]).filter(r=>r.days.includes(weekday));
+  const dayOverrides = (state.overrides||[]).filter(o=>o.date===ds && o.type===adminType);
+  let recurringHtml = recurring.length===0 ? '' : recurring.map(r=>`<div class="row"><div><div class="main">${fmtTimeShort(r.start)} &ndash; ${fmtTimeShort(r.end)}</div><div class="sub">From your weekly pattern${r.generalArea?' &middot; '+r.generalArea:''}</div></div></div>`).join('');
+  let overrideHtml = dayOverrides.length===0 ? '' : dayOverrides.map(o=>`
+    <div class="row">
+      <div><div class="main">${fmtTimeShort(o.start)} &ndash; ${fmtTimeShort(o.end)}</div><div class="sub">One-off, this date only${o.generalArea?' &middot; '+o.generalArea:''}</div></div>
+      <button class="ghost small" data-remove-override="${o.id}">Remove</button>
+    </div>`).join('');
   return `
     <div class="day-detail">
       <div class="day-detail-header">${fmtDate(ds)}</div>
-      ${isHoliday ? `<div class="note">${jewishHolidayNames[ds]||'Jewish holiday'} &mdash; stays unavailable regardless of times added here.</div>` : ''}
-      <div class="slot-chip-row" style="margin:10px 0 16px;">${chips}</div>
+      ${isHoliday ? `<div class="note">${jewishHolidayNames[ds]||'Jewish holiday'} &mdash; stays unavailable regardless of windows added here.</div>` : ''}
+      ${recurringHtml || overrideHtml ? '' : `<div class="empty">No availability defined for this day.</div>`}
+      ${recurringHtml}
+      ${overrideHtml}
       ${!isHoliday ? `
-      <div class="row2">
-        <div><label>Add a time</label><input type="time" id="quickAddTime" value="${quickAddTime}"></div>
-        <div><label>Duration</label>
-          <select id="quickAddDuration">
-            <option value="30" ${quickAddDuration==30?'selected':''}>30 min</option>
-            <option value="60" ${quickAddDuration==60?'selected':''}>60 min</option>
-            <option value="90" ${quickAddDuration==90?'selected':''}>90 min</option>
-          </select>
-        </div>
+      <div class="row2" style="margin-top:14px;">
+        <div><label>Add one-off availability</label><input type="time" id="overrideStart" value="${overrideStart}" placeholder="Start"></div>
+        <div><label>&nbsp;</label><input type="time" id="overrideEnd" value="${overrideEnd}" placeholder="End"></div>
       </div>
-      <div style="margin-top:12px;"><button class="primary small" id="quickAddBtn">Add time</button></div>
+      ${adminType==='in-person' ? `
+      <div style="margin-top:10px;"><label>General area <span class="note" style="display:inline;">(shown to clients before they book)</span></label><input type="text" id="overrideArea" value="${overrideArea}" placeholder="e.g. Boro Park"></div>
+      <div style="margin-top:10px;"><label>Full address &amp; instructions <span class="note" style="display:inline;">(sent after booking)</span></label><textarea id="overrideAddress" placeholder="Address, parking, floor, buzzer code, etc.">${overrideAddress}</textarea></div>
+      ` : ''}
+      <div class="note" style="margin-top:6px;">Just for this date &mdash; doesn't change your regular weekly pattern.</div>
+      <div style="margin-top:12px;"><button class="primary small" id="addOverrideBtn">Add for this date</button></div>
       ` : ''}
     </div>
   `;
 }
 
 function renderAdmin(){
-  const bookedIds = new Set(state.bookings.map(b=>b.slotId));
   const todayDs = (()=>{ const d=new Date(); return d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')+'-'+String(d.getDate()).padStart(2,'0'); })();
-  const typeSlots = state.slots.filter(s=>s.type===adminType && s.date>=todayDs && !jewishHolidayDates.has(s.date) && isFutureSlot(s));
   let rulesHtml = (state.availability[adminType]||[]).length===0 ? `<div class="empty">No weekly pattern set.</div>` : '';
   (state.availability[adminType]||[]).forEach(r=>{
     rulesHtml += `
       <div class="row">
-        <div><div class="main">${daysLabel(r.days)}</div><div class="sub">${fmtTimeShort(r.start)} &ndash; ${fmtTimeShort(r.end)}</div></div>
+        <div><div class="main">${daysLabel(r.days)}</div><div class="sub">${fmtTimeShort(r.start)} &ndash; ${fmtTimeShort(r.end)}${r.generalArea?' &middot; '+r.generalArea:''}</div></div>
         <button class="ghost small" data-remove-rule="${r.id}">Remove</button>
       </div>`;
   });
-  let slotsHtml = typeSlots.length===0 ? `<div class="empty">No ${adminType==='virtual'?'online':'in-person'} slots added yet.</div>` : '';
-  const slotsByDate = {};
-  typeSlots.forEach(s=>{ (slotsByDate[s.date]=slotsByDate[s.date]||[]).push(s); });
-  Object.keys(slotsByDate).sort().forEach(d=>{
-    const daySlots = slotsByDate[d].sort((a,b)=>a.time.localeCompare(b.time));
-    slotsHtml += `<div class="slot-day-row">
-      <div class="slot-day-label">${fmtDate(d)}</div>
-      <div class="slot-chip-row">`;
-    daySlots.forEach(s=>{
-      const isBooked = bookedIds.has(s.id);
-      slotsHtml += `<span class="slot-chip ${isBooked?'booked':''}">${fmtTime(s.time)}${isBooked?'':`<button class="chip-x" data-remove-slot="${s.id}" title="Remove">&times;</button>`}</span>`;
-    });
-    slotsHtml += `</div></div>`;
+  const upcomingOverrides = (state.overrides||[]).filter(o=>o.type===adminType && o.date>=todayDs).sort((a,b)=>a.date.localeCompare(b.date));
+  let overridesListHtml = upcomingOverrides.length===0 ? `<div class="empty">No one-off dates added.</div>` : '';
+  upcomingOverrides.forEach(o=>{
+    overridesListHtml += `
+      <div class="row">
+        <div><div class="main">${fmtDate(o.date)}</div><div class="sub">${fmtTimeShort(o.start)} &ndash; ${fmtTimeShort(o.end)}</div></div>
+        <button class="ghost small" data-remove-override="${o.id}">Remove</button>
+      </div>`;
   });
 
   const clientById = {};
@@ -1195,9 +1249,10 @@ function renderAdmin(){
           ${timerBlock}
           ${meetBlock}
           ${(b.calendarEventId || b.meetLink) ? `<button class="ghost small" data-fetch-gemini="${b.id}" style="margin-bottom:14px;">Fetch notes & duration</button><span id="gemini-msg-${b.id}" style="font-size:12.5px;margin-left:10px;"></span>` : ''}
-          <label>Internal notes</label>
+          <label>Internal notes <span class="note" style="display:inline;">(private &mdash; only you see this)</span></label>
           <textarea class="notes-textarea" data-summary="${b.id}">${b.summary||''}</textarea>
-          <label>Client-facing summary</label>
+          <label style="margin-top:14px;display:block;">Client-facing summary <span class="note" style="display:inline;">(shown to the client in their portal)</span></label>
+          <button class="ghost small" data-copy-to-client="${b.id}" style="margin-bottom:8px;">Copy internal notes here</button>
           <textarea class="notes-textarea" data-clientsummary="${b.id}">${b.clientSummary||''}</textarea>
         </div>
     `;
@@ -1357,7 +1412,7 @@ function renderAdmin(){
         ${showScheduleEditor ? `
         <div style="margin-top:24px;padding-top:20px;border-top:1px solid var(--line);">
           <div class="section-title">Weekly pattern</div>
-          <p class="note" style="margin:0 0 14px;">This is the schedule that repeats every week. Add or remove a day/time block below.</p>
+          <p class="note" style="margin:0 0 14px;">Open windows that repeat every week. Clients pick their own session length within whatever's open \u2014 set the session lengths you offer in Settings.</p>
           ${rulesHtml}
           <div class="day-toggle-row" style="margin-top:14px;">
             ${DOW.map((d,i)=>`<div class="day-toggle ${newRule.days.includes(i)?'active':''}" data-rule-day="${i}">${d[0]}</div>`).join('')}
@@ -1366,7 +1421,16 @@ function renderAdmin(){
             <div><label>Start time</label><input type="time" id="nr-start" value="${newRule.start}"></div>
             <div><label>End time</label><input type="time" id="nr-end" value="${newRule.end}"></div>
           </div>
+          ${adminType==='in-person' ? `
+          <div style="margin-top:10px;"><label>General area <span class="note" style="display:inline;">(shown to clients before they book)</span></label><input type="text" id="nr-area" value="${newRule.generalArea}" placeholder="e.g. Boro Park"></div>
+          <div style="margin-top:10px;"><label>Full address &amp; instructions <span class="note" style="display:inline;">(sent after booking)</span></label><textarea id="nr-address" placeholder="Address, parking, floor, buzzer code, etc.">${newRule.address}</textarea></div>
+          ` : ''}
           <div style="margin-top:14px;"><button class="ghost small" id="addRuleBtn">Add pattern</button></div>
+        </div>
+        <div style="margin-top:24px;padding-top:20px;border-top:1px solid var(--line);">
+          <div class="section-title">Upcoming one-off dates</div>
+          <p class="note" style="margin:0 0 14px;">Extra availability added for a specific date only. Click a date on the calendar above to add one.</p>
+          ${overridesListHtml}
         </div>
         ` : ''}
       </div>
@@ -1513,10 +1577,17 @@ function renderAdmin(){
           <a class="wg-link" href="/api/google-auth-url?token=${encodeURIComponent(adminToken)}">${calendarConnected?'Reconnect':'Connect Google Calendar'}</a>
         </div>
         <div class="note">When connected, times that conflict with your personal calendar won't show as bookable, and booked sessions get added to your calendar automatically.</div>
+        <label>Session lengths you offer</label>
+        <div class="note" style="margin-bottom:8px;">Clients choose from these when booking, within whatever time you have open. 60 min is the standard, pre-selected option.</div>
+        <div style="display:flex;gap:18px;">
+          <label style="display:flex;align-items:center;gap:6px;font-weight:normal;"><input type="checkbox" id="dur-60" ${(state.settings.durationOptions||[60]).includes(60)?'checked':''}> 60 min</label>
+          <label style="display:flex;align-items:center;gap:6px;font-weight:normal;"><input type="checkbox" id="dur-120" ${(state.settings.durationOptions||[60]).includes(120)?'checked':''}> 120 min (extended)</label>
+        </div>
         <label>Backup video call link</label>
         <div class="note" style="margin-bottom:8px;">Every booking gets its own unique Meet link automatically when Google Calendar is connected \u2014 this field is only used as a fallback for the rare case a booking happens while Calendar is disconnected.</div>
         <input type="text" id="set-meet" placeholder="https://meet.google.com/xxx-xxxx-xxx" value="${state.settings.meetLink}">
-        <label>In-person location and instructions</label>
+        <label>Default in-person location <span class="note" style="display:inline;">(fallback only)</span></label>
+        <div class="note" style="margin-bottom:8px;">Set the actual location per day in Schedule \u2014 Mon-Thu can be a different address than Friday, for example. This is only used if a day's own location isn't set.</div>
         <textarea id="set-location" placeholder="Address, parking, floor, buzzer code, etc.">${state.settings.location}</textarea>
         <label>Intake questions (one per line, asked only on a client's first booking)</label>
         <textarea id="set-intake" style="min-height:140px;">${(state.settings.intakeQuestions||[]).join('\n')}</textarea>
@@ -1582,7 +1653,8 @@ function attachHandlers(){
   if(view==='portal') return;
 
   if(view==='client'){
-    document.querySelectorAll('[data-slot]').forEach(el=>{ el.onclick = ()=>selectSlot(el.getAttribute('data-slot')); });
+    document.querySelectorAll('[data-start-time]').forEach(el=>{ el.onclick = ()=>selectStartTime(el.getAttribute('data-start-time')); });
+    document.querySelectorAll('[data-duration]').forEach(el=>{ el.onclick = ()=>selectDuration(Number(el.getAttribute('data-duration'))); });
     document.querySelectorAll('[data-day]').forEach(el=>{ el.onclick = ()=>selectDay(el.getAttribute('data-day')); });
     document.querySelectorAll('[data-type]').forEach(el=>{ el.onclick = ()=>selectType(el.getAttribute('data-type')); });
     const to2 = $('toStep2'); if(to2) to2.onclick = ()=>goStep(2);
@@ -1601,10 +1673,7 @@ function attachHandlers(){
     const conf = $('confirmBtn'); if(conf) conf.onclick = confirmBooking;
     mountCardElementIfNeeded();
   } else {
-    const dateEl=$('ns-date'), timeEl=$('ns-time'), durEl=$('ns-duration');
-    if(dateEl) dateEl.oninput = e=> newSlot.date = e.target.value;
-    if(timeEl) timeEl.oninput = e=> newSlot.time = e.target.value;
-    if(durEl) durEl.onchange = e=> newSlot.duration = e.target.value;
+
     document.querySelectorAll('[data-admin-type]').forEach(el=>{ el.onclick = ()=>selectAdminType(el.getAttribute('data-admin-type')); });
     const toggleSchedBtn = $('toggleScheduleEditor'); if(toggleSchedBtn) toggleSchedBtn.onclick = ()=>{ showScheduleEditor = !showScheduleEditor; render(); };
     document.querySelectorAll('[data-admin-view]').forEach(el=>{ el.onclick = ()=>{ adminView = el.getAttribute('data-admin-view'); render(); }; });
@@ -1613,9 +1682,11 @@ function attachHandlers(){
     });
     document.querySelectorAll('[data-rule-day]').forEach(el=>{ el.onclick = ()=>toggleRuleDay(Number(el.getAttribute('data-rule-day'))); });
     document.querySelectorAll('[data-remove-rule]').forEach(el=>{ el.onclick = ()=>removeRule(el.getAttribute('data-remove-rule')); });
-    const nrStart=$('nr-start'), nrEnd=$('nr-end');
+    const nrStart=$('nr-start'), nrEnd=$('nr-end'), nrArea=$('nr-area'), nrAddress=$('nr-address');
     if(nrStart) nrStart.oninput = e=> newRule.start = e.target.value;
     if(nrEnd) nrEnd.oninput = e=> newRule.end = e.target.value;
+    if(nrArea) nrArea.oninput = e=> newRule.generalArea = e.target.value;
+    if(nrAddress) nrAddress.oninput = e=> newRule.address = e.target.value;
     const addRuleBtn = $('addRuleBtn'); if(addRuleBtn) addRuleBtn.onclick = addRule;
     document.querySelectorAll('[data-cal-day]').forEach(el=>{
       el.onclick = ()=>{ selectedScheduleDate = el.getAttribute('data-cal-day'); render(); };
@@ -1634,23 +1705,38 @@ function attachHandlers(){
     if(dashCalPrev) dashCalPrev.onclick = ()=>{ dashboardCalMonth = new Date(dashboardCalMonth.getFullYear(), dashboardCalMonth.getMonth()-1, 1); render(); };
     const dashCalNext = $('dashCalNextMonth');
     if(dashCalNext) dashCalNext.onclick = ()=>{ dashboardCalMonth = new Date(dashboardCalMonth.getFullYear(), dashboardCalMonth.getMonth()+1, 1); render(); };
-    const qaTimeEl = $('quickAddTime'), qaDurEl = $('quickAddDuration');
-    if(qaTimeEl) qaTimeEl.oninput = e=> quickAddTime = e.target.value;
-    if(qaDurEl) qaDurEl.onchange = e=> quickAddDuration = Number(e.target.value);
-    const quickAddBtn = $('quickAddBtn');
-    if(quickAddBtn) quickAddBtn.onclick = async ()=>{
-      if(!selectedScheduleDate || !quickAddTime) return;
-      state.slots.push({ id: uid(), date: selectedScheduleDate, time: quickAddTime, duration: quickAddDuration, type: adminType });
-      quickAddTime = '';
+    const ovStartEl = $('overrideStart'), ovEndEl = $('overrideEnd'), ovAreaEl = $('overrideArea'), ovAddrEl = $('overrideAddress');
+    if(ovStartEl) ovStartEl.oninput = e=> overrideStart = e.target.value;
+    if(ovEndEl) ovEndEl.oninput = e=> overrideEnd = e.target.value;
+    if(ovAreaEl) ovAreaEl.oninput = e=> overrideArea = e.target.value;
+    if(ovAddrEl) ovAddrEl.oninput = e=> overrideAddress = e.target.value;
+    const addOverrideBtn = $('addOverrideBtn');
+    if(addOverrideBtn) addOverrideBtn.onclick = async ()=>{
+      if(!selectedScheduleDate || !overrideStart || !overrideEnd) return;
+      if(!state.overrides) state.overrides = [];
+      const ov = { id: uid(), date: selectedScheduleDate, start: overrideStart, end: overrideEnd, type: adminType };
+      if(adminType==='in-person'){ ov.generalArea = overrideArea.trim(); ov.address = overrideAddress.trim(); }
+      state.overrides.push(ov);
+      overrideStart = ''; overrideEnd = ''; overrideArea = ''; overrideAddress = '';
       await saveState(); render();
     };
-    const meetEl=$('set-meet'), locEl=$('set-location'), intakeEl=$('set-intake');
+    document.querySelectorAll('[data-remove-override]').forEach(el=>{
+      el.onclick = async ()=>{
+        state.overrides = (state.overrides||[]).filter(o=>o.id!==el.getAttribute('data-remove-override'));
+        await saveState(); render();
+      };
+    });
+    const meetEl=$('set-meet'), locEl=$('set-location'), intakeEl=$('set-intake'), dur60El=$('dur-60'), dur120El=$('dur-120');
     const saveSettingsBtn = $('save-settings-btn');
     if(saveSettingsBtn){
       saveSettingsBtn.onclick = async ()=>{
         state.settings.meetLink = meetEl ? meetEl.value : state.settings.meetLink;
         state.settings.location = locEl ? locEl.value : state.settings.location;
         state.settings.intakeQuestions = intakeEl ? intakeEl.value.split('\n').map(s=>s.trim()).filter(Boolean) : state.settings.intakeQuestions;
+        const chosenDurations = [];
+        if(dur60El && dur60El.checked) chosenDurations.push(60);
+        if(dur120El && dur120El.checked) chosenDurations.push(120);
+        state.settings.durationOptions = chosenDurations.length ? chosenDurations : [60];
         saveSettingsBtn.disabled = true; saveSettingsBtn.textContent = 'Saving…';
         const ok = await saveState();
         saveSettingsBtn.disabled = false; saveSettingsBtn.textContent = 'Save settings';
@@ -1662,14 +1748,13 @@ function attachHandlers(){
         }
       };
     }
-    const addBtn = $('addSlotBtn'); if(addBtn) addBtn.onclick = addSlot;
     const couponCodeEl=$('coupon-code'), couponDescEl=$('coupon-desc'), couponMaxEl=$('coupon-max');
     if(couponCodeEl) couponCodeEl.oninput = e=> newCoupon.code = e.target.value;
     if(couponDescEl) couponDescEl.oninput = e=> newCoupon.description = e.target.value;
     if(couponMaxEl) couponMaxEl.oninput = e=> newCoupon.maxUses = e.target.value;
     const addCouponBtn = $('addCouponBtn'); if(addCouponBtn) addCouponBtn.onclick = addCoupon;
     document.querySelectorAll('[data-remove-coupon]').forEach(el=>{ el.onclick = ()=>removeCoupon(el.getAttribute('data-remove-coupon')); });
-    document.querySelectorAll('[data-remove-slot]').forEach(el=>{ el.onclick = ()=>removeSlot(el.getAttribute('data-remove-slot')); });
+
     document.querySelectorAll('[data-mark-complete]').forEach(el=>{ el.onclick = ()=>markComplete(el.getAttribute('data-mark-complete')); });
     document.querySelectorAll('[data-charge]').forEach(el=>{ el.onclick = ()=>chargeAndReceipt(el.getAttribute('data-charge')); });
     document.querySelectorAll('[data-actual-hours]').forEach(el=>{
@@ -1767,6 +1852,16 @@ function attachHandlers(){
     document.querySelectorAll('[data-meet]').forEach(el=>{ el.onchange = ()=>updateBooking(el.getAttribute('data-meet'), { meetLink: el.value }); });
     document.querySelectorAll('[data-summary]').forEach(el=>{ el.onchange = ()=>updateBooking(el.getAttribute('data-summary'), { summary: el.value }); });
     document.querySelectorAll('[data-clientsummary]').forEach(el=>{ el.onchange = ()=>updateBooking(el.getAttribute('data-clientsummary'), { clientSummary: el.value }); });
+    document.querySelectorAll('[data-copy-to-client]').forEach(el=>{
+      el.onclick = async ()=>{
+        const id = el.getAttribute('data-copy-to-client');
+        const internalEl = document.querySelector(`[data-summary="${id}"]`);
+        const clientEl = document.querySelector(`[data-clientsummary="${id}"]`);
+        if(!internalEl || !clientEl) return;
+        clientEl.value = internalEl.value;
+        await updateBooking(id, { clientSummary: internalEl.value });
+      };
+    });
     document.querySelectorAll('[data-view-client-profile]').forEach(el=>{
       el.onclick = ()=>{ adminView = 'client-detail'; viewingClientId = el.getAttribute('data-view-client-profile'); render(); };
     });
