@@ -1092,6 +1092,11 @@ function portalBookAgain(){
   clientForm = { name: portalClient.name, email: portalEmail, phone: portalClient.phone||'', intakeAnswers: [], wgPdfName:'', wgPdfData:'', checkedEmail:'', isNew:false, blocked:false };
   render();
 }
+function goToPortal(){
+  view = 'portal'; history.replaceState(null, '', '#portal');
+  render();
+  if(portalToken) resumePortalSession();
+}
 
 function renderPortal(){
   if(!portalClient){
@@ -1157,6 +1162,7 @@ function renderClient(){
   let inner = '';
   if(bookingStep===1){
     inner += `<h1>Book a session</h1>`;
+    inner += `<div class="note" style="margin-bottom:20px;">Already a client? <a href="#" data-go-portal="1" style="color:var(--ink);text-decoration:underline;">View your sessions</a></div>`;
     inner += `<div class="type-toggle">
       <div class="type-btn ${selectedType==='virtual'?'active':''}" data-type="virtual">Online</div>
       <div class="type-btn ${selectedType==='in-person'?'active':''}" data-type="in-person">In person</div>
@@ -1944,6 +1950,7 @@ function attachHandlers(){
     portalPhoneInput.onkeydown = e=>{ if(e.key==='Enter') checkPortal(); };
   }
   const portalBookAgainBtn = $('portal-book-again'); if(portalBookAgainBtn) portalBookAgainBtn.onclick = portalBookAgain;
+  document.querySelectorAll('[data-go-portal]').forEach(el=>{ el.onclick = (e)=>{ e.preventDefault(); goToPortal(); }; });
   const portalLogoutBtn = $('portal-logout-btn'); if(portalLogoutBtn) portalLogoutBtn.onclick = portalLogout;
   const portalUpdateCardBtn = $('portal-update-card-btn'); if(portalUpdateCardBtn) portalUpdateCardBtn.onclick = ()=>{ portalShowCardForm = true; portalCardError=''; render(); };
   const portalCancelCardBtn = $('portal-cancel-card-btn'); if(portalCancelCardBtn) portalCancelCardBtn.onclick = ()=>{ portalShowCardForm = false; portalCardError=''; render(); };
