@@ -63,9 +63,27 @@ export function bookingConfirmationEmail(booking, settings) {
   };
 }
 
-export function newBookingAlertEmail(booking) {
+export function newBookingAlertEmail(booking, settings, client) {
   const dateStr = new Date(booking.date + 'T' + booking.time + ':00').toLocaleDateString('en-US', { weekday:'short', month:'short', day:'numeric' });
   const timeStr = new Date(booking.date + 'T' + booking.time + ':00').toLocaleTimeString('en-US', { hour:'numeric', minute:'2-digit' });
+  const questions = (settings && settings.intakeQuestions) || [];
+  const answers = (client && client.intakeAnswers) || booking.intakeAnswers || [];
+  const wgPdfName = (client && client.wgPdfName) || booking.wgPdfName || '';
+  let intakeHtml = '';
+  questions.forEach((q, i) => {
+    if (answers[i]) {
+      intakeHtml += `<div style="margin-bottom:10px;"><div style="font-size:12.5px;color:#6E6E6E;">${q}</div><div style="font-size:13.5px;">${answers[i]}</div></div>`;
+    }
+  });
+  const intakeBlock = intakeHtml
+    ? `<div style="margin-top:20px;padding-top:16px;border-top:1px solid #DEDEDE;font-family:Arial,sans-serif;">
+         <div style="font-size:13.5px;font-weight:bold;margin-bottom:10px;">Intake answers</div>
+         ${intakeHtml}
+       </div>`
+    : '';
+  const wgBlock = wgPdfName
+    ? `<div style="margin-top:14px;font-family:Arial,sans-serif;font-size:13px;color:#6E6E6E;">Working Genius PDF uploaded: ${wgPdfName} (see Manage &rarr; Clients for the file)</div>`
+    : '';
   return {
     subject: `New booking: ${booking.clientName}, ${dateStr}`,
     html: wrap(`
@@ -78,6 +96,8 @@ export function newBookingAlertEmail(booking) {
         ${factRow('Format', booking.type === 'virtual' ? 'Video call' : 'In person')}
         ${booking.type === 'virtual' && booking.meetLink ? factRow('Join link', `<a href="${booking.meetLink}">${booking.meetLink}</a>`) : ''}
       </table>
+      ${intakeBlock}
+      ${wgBlock}
     `)
   };
 }
