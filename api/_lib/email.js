@@ -174,6 +174,8 @@ export function reminderEmail(booking, settings) {
       </table>
       <div style="margin-top:20px;font-family:Arial,sans-serif;font-size:13.5px;">
         <a href="${googleCalendarAddLink(booking, settings)}" style="color:#111111;text-decoration:underline;">Add to calendar</a>
+        &middot;
+        <a href="${(process.env.SITE_URL || 'https://heshy-booking.vercel.app')}/#portal" style="color:#111111;text-decoration:underline;">View my sessions</a>
       </div>
     `)
   };
