@@ -384,6 +384,8 @@ let portalEmail = '';
 let portalClient = null;
 let portalError = '';
 let expandedClientId = null;
+let reschedulingId = null;
+let rescheduleType = {};
 let runningTimer = {};
 let timerDisplay = {};
 let newSlot = { date:'', time:'', duration:60, type:'virtual' };
@@ -420,7 +422,7 @@ function intakeRegionHtml(){
         <div class="section-title" style="display:flex;align-items:center;gap:8px;">
           <span style="font-size:16px;">&#9733;</span> Six Types of Working Genius
         </div>
-        <p>${clientForm.wgPdfName ? 'Attached &mdash; thank you.' : "This helps me understand how you think before we even start &mdash; most clients find it's worth the few minutes. Not required, and you can always add it later."} ${clientForm.wgPdfName ? '' : '<a class="wg-link" href="https://www.workinggenius.com" target="_blank" rel="noopener">Take the assessment</a>, then upload your results PDF here if you have it.'}</p>
+        <p>${clientForm.wgPdfName ? 'Attached &mdash; thank you.' : "This helps me understand how you think before we even start &mdash; most clients find it's worth the few minutes. Not required, and you can always add it later."} ${clientForm.wgPdfName ? '' : '<a class="wg-link" href="https://www.workinggenius.com" target="_blank" rel="noopener">Take the assessment</a> ($25, paid directly to them), then upload your results PDF here if you have it.'}</p>
         <input type="file" id="wg-file" accept="application/pdf">
         <div class="file-name" id="wg-file-name">${clientForm.wgPdfName||''}</div>
       </div>
@@ -818,9 +820,20 @@ async function skipCharge(id){
 async function markComplete(id){ await updateBooking(id, { status:'completed' }); }
 async function cancelBooking(id){
   if(!confirm('Cancel this booking? This frees up the time slot and cannot be undone.')) return;
-  state.bookings = state.bookings.filter(x=>x.id!==id);
-  await saveState();
-  render();
+  try{
+    const res = await fetch('/api/admin-data', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'X-Admin-Token': adminToken },
+      body: JSON.stringify({ action: 'cancel-booking', bookingId: id })
+    });
+    const data = await res.json();
+    if(data.error){ alert('Cancel failed: ' + data.error); return; }
+    if(data.warning){ alert(data.warning); }
+    await loadAdminState();
+    render();
+  }catch(e){
+    alert('Cancel failed: ' + e.message);
+  }
 }
 
 function render(){
@@ -1192,6 +1205,24 @@ function renderAdmin(){
           <button class="ghost small danger-ghost" data-skip-charge="${b.id}" style="margin-top:8px;">Mark complete, don't charge</button>
         </div>`;
     }
+    const isRescheduling = reschedulingId === b.id;
+    const rescheduleBlock = isRescheduling ? `
+      <div class="reschedule-form" style="margin-top:10px;padding:12px;border:1px solid var(--line-strong);border-radius:6px;">
+        <div class="row2">
+          <div><label>New date</label><input type="date" data-reschedule-date="${b.id}" value="${b.date}"></div>
+          <div><label>New time</label><input type="time" data-reschedule-time="${b.id}" value="${b.time}"></div>
+        </div>
+        <label style="margin-top:10px;">Format</label>
+        <div class="type-toggle" style="margin-top:4px;">
+          <div class="type-btn ${(rescheduleType[b.id]||b.type)==='virtual'?'active':''}" data-reschedule-type="${b.id}" data-type-value="virtual">Online</div>
+          <div class="type-btn ${(rescheduleType[b.id]||b.type)==='in-person'?'active':''}" data-reschedule-type="${b.id}" data-type-value="in-person">In person</div>
+        </div>
+        <div style="margin-top:10px;display:flex;gap:8px;">
+          <button class="primary small" data-save-reschedule="${b.id}">Save new time</button>
+          <button class="ghost small" data-cancel-reschedule="${b.id}">Cancel</button>
+        </div>
+      </div>
+    ` : '';
     return `
       <div class="session">
         <div class="session-top">
@@ -1204,7 +1235,11 @@ function renderAdmin(){
         </div>
         ${controls}
         ${action?`<div class="session-actions">${action}</div>`:''}
-        <button class="ghost small danger-ghost" data-cancel-booking="${b.id}" style="margin-top:8px;">Cancel booking</button>
+        <div style="display:flex;gap:8px;margin-top:8px;">
+          <button class="ghost small" data-reschedule-toggle="${b.id}">${isRescheduling?'Close':'Reschedule'}</button>
+          <button class="ghost small danger-ghost" data-cancel-booking="${b.id}">Cancel booking</button>
+        </div>
+        ${rescheduleBlock}
       </div>`;
   }
 
@@ -1554,6 +1589,49 @@ function attachHandlers(){
     });
     document.querySelectorAll('[data-skip-charge]').forEach(el=>{ el.onclick = ()=>skipCharge(el.getAttribute('data-skip-charge')); });
     document.querySelectorAll('[data-cancel-booking]').forEach(el=>{ el.onclick = ()=>cancelBooking(el.getAttribute('data-cancel-booking')); });
+    document.querySelectorAll('[data-reschedule-toggle]').forEach(el=>{
+      el.onclick = ()=>{
+        const id = el.getAttribute('data-reschedule-toggle');
+        reschedulingId = reschedulingId === id ? null : id;
+        render();
+      };
+    });
+    document.querySelectorAll('[data-cancel-reschedule]').forEach(el=>{ el.onclick = ()=>{ reschedulingId = null; render(); }; });
+    document.querySelectorAll('[data-reschedule-type]').forEach(el=>{
+      el.onclick = ()=>{
+        rescheduleType[el.getAttribute('data-reschedule-type')] = el.getAttribute('data-type-value');
+        render();
+      };
+    });
+    document.querySelectorAll('[data-save-reschedule]').forEach(el=>{
+      el.onclick = async ()=>{
+        const id = el.getAttribute('data-save-reschedule');
+        const dateEl = document.querySelector(`[data-reschedule-date="${id}"]`);
+        const timeEl = document.querySelector(`[data-reschedule-time="${id}"]`);
+        const newDate = dateEl ? dateEl.value : '';
+        const newTime = timeEl ? timeEl.value : '';
+        const existing = state.bookings.find(x=>x.id===id);
+        const newType = rescheduleType[id] || (existing ? existing.type : undefined);
+        if(!newDate || !newTime){ alert('Pick a date and time.'); return; }
+        el.disabled = true; el.textContent = 'Saving…';
+        try{
+          const res = await fetch('/api/admin-data', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', 'X-Admin-Token': adminToken },
+            body: JSON.stringify({ action: 'reschedule-booking', bookingId: id, newDate, newTime, newType })
+          });
+          const data = await res.json();
+          if(data.error){ alert('Reschedule failed: ' + data.error); el.disabled = false; el.textContent = 'Save new time'; return; }
+          reschedulingId = null;
+          delete rescheduleType[id];
+          await loadAdminState();
+          render();
+        }catch(e){
+          alert('Reschedule failed: ' + e.message);
+          el.disabled = false; el.textContent = 'Save new time';
+        }
+      };
+    });
     document.querySelectorAll('[data-start-timer]').forEach(el=>{ el.onclick = ()=>startTimer(el.getAttribute('data-start-timer')); });
     document.querySelectorAll('[data-join-start]').forEach(el=>{
       el.onclick = ()=>{
