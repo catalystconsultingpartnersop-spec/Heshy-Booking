@@ -1,4 +1,5 @@
 import { kv } from '@vercel/kv';
+import { put } from '@vercel/blob';
 import { sendEmail, bookingConfirmationEmail, newBookingAlertEmail } from './_lib/email.js';
 
 async function getGoogleAccessToken() {
@@ -63,9 +64,19 @@ export default async function handler(req, res) {
       return res.status(403).json({ error: 'Unable to book at this time.' });
     }
     if (!client) {
+      let storedWgPdfData = '';
+      if (wgPdfData && wgPdfName) {
+        try {
+          const base64 = wgPdfData.split(',')[1];
+          const buffer = Buffer.from(base64, 'base64');
+          const safeName = wgPdfName.replace(/[^a-zA-Z0-9._-]/g, '_');
+          const blob = await put('wg-pdfs/' + Date.now() + '-' + safeName, buffer, { access: 'public', contentType: 'application/pdf' });
+          storedWgPdfData = blob.url;
+        } catch (e) { /* if upload fails, just skip storing the PDF rather than blocking the booking */ }
+      }
       client = {
         id: uid(), name, email, phone,
-        intakeAnswers: intakeAnswers || [], wgPdfName: wgPdfName || '', wgPdfData: wgPdfData || '',
+        intakeAnswers: intakeAnswers || [], wgPdfName: wgPdfName || '', wgPdfData: storedWgPdfData,
         blocked: false, createdAt: Date.now()
       };
       data.clients.push(client);

@@ -1,4 +1,5 @@
 import { kv } from '@vercel/kv';
+import { put } from '@vercel/blob';
 import { verifyAdminToken, randomToken } from './_lib/auth.js';
 
 function defaultState() {
@@ -45,6 +46,24 @@ async function getGoogleAccessToken() {
   return d.access_token || null;
 }
 
+async function handleUploadPdf(req, res) {
+  const { fileName, fileDataUrl } = req.body || {};
+  if (!fileName || !fileDataUrl) return res.status(400).json({ error: 'Missing fileName or fileDataUrl.' });
+  try {
+    const base64 = fileDataUrl.split(',')[1];
+    if (!base64) return res.status(400).json({ error: 'Invalid file data.' });
+    const buffer = Buffer.from(base64, 'base64');
+    const safeName = fileName.replace(/[^a-zA-Z0-9._-]/g, '_');
+    const blob = await put('wg-pdfs/' + Date.now() + '-' + safeName, buffer, {
+      access: 'public',
+      contentType: 'application/pdf'
+    });
+    res.status(200).json({ ok: true, url: blob.url });
+  } catch (e) {
+    res.status(500).json({ error: 'Upload failed: ' + e.message });
+  }
+}
+
 async function handleCancelBooking(req, res) {
   const { bookingId } = req.body || {};
   if (!bookingId) return res.status(400).json({ error: 'Missing bookingId.' });
@@ -62,7 +81,7 @@ async function handleCancelBooking(req, res) {
     try {
       const accessToken = await getGoogleAccessToken();
       if (accessToken) {
-        const delRes = await fetch(`https://www.googleapis.com/calendar/v3/calendars/primary/events/${booking.calendarEventId}`, {
+        const delRes = await fetch(`https://www.googleapis.com/calendar/v3/calendars/primary/events/${booking.calendarEventId}?sendUpdates=all`, {
           method: 'DELETE',
           headers: { Authorization: `Bearer ${accessToken}` }
         });
@@ -117,7 +136,7 @@ async function handleRescheduleBooking(req, res) {
         if (targetType !== booking.type) {
           patchBody.location = targetType === 'in-person' ? (data.settings?.location || '') : '';
         }
-        await fetch(`https://www.googleapis.com/calendar/v3/calendars/primary/events/${booking.calendarEventId}`, {
+        await fetch(`https://www.googleapis.com/calendar/v3/calendars/primary/events/${booking.calendarEventId}?sendUpdates=all`, {
           method: 'PATCH',
           headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${accessToken}` },
           body: JSON.stringify(patchBody)
@@ -155,6 +174,9 @@ export default async function handler(req, res) {
     }
     if (req.method === 'POST' && req.body && req.body.action === 'reschedule-booking') {
       return handleRescheduleBooking(req, res);
+    }
+    if (req.method === 'POST' && req.body && req.body.action === 'upload-pdf') {
+      return handleUploadPdf(req, res);
     }
 
     if (req.method === 'GET') {
