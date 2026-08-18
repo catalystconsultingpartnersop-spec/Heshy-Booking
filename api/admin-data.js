@@ -63,17 +63,19 @@ async function getGoogleAccessToken() {
 }
 
 async function handleUploadRecordingChunk(req, res) {
-  const { bookingId, chunkIndex, chunkBase64 } = req.body || {};
+  const { bookingId, chunkIndex, chunkBase64, mimeType } = req.body || {};
   if (!bookingId || chunkIndex == null || !chunkBase64) return res.status(400).json({ error: 'Missing bookingId, chunkIndex, or chunkBase64.' });
   try {
+    const format = mimeType || 'audio/webm';
+    const ext = format.includes('mp4') ? 'mp4' : format.includes('ogg') ? 'ogg' : 'webm';
     const buffer = Buffer.from(chunkBase64, 'base64');
-    const blob = await put(`recordings/${bookingId}/chunk-${String(chunkIndex).padStart(5, '0')}.webm`, buffer, {
+    const blob = await put(`recordings/${bookingId}/chunk-${String(chunkIndex).padStart(5, '0')}.${ext}`, buffer, {
       access: 'public',
-      contentType: 'audio/webm'
+      contentType: format
     });
     const key = 'recording-chunks:' + bookingId;
     const existing = (await kv.get(key)) || [];
-    existing.push({ index: chunkIndex, url: blob.url });
+    existing.push({ index: chunkIndex, url: blob.url, mimeType: format, ext });
     await kv.set(key, existing);
     res.status(200).json({ ok: true });
   } catch (e) {
@@ -94,6 +96,8 @@ async function handleFinalizeRecording(req, res) {
   const chunks = (await kv.get(key)) || [];
   if (chunks.length === 0) return res.status(400).json({ error: 'No recording found for this session.' });
   chunks.sort((a, b) => a.index - b.index);
+  const format = chunks[0].mimeType || 'audio/webm';
+  const ext = chunks[0].ext || 'webm';
 
   try {
     // Download and stitch every chunk back into one file, in the order they were recorded.
@@ -106,7 +110,7 @@ async function handleFinalizeRecording(req, res) {
     const fullAudio = Buffer.concat(buffers);
 
     const form = new FormData();
-    form.append('file', new Blob([fullAudio], { type: 'audio/webm' }), 'recording.webm');
+    form.append('file', new Blob([fullAudio], { type: format }), 'recording.' + ext);
     form.append('model', 'whisper-1');
     const whisperRes = await fetch('https://api.openai.com/v1/audio/transcriptions', {
       method: 'POST',
