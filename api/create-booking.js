@@ -114,7 +114,7 @@ export default async function handler(req, res) {
     try {
       const confirmation = bookingConfirmationEmail(booking, data.settings || {});
       await sendEmail({ to: booking.clientEmail, subject: confirmation.subject, html: confirmation.html });
-      const alert = newBookingAlertEmail(booking);
+      const alert = newBookingAlertEmail(booking, data.settings || {}, client);
       await sendEmail({ to: 'heshy@catalystconsultingnyc.com', subject: alert.subject, html: alert.html });
     } catch (e) { /* email is best-effort */ }
 
