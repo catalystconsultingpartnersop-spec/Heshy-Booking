@@ -22,6 +22,22 @@ async function getGoogleAccessToken() {
 
 const APP_TIMEZONE = 'America/New_York';
 
+// Shared by both the live coupon check and the actual booking submission, so they always agree.
+function validateCoupon(data, code, email) {
+  if (!code) return { valid: false, reason: null };
+  const trimmed = String(code).trim().toUpperCase();
+  const coupon = (data.settings?.coupons || []).find(c => c.code === trimmed);
+  if (!coupon) return { valid: false, reason: "That code wasn't found." };
+  if (coupon.maxUses != null && (coupon.usedCount || 0) >= coupon.maxUses) {
+    return { valid: false, reason: 'That code has reached its usage limit.' };
+  }
+  const normalizedEmail = String(email || '').trim().toLowerCase();
+  if (normalizedEmail && (coupon.usedByEmails || []).includes(normalizedEmail)) {
+    return { valid: false, reason: "You've already used this code." };
+  }
+  return { valid: true, coupon };
+}
+
 function timeToMin(t) { const [h, m] = t.split(':').map(Number); return h * 60 + m; }
 function minToTime(m) { return String(Math.floor(m / 60)).padStart(2, '0') + ':' + String(m % 60).padStart(2, '0'); }
 function dowOf(dateStr) { const [y, mo, d] = dateStr.split('-').map(Number); return new Date(Date.UTC(y, mo - 1, d)).getUTCDay(); }
@@ -90,6 +106,20 @@ function addMinutes(dateStr, timeStr, minutesToAdd) {
 }
 
 export default async function handler(req, res) {
+  if (req.method === 'GET' && req.query?.action === 'check-coupon') {
+    try {
+      const data = await kv.get('app-data');
+      const result = validateCoupon(data || {}, req.query.code, req.query.email);
+      return res.status(200).json({
+        valid: result.valid,
+        reason: result.reason || null,
+        discountType: result.valid ? (result.coupon.discountType || 'free') : null,
+        discountValue: result.valid ? result.coupon.discountValue : null
+      });
+    } catch (err) {
+      return res.status(500).json({ valid: false, reason: 'Could not check that code right now.' });
+    }
+  }
   if (req.method !== 'POST') return res.status(405).json({ error: 'Method not allowed' });
   try {
     const { date, time, durationMin, type, name, email, phone, intakeAnswers, wgPdfName, wgPdfData, stripeCustomerId, couponCode } = req.body || {};
@@ -174,12 +204,13 @@ export default async function handler(req, res) {
 
     let comped = false;
     let appliedCoupon = null;
+    let couponDiscount = null;
     if (couponCode) {
-      const trimmed = String(couponCode).trim().toUpperCase();
-      const coupon = (data.settings?.coupons || []).find(c => c.code === trimmed);
-      if (coupon && (coupon.maxUses == null || (coupon.usedCount || 0) < coupon.maxUses)) {
-        comped = true;
-        appliedCoupon = coupon;
+      const couponResult = validateCoupon(data, couponCode, email);
+      if (couponResult.valid) {
+        appliedCoupon = couponResult.coupon;
+        comped = appliedCoupon.discountType === 'free' || !appliedCoupon.discountType; // treat legacy coupons (no discountType set) as free, matching prior behavior
+        couponDiscount = comped ? null : { type: appliedCoupon.discountType, value: appliedCoupon.discountValue };
       }
     }
 
@@ -189,12 +220,14 @@ export default async function handler(req, res) {
       id: uid(), slotId: null, date, time,
       durationMin: Number(durationMin), type,
       clientId: client.id, clientName: name, clientEmail: email, clientPhone: phone,
-      stripeCustomerId, status: 'scheduled', comped, couponCode: comped ? appliedCoupon.code : '',
+      stripeCustomerId, status: 'scheduled', comped, couponCode: appliedCoupon ? appliedCoupon.code : '', couponDiscount,
       meetLink: '', location: resolvedAddress, summary: '', clientSummary: '', actualMinutes: null, amount: null, createdAt: Date.now()
     };
     data.bookings.push(booking);
-    if (comped) {
+    if (appliedCoupon) {
       appliedCoupon.usedCount = (appliedCoupon.usedCount || 0) + 1;
+      if (!Array.isArray(appliedCoupon.usedByEmails)) appliedCoupon.usedByEmails = [];
+      appliedCoupon.usedByEmails.push(String(email).trim().toLowerCase());
     }
 
     try {
@@ -237,7 +270,7 @@ export default async function handler(req, res) {
       await sendEmail({ to: 'heshy@catalystconsultingnyc.com', subject: alert.subject, html: alert.html });
     } catch (e) { /* email is best-effort */ }
 
-    res.status(200).json({ ok: true, bookingId: booking.id, meetLink: type === 'virtual' ? booking.meetLink : undefined, location: type === 'in-person' ? resolvedAddress : undefined, comped });
+    res.status(200).json({ ok: true, bookingId: booking.id, meetLink: type === 'virtual' ? booking.meetLink : undefined, location: type === 'in-person' ? resolvedAddress : undefined, comped, couponCode: booking.couponCode, couponDiscount: booking.couponDiscount });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
