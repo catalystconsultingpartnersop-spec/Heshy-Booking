@@ -165,6 +165,7 @@
   .cal-daynum{font-size:12.5px;}
   .cal-dot{width:5px;height:5px;border-radius:50%;background:var(--ink);position:absolute;bottom:6px;left:6px;}
   .cal-cell.past .cal-dot{background:var(--line-strong);}
+  .cal-slot-count{font-size:10px;color:var(--muted);margin-top:2px;}
   .cal-legend{display:flex;gap:20px;margin-top:14px;font-size:12px;color:var(--muted);}
   .cal-dot-legend,.cal-holiday-legend{display:inline-block;width:9px;height:9px;border-radius:50%;margin-right:5px;vertical-align:middle;}
   .cal-dot-legend{background:var(--ink);}
@@ -354,11 +355,47 @@ let bookingStep = 1;
 let selectedDuration = 60;
 let selectedStartTime = null;
 let selectedDay = null;
+let clientCalMonth = new Date();
+let couponCheckState = { status: 'idle', message: '' }; // idle | checking | valid | invalid
+let couponCheckTimer = null;
+function couponDiscountLabel(check){
+  if(check.discountType==='percent') return `${check.discountValue}% off this session.`;
+  if(check.discountType==='fixed') return `${money(check.discountValue)} off this session.`;
+  return 'this session will be complimentary.';
+}
+function refocusCouponInput(){
+  const el = $('f-coupon');
+  if(el){ el.focus(); el.setSelectionRange(el.value.length, el.value.length); }
+}
+function scheduleCouponCheck(){
+  clearTimeout(couponCheckTimer);
+  const code = clientForm.couponCode.trim();
+  if(!code){ couponCheckState = { status: 'idle', message: '' }; render(); refocusCouponInput(); return; }
+  couponCheckState = { status: 'checking', message: '' };
+  render();
+  refocusCouponInput();
+  couponCheckTimer = setTimeout(async ()=>{
+    try{
+      const r = await fetch('/api/create-booking?action=check-coupon&code='+encodeURIComponent(code)+'&email='+encodeURIComponent(clientForm.email||''));
+      const data = await r.json();
+      if(clientForm.couponCode.trim() !== code) return; // they kept typing; a newer check will follow
+      couponCheckState = data.valid
+        ? { status: 'valid', message: '', discountType: data.discountType, discountValue: data.discountValue }
+        : { status: 'invalid', message: data.reason || "That code isn't valid." };
+    }catch(e){
+      couponCheckState = { status: 'idle', message: '' };
+    }
+    render();
+    refocusCouponInput();
+  }, 500);
+}
 let selectedType = 'virtual';
 let clientForm = { name:'', email:'', phone:'', intakeAnswers:[], wgPdfName:'', wgPdfData:'', checkedEmail:'', isNew:false, blocked:false, couponCode:'' };
 let confirmedMeetLink = '';
 let confirmedLocation = '';
 let confirmedComped = false;
+let confirmedCouponCode = '';
+let confirmedCouponDiscount = null;
 let submitting = false;
 let portalEmail = '';
 let portalPhone = '';
@@ -376,7 +413,7 @@ let billingBasisChoice = {}; // bookingId -> 'actual' | 'minimum', overrides the
 let rescheduleType = {};
 let runningTimer = {};
 let timerDisplay = {};
-let newCoupon = { code:'', description:'', maxUses:'' };
+let newCoupon = { code:'', description:'', maxUses:'', discountType:'free', discountValue:'' };
 let adminType = 'virtual';
 let adminView = 'dashboard';
 let showScheduleEditor = false;
@@ -429,6 +466,7 @@ function attachIntakeRegionHandlers(){
 }
 async function onEmailBlur(){
   const email = clientForm.email;
+  if(clientForm.couponCode.trim()) scheduleCouponCheck();
   const region = document.getElementById('intake-region');
   if(!email){
     clientForm.checkedEmail = '';
@@ -666,7 +704,8 @@ function backToClient(){
   view = 'client'; history.replaceState(null, '', '#');
   bookingStep=1; selectedStartTime=null;
   clientForm={name:'',email:'',phone:'',intakeAnswers:[],wgPdfName:'',wgPdfData:'',checkedEmail:'',isNew:false,blocked:false,couponCode:''};
-  confirmedMeetLink=''; confirmedLocation=''; confirmedComped=false;
+  couponCheckState = { status: 'idle', message: '' };
+  confirmedMeetLink=''; confirmedLocation=''; confirmedComped=false; confirmedCouponCode=''; confirmedCouponDiscount=null;
   cardComplete=false; cardErrorMsg=''; if(cardElement) cardElement.clear();
   render();
 }
@@ -747,6 +786,8 @@ async function confirmBooking(){
     if(bookingData.meetLink) confirmedMeetLink = bookingData.meetLink;
     if(bookingData.location) confirmedLocation = bookingData.location;
     confirmedComped = !!bookingData.comped;
+    confirmedCouponCode = bookingData.couponCode || '';
+    confirmedCouponDiscount = bookingData.couponDiscount || null;
 
     submitting = false;
     bookingStep = 3; render();
@@ -783,6 +824,12 @@ function daysLabel(days){
 }
 function fmtTimeShort(t){ return fmtTime(t); }
 
+function couponDescribe(c){
+  if(c.discountType==='percent') return `${c.discountValue}% off`;
+  if(c.discountType==='fixed') return `${money(c.discountValue)} off`;
+  return 'Free session';
+}
+
 async function addCoupon(){
   const code = newCoupon.code.trim().toUpperCase();
   if(!code) return;
@@ -791,9 +838,11 @@ async function addCoupon(){
   state.settings.coupons.push({
     code, description: newCoupon.description.trim(),
     maxUses: newCoupon.maxUses ? Number(newCoupon.maxUses) : null,
-    usedCount: 0, createdAt: Date.now()
+    discountType: newCoupon.discountType,
+    discountValue: newCoupon.discountType==='free' ? null : Number(newCoupon.discountValue)||0,
+    usedCount: 0, usedByEmails: [], createdAt: Date.now()
   });
-  newCoupon = { code:'', description:'', maxUses:'' };
+  newCoupon = { code:'', description:'', maxUses:'', discountType:'free', discountValue:'' };
   await saveState(); render();
 }
 async function removeCoupon(code){
@@ -1192,20 +1241,12 @@ function renderClient(){
     if(candidateDates.length===0){
       inner += `<div class="empty">No open ${selectedType==='virtual'?'online':'in-person'} times right now for a ${selectedDuration}-min session.</div>`;
     } else {
-      if(!selectedDay || !candidateDates.some(c=>c.date===selectedDay)) selectedDay = candidateDates[0].date;
-      inner += `<div class="day-strip">`;
-      candidateDates.forEach(c=>{
-        const dt = new Date(c.date+'T00:00:00');
-        const dow = dt.toLocaleDateString('en-US',{weekday:'short'});
-        const dnum = dt.getDate();
-        const active = c.date===selectedDay ? 'active' : '';
-        inner += `<div class="day-cell ${active}" data-day="${c.date}">
-          <div class="dow">${dow}</div>
-          <div class="dnum">${dnum}</div>
-          <div class="dcount">${c.times.length}</div>
-        </div>`;
-      });
-      inner += `</div>`;
+      if(!selectedDay || !candidateDates.some(c=>c.date===selectedDay)){
+        selectedDay = candidateDates[0].date;
+        const sd = new Date(selectedDay+'T00:00:00');
+        clientCalMonth = new Date(sd.getFullYear(), sd.getMonth(), 1);
+      }
+      inner += renderClientCalendar(candidateDates);
       if(selectedType==='in-person'){
         const loc = resolveLocation(selectedDay, 'in-person');
         if(loc && loc.generalArea){
@@ -1250,6 +1291,9 @@ function renderClient(){
       <div class="form-section">
         <div class="section-title">Coupon code <span class="optional-mark">(optional)</span></div>
         <input type="text" id="f-coupon" placeholder="Have a code? Enter it here" value="${clientForm.couponCode}">
+        <div id="coupon-status" style="font-size:12.5px;margin-top:6px;min-height:16px;${couponCheckState.status==='valid'?'color:#2E5B27;':couponCheckState.status==='invalid'?'color:#A5433A;':'color:var(--muted);'}">
+          ${couponCheckState.status==='checking' ? 'Checking…' : couponCheckState.status==='valid' ? '\u2713 Code applied \u2014 ' + couponDiscountLabel(couponCheckState) : couponCheckState.status==='invalid' ? couponCheckState.message : ''}
+        </div>
       </div>
       <div class="form-section last">
         <div class="section-title">Payment</div>
@@ -1272,8 +1316,8 @@ function renderClient(){
           <div class="fact-row"><span>Time</span><span>${fmtDate(selectedDay)}, ${fmtTime(selectedStartTime)}</span></div>
           <div class="fact-row"><span>Length</span><span>${selectedDuration} min</span></div>
           <div class="fact-row"><span>Format</span><span>${selectedType==='virtual'?'Video call':'In person'}</span></div>
-          <div class="fact-row"><span>Rate</span><span>${confirmedComped ? 'Complimentary — no charge' : '$500/hour'}</span></div>
-          ${confirmedComped ? `<div class="fact-row"><span>Coupon</span><span>${clientForm.couponCode}</span></div>` : ''}
+          <div class="fact-row"><span>Rate</span><span>${confirmedComped ? 'Complimentary — no charge' : confirmedCouponDiscount ? `$500/hour (${confirmedCouponDiscount.type==='percent' ? confirmedCouponDiscount.value+'% off applied' : money(confirmedCouponDiscount.value)+' off applied'})` : '$500/hour'}</span></div>
+          ${confirmedCouponCode ? `<div class="fact-row"><span>Coupon</span><span>${confirmedCouponCode}</span></div>` : ''}
         </div>
         ${selectedType==='virtual'
           ? `<div class="join-block"><div class="section-title">Join link</div><a href="${confirmedMeetLink||'#'}" class="join-link">${confirmedMeetLink||'Link will be sent before the session'}</a></div>`
@@ -1327,6 +1371,48 @@ function renderDashboardCalendar(){
     </div>
     <div class="cal-legend">
       <span><span class="cal-dot-legend"></span> has sessions</span>
+    </div>
+  `;
+}
+
+// Client-facing month calendar for picking a day to book — shows slot-count badges on days
+// with availability, same visual grid as the admin calendars, instead of a horizontal scroll strip.
+function renderClientCalendar(candidateDates){
+  const countsByDate = {};
+  candidateDates.forEach(c=>{ countsByDate[c.date] = c.times.length; });
+  const monthStart = new Date(clientCalMonth.getFullYear(), clientCalMonth.getMonth(), 1);
+  const monthLabel = monthStart.toLocaleDateString('en-US',{month:'long', year:'numeric'});
+  const firstDow = monthStart.getDay();
+  const daysInMonth = new Date(monthStart.getFullYear(), monthStart.getMonth()+1, 0).getDate();
+  const todayDs = dateStr(new Date());
+
+  let cells = '';
+  for(let i=0;i<firstDow;i++) cells += `<div class="cal-cell empty"></div>`;
+  for(let day=1; day<=daysInMonth; day++){
+    const d = new Date(monthStart.getFullYear(), monthStart.getMonth(), day);
+    const ds = dateStr(d);
+    const isPast = ds < todayDs;
+    const isHoliday = jewishHolidayDates.has(ds);
+    const count = countsByDate[ds] || 0;
+    const isAvailable = count > 0;
+    const isSelected = selectedDay === ds;
+    const isToday = ds === todayDs;
+    const clickable = isAvailable;
+    cells += `<div class="cal-cell ${isPast||isHoliday||!isAvailable?'past':''} ${isSelected?'selected':''} ${isToday?'today':''}" ${clickable?`data-day="${ds}"`:''} ${isHoliday?`title="${jewishHolidayNames[ds]||'Jewish holiday'}"`:''}>
+      <div class="cal-daynum">${day}</div>
+      ${isAvailable ? `<div class="cal-slot-count">${count}</div>` : ''}
+    </div>`;
+  }
+
+  return `
+    <div class="cal-header">
+      <button class="ghost small" id="clientCalPrevMonth">&larr;</button>
+      <div class="cal-month-label">${monthLabel}</div>
+      <button class="ghost small" id="clientCalNextMonth">&rarr;</button>
+    </div>
+    <div class="cal-grid">
+      ${['S','M','T','W','T','F','S'].map(d=>`<div class="cal-dow">${d}</div>`).join('')}
+      ${cells}
     </div>
   `;
 }
@@ -1508,11 +1594,21 @@ function renderAdmin(){
       const basis = billingBasisChoice[b.id] || state.settings.billingMode || 'actual';
       const minsForBilling = basis==='minimum' ? b.durationMin : actualMins;
       const hours = Math.round((minsForBilling/60)*100)/100;
-      const defaultAmt = Math.round(hours*500*100)/100;
+      const baseAmt = Math.round(hours*500*100)/100;
+      let defaultAmt = baseAmt;
+      let discountNote = '';
+      if(b.couponDiscount && b.couponDiscount.type==='percent'){
+        defaultAmt = Math.round(baseAmt*(1-b.couponDiscount.value/100)*100)/100;
+        discountNote = `<div class="note" style="margin-bottom:8px;">Coupon <strong>${b.couponCode}</strong>: ${b.couponDiscount.value}% off &mdash; ${money(baseAmt)} \u2192 ${money(defaultAmt)}</div>`;
+      } else if(b.couponDiscount && b.couponDiscount.type==='fixed'){
+        defaultAmt = Math.max(0, Math.round((baseAmt-b.couponDiscount.value)*100)/100);
+        discountNote = `<div class="note" style="margin-bottom:8px;">Coupon <strong>${b.couponCode}</strong>: ${money(b.couponDiscount.value)} off &mdash; ${money(baseAmt)} \u2192 ${money(defaultAmt)}</div>`;
+      }
       const amt = (b.amount!=null) ? b.amount : defaultAmt;
       action = `
         <div class="charge-row">
           <div class="note" style="margin-bottom:8px;">Actual time tracked: <strong>${actualMins} min</strong> &middot; Booked for: <strong>${b.durationMin} min</strong></div>
+          ${discountNote}
           <label>Bill for</label>
           <div class="type-toggle" style="margin-bottom:12px;">
             <div class="type-btn ${basis==='actual'?'active':''}" data-billing-basis="${b.id}" data-basis-value="actual">Actual time (${actualMins} min)</div>
@@ -1551,7 +1647,7 @@ function renderAdmin(){
             <div class="session-name">${b.clientId?`<a class="client-link" data-view-client="${b.clientId}">${b.clientName}</a>`:b.clientName}</div>
             <div class="session-time-big">${fmtTime(b.time)}</div>
             <div class="session-meta">${fmtDate(b.date)} &middot; ${b.durationMin} min scheduled${b.actualMinutes?', '+b.actualMinutes+' min actual':''}</div>
-            <div class="session-format">${b.type==='virtual'?'Video call':'In person'}${b.comped?' &middot; comped ('+b.couponCode+')':''}</div>
+            <div class="session-format">${b.type==='virtual'?'Video call':'In person'}${b.comped?' &middot; comped ('+b.couponCode+')':(b.couponDiscount?' &middot; '+couponDescribe({discountType:b.couponDiscount.type,discountValue:b.couponDiscount.value})+' ('+b.couponCode+')':'')}</div>
           </div>
           <span class="tag status-${b.status}">${b.status}</span>${b.cancelled ? ` <span class="tag status-cancelled">cancelled</span>` : ''}
         </div>
@@ -1886,19 +1982,26 @@ function renderAdmin(){
 
       <div class="admin-block">
         <h2 class="sect">Coupon codes</h2>
-        <p class="note" style="margin:0 0 14px;">A client can enter a code at booking to make that one session free. The card is still saved for no-show protection, but you won't be charged for it unless you choose to.</p>
+        <p class="note" style="margin:0 0 14px;">A client can enter a code at booking. Each code can only be used once per person, automatically. The card is still saved either way, but a "Free session" code skips charging entirely \u2014 percent/fixed discounts still charge, just at the reduced amount, when you charge the session afterward.</p>
         ${(state.settings.coupons||[]).length===0 ? `<div class="empty">No coupon codes yet.</div>` : ''}
         ${(state.settings.coupons||[]).map(c=>`
           <div class="row">
-            <div><div class="main">${c.code}</div><div class="sub">${c.description||'No description'} &middot; ${c.maxUses ? (c.usedCount||0)+' of '+c.maxUses+' used' : 'Unlimited uses'}${c.usedCount>0?' &middot; used '+(c.usedCount||0)+' time'+(c.usedCount===1?'':'s'):''}</div></div>
+            <div><div class="main">${c.code} &middot; ${couponDescribe(c)}</div><div class="sub">${c.description||'No description'} &middot; ${c.maxUses ? (c.usedCount||0)+' of '+c.maxUses+' used' : 'Unlimited uses'}${c.usedCount>0?' &middot; used '+(c.usedCount||0)+' time'+(c.usedCount===1?'':'s'):''}</div></div>
             <button class="ghost small danger-ghost" data-remove-coupon="${c.code}">Remove</button>
           </div>
         `).join('')}
         <div class="admin-grid" style="margin-top:16px;">
           <div><label>Code</label><input type="text" id="coupon-code" placeholder="FRIEND2026" value="${newCoupon.code}"></div>
           <div><label>Description (optional)</label><input type="text" id="coupon-desc" placeholder="For referrals" value="${newCoupon.description}"></div>
-          <div><label>Max uses</label><input type="text" id="coupon-max" placeholder="Blank = unlimited" value="${newCoupon.maxUses}"></div>
+          <div><label>Max total uses</label><input type="text" id="coupon-max" placeholder="Blank = unlimited" value="${newCoupon.maxUses}"></div>
         </div>
+        <label style="margin-top:14px;">Discount</label>
+        <div class="type-toggle" style="max-width:480px;">
+          <div class="type-btn ${newCoupon.discountType==='free'?'active':''}" data-coupon-discount-type="free">Free session</div>
+          <div class="type-btn ${newCoupon.discountType==='percent'?'active':''}" data-coupon-discount-type="percent">Percent off</div>
+          <div class="type-btn ${newCoupon.discountType==='fixed'?'active':''}" data-coupon-discount-type="fixed">Fixed amount off</div>
+        </div>
+        ${newCoupon.discountType!=='free' ? `<div style="margin-top:10px;max-width:220px;"><label>${newCoupon.discountType==='percent'?'Percent off (e.g. 50)':'Dollar amount off (e.g. 250)'}</label><input type="text" id="coupon-value" value="${newCoupon.discountValue}"></div>` : ''}
         <div style="margin-top:14px;"><button class="ghost small" id="addCouponBtn">Add coupon</button></div>
       </div>
     `;
@@ -1999,6 +2102,8 @@ function attachHandlers(){
     document.querySelectorAll('[data-duration]').forEach(el=>{ el.onclick = ()=>selectDuration(Number(el.getAttribute('data-duration'))); });
     document.querySelectorAll('[data-day]').forEach(el=>{ el.onclick = ()=>selectDay(el.getAttribute('data-day')); });
     document.querySelectorAll('[data-type]').forEach(el=>{ el.onclick = ()=>selectType(el.getAttribute('data-type')); });
+    const clientCalPrev = $('clientCalPrevMonth'); if(clientCalPrev) clientCalPrev.onclick = ()=>{ clientCalMonth = new Date(clientCalMonth.getFullYear(), clientCalMonth.getMonth()-1, 1); render(); };
+    const clientCalNext = $('clientCalNextMonth'); if(clientCalNext) clientCalNext.onclick = ()=>{ clientCalMonth = new Date(clientCalMonth.getFullYear(), clientCalMonth.getMonth()+1, 1); render(); };
     const to2 = $('toStep2'); if(to2) to2.onclick = ()=>goStep(2);
     const back1 = $('backTo1'); if(back1) back1.onclick = ()=>goStep(1);
     const map = {'f-name':'name','f-email':'email','f-phone':'phone'};
@@ -2010,7 +2115,7 @@ function attachHandlers(){
       };
     });
     const emailEl = $('f-email'); if(emailEl) emailEl.onblur = onEmailBlur;
-    const couponEl = $('f-coupon'); if(couponEl) couponEl.oninput = e=> clientForm.couponCode = e.target.value;
+    const couponEl = $('f-coupon'); if(couponEl) couponEl.oninput = e=>{ clientForm.couponCode = e.target.value; scheduleCouponCheck(); };
     attachIntakeRegionHandlers();
     const conf = $('confirmBtn'); if(conf) conf.onclick = confirmBooking;
     mountCardElementIfNeeded();
@@ -2114,6 +2219,8 @@ function attachHandlers(){
     if(couponCodeEl) couponCodeEl.oninput = e=> newCoupon.code = e.target.value;
     if(couponDescEl) couponDescEl.oninput = e=> newCoupon.description = e.target.value;
     if(couponMaxEl) couponMaxEl.oninput = e=> newCoupon.maxUses = e.target.value;
+    document.querySelectorAll('[data-coupon-discount-type]').forEach(el=>{ el.onclick = ()=>{ newCoupon.discountType = el.getAttribute('data-coupon-discount-type'); render(); }; });
+    const couponValueEl = $('coupon-value'); if(couponValueEl) couponValueEl.oninput = e=> newCoupon.discountValue = e.target.value;
     const addCouponBtn = $('addCouponBtn'); if(addCouponBtn) addCouponBtn.onclick = addCoupon;
     document.querySelectorAll('[data-remove-coupon]').forEach(el=>{ el.onclick = ()=>removeCoupon(el.getAttribute('data-remove-coupon')); });
 
