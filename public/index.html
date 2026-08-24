@@ -170,6 +170,21 @@
   .cal-dot-legend,.cal-holiday-legend{display:inline-block;width:9px;height:9px;border-radius:50%;margin-right:5px;vertical-align:middle;}
   .cal-dot-legend{background:var(--ink);}
   .cal-holiday-legend{background:#F7F2E8;border:1px solid #E9D1A8;}
+  .cal-grid-sm{display:grid;grid-template-columns:repeat(7,1fr);gap:3px;margin-bottom:6px;}
+  .cal-dow-sm{text-align:center;font-size:10px;color:var(--muted);font-weight:600;padding-bottom:4px;}
+  .cal-cell-sm{
+    aspect-ratio:1;border:1px solid var(--line);border-radius:5px;position:relative;
+    cursor:pointer;display:flex;flex-direction:column;align-items:center;justify-content:center;
+    font-size:12px;min-height:36px;
+  }
+  .cal-cell-sm:hover{border-color:var(--ink);}
+  .cal-cell-sm.empty{border:none;cursor:default;}
+  .cal-cell-sm.past{color:var(--line-strong);cursor:default;background:#FAFAF9;border-color:var(--line);}
+  .cal-cell-sm.selected{background:var(--ink);border-color:var(--ink);color:#fff;}
+  .cal-cell-sm.today:not(.selected) .cal-daynum-sm{text-decoration:underline;text-underline-offset:2px;}
+  .cal-daynum-sm{font-size:12px;line-height:1.1;}
+  .cal-cell-sm .cal-slot-count{font-size:9px;margin-top:1px;}
+  .cal-cell-sm.selected .cal-slot-count{color:#fff;opacity:0.8;}
   .day-detail{margin-top:20px;padding-top:20px;border-top:1px solid var(--line);}
   .day-detail-header{font-family:'Source Serif 4',serif;font-size:16px;font-weight:500;margin-bottom:10px;}
   .admin-nav-btn{
@@ -355,7 +370,7 @@ let bookingStep = 1;
 let selectedDuration = 60;
 let selectedStartTime = null;
 let selectedDay = null;
-let clientCalMonth = new Date();
+let clientCalWeeksShown = 2;
 let couponCheckState = { status: 'idle', message: '' }; // idle | checking | valid | invalid
 let couponCheckTimer = null;
 function couponDiscountLabel(check){
@@ -696,8 +711,8 @@ function resolveLocation(ds, type){
 }
 
 function selectDay(d){ selectedDay = d; selectedStartTime = null; render(); }
-function selectType(t){ selectedType = t; selectedDay = null; selectedStartTime = null; render(); }
-function selectDuration(d){ selectedDuration = d; selectedDay = null; selectedStartTime = null; render(); }
+function selectType(t){ selectedType = t; selectedDay = null; selectedStartTime = null; clientCalWeeksShown = 2; render(); }
+function selectDuration(d){ selectedDuration = d; selectedDay = null; selectedStartTime = null; clientCalWeeksShown = 2; render(); }
 function selectStartTime(t){ selectedStartTime = t; render(); }
 function goStep(n){ bookingStep = n; render(); }
 function backToClient(){
@@ -705,6 +720,7 @@ function backToClient(){
   bookingStep=1; selectedStartTime=null;
   clientForm={name:'',email:'',phone:'',intakeAnswers:[],wgPdfName:'',wgPdfData:'',checkedEmail:'',isNew:false,blocked:false,couponCode:''};
   couponCheckState = { status: 'idle', message: '' };
+  clientCalWeeksShown = 2;
   confirmedMeetLink=''; confirmedLocation=''; confirmedComped=false; confirmedCouponCode=''; confirmedCouponDiscount=null;
   cardComplete=false; cardErrorMsg=''; if(cardElement) cardElement.clear();
   render();
@@ -1152,7 +1168,7 @@ function goToPortal(){
 function renderPortal(){
   if(!portalClient){
     return `
-      <div class="topbar"><div class="brand">Heshy — Clarity Sessions</div></div>
+      <div class="topbar"><div class="brand" id="brand-home-link" style="cursor:pointer;">Clarity Session w/ Heshy</div></div>
       <div class="portal-box">
         <h1>My sessions</h1>
         <div class="note" style="margin-bottom:14px;">Enter both your email and phone number to keep your information private.</div>
@@ -1193,7 +1209,7 @@ function renderPortal(){
     `}
   ` : '';
   return `
-    <div class="topbar"><div class="brand">Heshy — Clarity Sessions</div></div>
+    <div class="topbar"><div class="brand" id="brand-home-link" style="cursor:pointer;">Clarity Session w/ Heshy</div></div>
     <h1>Hi ${portalClient.name.split(' ')[0]}</h1>
     <div class="btn-row" style="margin-top:0;margin-bottom:32px;"><button class="primary small" id="portal-book-again">Book another session</button></div>
     <div class="section-title">Upcoming</div>
@@ -1243,8 +1259,10 @@ function renderClient(){
     } else {
       if(!selectedDay || !candidateDates.some(c=>c.date===selectedDay)){
         selectedDay = candidateDates[0].date;
-        const sd = new Date(selectedDay+'T00:00:00');
-        clientCalMonth = new Date(sd.getFullYear(), sd.getMonth(), 1);
+        const today0 = new Date(); today0.setHours(0,0,0,0);
+        const daysOut = Math.round((new Date(selectedDay+'T00:00:00') - today0) / 86400000);
+        const weeksNeeded = Math.ceil((daysOut+1)/7);
+        if(weeksNeeded > clientCalWeeksShown) clientCalWeeksShown = weeksNeeded;
       }
       inner += renderClientCalendar(candidateDates);
       if(selectedType==='in-person'){
@@ -1327,7 +1345,7 @@ function renderClient(){
   }
 
   return `
-    <div class="topbar"><div class="brand">Heshy — Clarity Sessions</div></div>
+    <div class="topbar"><div class="brand" id="brand-home-link" style="cursor:pointer;">Clarity Session w/ Heshy</div></div>
     <div class="step-label">Step ${bookingStep} of 3</div>
     <div class="step-line" style="--pct:${pct}%"></div>
     ${inner}
@@ -1375,44 +1393,40 @@ function renderDashboardCalendar(){
   `;
 }
 
-// Client-facing month calendar for picking a day to book — shows slot-count badges on days
-// with availability, same visual grid as the admin calendars, instead of a horizontal scroll strip.
+// Client-facing calendar for picking a day to book — a compact, rolling window starting from
+// today (never shows the past), 2 weeks by default with a button to reveal more as needed.
 function renderClientCalendar(candidateDates){
   const countsByDate = {};
   candidateDates.forEach(c=>{ countsByDate[c.date] = c.times.length; });
-  const monthStart = new Date(clientCalMonth.getFullYear(), clientCalMonth.getMonth(), 1);
-  const monthLabel = monthStart.toLocaleDateString('en-US',{month:'long', year:'numeric'});
-  const firstDow = monthStart.getDay();
-  const daysInMonth = new Date(monthStart.getFullYear(), monthStart.getMonth()+1, 0).getDate();
-  const todayDs = dateStr(new Date());
+  const today = new Date(); today.setHours(0,0,0,0);
+  const todayDs = dateStr(today);
+  const todayDow = today.getDay();
 
+  const totalCells = clientCalWeeksShown * 7;
   let cells = '';
-  for(let i=0;i<firstDow;i++) cells += `<div class="cal-cell empty"></div>`;
-  for(let day=1; day<=daysInMonth; day++){
-    const d = new Date(monthStart.getFullYear(), monthStart.getMonth(), day);
+  for(let i=0;i<todayDow;i++) cells += `<div class="cal-cell-sm empty"></div>`;
+  for(let i=0;i<totalCells-todayDow;i++){
+    const d = new Date(today); d.setDate(d.getDate()+i);
     const ds = dateStr(d);
-    const isPast = ds < todayDs;
     const isHoliday = jewishHolidayDates.has(ds);
     const count = countsByDate[ds] || 0;
     const isAvailable = count > 0;
     const isSelected = selectedDay === ds;
     const isToday = ds === todayDs;
-    const clickable = isAvailable;
-    cells += `<div class="cal-cell ${isPast||isHoliday||!isAvailable?'past':''} ${isSelected?'selected':''} ${isToday?'today':''}" ${clickable?`data-day="${ds}"`:''} ${isHoliday?`title="${jewishHolidayNames[ds]||'Jewish holiday'}"`:''}>
-      <div class="cal-daynum">${day}</div>
+    cells += `<div class="cal-cell-sm ${!isAvailable?'past':''} ${isSelected?'selected':''} ${isToday?'today':''}" ${isAvailable?`data-day="${ds}"`:''} ${isHoliday?`title="${jewishHolidayNames[ds]||'Jewish holiday'}"`:''}>
+      <div class="cal-daynum-sm">${d.getDate()}</div>
       ${isAvailable ? `<div class="cal-slot-count">${count}</div>` : ''}
     </div>`;
   }
 
   return `
-    <div class="cal-header">
-      <button class="ghost small" id="clientCalPrevMonth">&larr;</button>
-      <div class="cal-month-label">${monthLabel}</div>
-      <button class="ghost small" id="clientCalNextMonth">&rarr;</button>
-    </div>
-    <div class="cal-grid">
-      ${['S','M','T','W','T','F','S'].map(d=>`<div class="cal-dow">${d}</div>`).join('')}
+    <div class="cal-grid-sm">
+      ${['S','M','T','W','T','F','S'].map(d=>`<div class="cal-dow-sm">${d}</div>`).join('')}
       ${cells}
+    </div>
+    <div style="display:flex;gap:14px;align-items:center;margin-top:10px;">
+      <button class="ghost small" id="clientCalShowMore">Show more dates</button>
+      ${clientCalWeeksShown > 2 ? `<button class="ghost small" id="clientCalShowFewer">Show fewer dates</button>` : ''}
     </div>
   `;
 }
@@ -2087,6 +2101,7 @@ function attachHandlers(){
     portalPhoneInput.onkeydown = e=>{ if(e.key==='Enter') checkPortal(); };
   }
   const portalBookAgainBtn = $('portal-book-again'); if(portalBookAgainBtn) portalBookAgainBtn.onclick = portalBookAgain;
+  const brandHomeLink = $('brand-home-link'); if(brandHomeLink) brandHomeLink.onclick = backToClient;
   document.querySelectorAll('[data-go-portal]').forEach(el=>{ el.onclick = (e)=>{ e.preventDefault(); goToPortal(); }; });
   const portalLogoutBtn = $('portal-logout-btn'); if(portalLogoutBtn) portalLogoutBtn.onclick = portalLogout;
   const portalUpdateCardBtn = $('portal-update-card-btn'); if(portalUpdateCardBtn) portalUpdateCardBtn.onclick = ()=>{ portalShowCardForm = true; portalCardError=''; render(); };
@@ -2102,8 +2117,8 @@ function attachHandlers(){
     document.querySelectorAll('[data-duration]').forEach(el=>{ el.onclick = ()=>selectDuration(Number(el.getAttribute('data-duration'))); });
     document.querySelectorAll('[data-day]').forEach(el=>{ el.onclick = ()=>selectDay(el.getAttribute('data-day')); });
     document.querySelectorAll('[data-type]').forEach(el=>{ el.onclick = ()=>selectType(el.getAttribute('data-type')); });
-    const clientCalPrev = $('clientCalPrevMonth'); if(clientCalPrev) clientCalPrev.onclick = ()=>{ clientCalMonth = new Date(clientCalMonth.getFullYear(), clientCalMonth.getMonth()-1, 1); render(); };
-    const clientCalNext = $('clientCalNextMonth'); if(clientCalNext) clientCalNext.onclick = ()=>{ clientCalMonth = new Date(clientCalMonth.getFullYear(), clientCalMonth.getMonth()+1, 1); render(); };
+    const clientCalShowMore = $('clientCalShowMore'); if(clientCalShowMore) clientCalShowMore.onclick = ()=>{ clientCalWeeksShown += 2; render(); };
+    const clientCalShowFewer = $('clientCalShowFewer'); if(clientCalShowFewer) clientCalShowFewer.onclick = ()=>{ clientCalWeeksShown = 2; selectedDay = null; render(); };
     const to2 = $('toStep2'); if(to2) to2.onclick = ()=>goStep(2);
     const back1 = $('backTo1'); if(back1) back1.onclick = ()=>goStep(1);
     const map = {'f-name':'name','f-email':'email','f-phone':'phone'};
