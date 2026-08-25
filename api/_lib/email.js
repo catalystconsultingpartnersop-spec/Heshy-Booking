@@ -76,6 +76,7 @@ export function bookingConfirmationEmail(booking, settings) {
   const timeStr = new Date(booking.date + 'T' + booking.time + ':00').toLocaleTimeString('en-US', { hour:'numeric', minute:'2-digit' });
   const firstName = (booking.clientName || '').split(' ')[0];
   const meetLink = booking.meetLink || settings.meetLink;
+  const isQuickCheckin = booking.durationMin === 15;
   const joinRow = booking.type === 'virtual'
     ? factRow('Join link', meetLink ? `<a href="${meetLink}">${meetLink}</a>` : 'Sent before the session')
     : factRow('Location', ((booking.location || settings.location) || 'Sent before the session').replace(/\n/g, '<br>'));
@@ -86,10 +87,11 @@ export function bookingConfirmationEmail(booking, settings) {
       <div style="font-size:14px;font-family:Arial,sans-serif;color:#6E6E6E;margin-bottom:20px;">Hi ${firstName || 'there'} &mdash; your session with Heshy is confirmed. Here are the details:</div>
       <table style="width:100%;border-collapse:collapse;font-family:Arial,sans-serif;">
         ${factRow('Time', `${dateStr}, ${timeStr}`)}
-        ${factRow('Format', booking.type === 'virtual' ? 'Video call' : 'In person')}
+        ${factRow('Format', isQuickCheckin ? 'Phone call' : (booking.type === 'virtual' ? 'Video call' : 'In person'))}
         ${factRow('Rate', booking.comped ? 'Complimentary — no charge' : '$500 per hour, charged after the session')}
         ${joinRow}
       </table>
+      ${isQuickCheckin ? `<div style="margin-top:16px;padding:13px 16px;background:#FAF7F0;border-left:3px solid #C9A961;border-radius:4px;font-family:Arial,sans-serif;font-size:13px;line-height:1.6;color:#5C4A20;">You don't need to call in &mdash; Heshy will call you directly at ${timeStr}. If he can't reach you, he'll try again about a minute later. If there's still no answer and the session hasn't been cancelled ahead of time, it will still be billed for the ${booking.durationMin} minutes reserved.</div>` : ''}
       <div style="margin-top:20px;font-family:Arial,sans-serif;font-size:13.5px;">
         <a href="${googleCalendarAddLink(booking, settings)}" style="color:#111111;text-decoration:underline;">Add to calendar</a>
         &middot;
