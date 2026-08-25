@@ -58,6 +58,11 @@ function resolveAddress(data, date) {
 // after subtracting every other booking of the same type and (if available) real Calendar busy time?
 // This is the actual security boundary — the client-side UI computation is just for showing good options.
 function isRangeAvailable(data, date, time, durationMin, type, excludeBookingId, calendarBusyRanges) {
+  const minLeadHours = (data.settings?.minLeadHours != null) ? data.settings.minLeadHours : 12;
+  const slotDateTime = new Date(date + 'T' + time + ':00');
+  const cutoff = new Date(Date.now() + minLeadHours * 60 * 60 * 1000);
+  if (slotDateTime < cutoff) return false;
+
   const weekday = dowOf(date);
   const windows = [];
   const isBlocked = (data.blockedDates || []).some(bl => bl.date === date && bl.type === type);
