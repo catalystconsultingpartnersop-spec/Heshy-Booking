@@ -233,6 +233,10 @@ export default async function handler(req, res) {
       appliedCoupon.usedCount = (appliedCoupon.usedCount || 0) + 1;
       if (!Array.isArray(appliedCoupon.usedByEmails)) appliedCoupon.usedByEmails = [];
       appliedCoupon.usedByEmails.push(String(email).trim().toLowerCase());
+      // Permanent referral tag on the client themselves — stays even after this one discounted
+      // booking, so later full-price bookings from the same client are still traceable back to
+      // whoever referred them. First coupon they ever use wins; never overwritten afterward.
+      if (!client.referralSource) client.referralSource = appliedCoupon.code;
     }
 
     try {
