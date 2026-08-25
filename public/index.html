@@ -50,6 +50,32 @@
   .type-btn:hover{border-color:var(--ink);}
   .type-btn.active{background:var(--ink);color:#fff;border-color:var(--ink);}
 
+  .qci-card{
+    border:1px solid #E9D1A8;background:#FAF7F0;border-radius:8px;padding:18px 20px;
+    cursor:pointer;margin-top:6px;margin-bottom:24px;transition:border-color .15s;
+  }
+  .qci-card:hover{border-color:#C9A961;}
+  .qci-card.active{border-color:#8A6D2F;background:#F3EBDA;}
+  .qci-top{display:flex;align-items:center;justify-content:space-between;}
+  .qci-title{font-size:14.5px;font-weight:600;color:#5C4A20;}
+  .qci-badge{
+    font-size:10px;font-weight:600;letter-spacing:.04em;text-transform:uppercase;
+    color:#8A6D2F;border:1px solid #C9A961;border-radius:3px;padding:2px 7px;
+  }
+  .qci-sub{font-size:12.5px;color:#8A7550;margin-top:5px;line-height:1.5;}
+  .qci-radio{width:16px;height:16px;border-radius:50%;border:1.5px solid #C9A961;flex-shrink:0;}
+  .qci-card.active .qci-radio{border-color:#8A6D2F;background:#8A6D2F;box-shadow:inset 0 0 0 3px #F3EBDA;}
+  .qci-row{display:flex;align-items:center;gap:12px;}
+  .divider-label{
+    display:flex;align-items:center;gap:12px;margin:26px 0 6px;color:var(--muted);font-size:11.5px;
+    text-transform:uppercase;letter-spacing:.05em;
+  }
+  .divider-label::before,.divider-label::after{content:'';flex:1;height:1px;background:var(--line);}
+  .qci-notice{
+    background:#FAF7F0;border-left:3px solid #C9A961;border-radius:4px;padding:13px 16px;
+    font-size:13px;line-height:1.6;color:#5C4A20;margin-top:-8px;margin-bottom:20px;
+  }
+
   .day-strip{display:flex;gap:8px;margin-bottom:24px;overflow-x:auto;padding-bottom:2px;}
   .day-cell{
     flex:0 0 auto;width:64px;padding:12px 0;border:1px solid var(--line-strong);border-radius:6px;
@@ -420,6 +446,26 @@ let portalToken = (typeof localStorage !== 'undefined' && localStorage.getItem('
 let portalShowCardForm = false;
 let portalCardError = '';
 let portalCardSaving = false;
+let portalCancellingId = null;
+let portalCancelBusy = false;
+let portalCancelError = '';
+async function submitPortalCancel(bookingId){
+  portalCancelBusy = true; portalCancelError = ''; render();
+  try{
+    const r = await fetch('/api/portal-lookup', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ action: 'cancel-booking', token: portalToken, bookingId })
+    });
+    const data = await r.json();
+    if(data.error){ portalCancelError = data.error; portalCancelBusy = false; render(); return; }
+    portalCancellingId = null; portalCancelBusy = false;
+    await resumePortalSession();
+  }catch(e){
+    portalCancelError = 'Something went wrong. Please try again.';
+    portalCancelBusy = false; render();
+  }
+}
 let expandedClientId = null;
 let viewingClientId = null;
 let clientSearch = '';
@@ -632,12 +678,10 @@ async function loadCalendarBusy(){
   }catch(e){ calendarConnected = false; calendarBusy = []; }
 }
 function isFutureSlot(s){
-  const now = new Date();
-  const nowDs = dateStr(now);
-  if(s.date > nowDs) return true;
-  if(s.date < nowDs) return false;
-  const nowTime = String(now.getHours()).padStart(2,'0')+':'+String(now.getMinutes()).padStart(2,'0');
-  return s.time > nowTime;
+  const minLeadHours = (state.settings.minLeadHours != null) ? state.settings.minLeadHours : 12;
+  const slotDateTime = new Date(s.date + 'T' + s.time + ':00');
+  const cutoff = new Date(Date.now() + minLeadHours * 60 * 60 * 1000);
+  return slotDateTime >= cutoff;
 }
 function timeToMinC(t){ const [h,m]=t.split(':').map(Number); return h*60+m; }
 function minToTimeC(m){ return String(Math.floor(m/60)).padStart(2,'0')+':'+String(m%60).padStart(2,'0'); }
@@ -1150,6 +1194,7 @@ async function resumePortalSession(){
 }
 function portalLogout(){
   portalToken = ''; portalClient = null; portalEmail=''; portalPhone='';
+  portalCancellingId = null; portalCancelError = ''; portalCancelBusy = false;
   try{ localStorage.removeItem('heshyPortalToken'); }catch(e){}
   render();
 }
@@ -1185,7 +1230,22 @@ function renderPortal(){
   const past = (portalClient.past||[]).slice().sort((a,b)=>b.date.localeCompare(a.date));
   let upHtml = upcoming.length===0 ? `<div class="empty">No upcoming sessions.</div>` : '';
   upcoming.forEach(b=>{
-    upHtml += `<div class="portal-session"><div class="top"><span>${fmtDate(b.date)}, ${fmtTime(b.time)}</span><span>${b.type==='virtual'?'Video call':'In person'}</span></div></div>`;
+    const isCancelling = portalCancellingId === b.id;
+    upHtml += `<div class="portal-session">
+      <div class="top"><span>${fmtDate(b.date)}, ${fmtTime(b.time)}</span><span>${b.type==='virtual'?'Video call':'In person'}</span></div>
+      ${isCancelling ? `
+        <div class="note" style="margin-top:8px;">Cancel this session? This can't be undone.</div>
+        <div style="display:flex;gap:8px;margin-top:8px;">
+          <button class="ghost small danger-ghost" data-confirm-cancel="${b.id}" ${portalCancelBusy?'disabled':''}>${portalCancelBusy?'Cancelling…':'Yes, cancel it'}</button>
+          <button class="ghost small" data-abort-cancel="1" ${portalCancelBusy?'disabled':''}>Never mind</button>
+        </div>
+        ${portalCancelError?`<div class="card-error">${portalCancelError}</div>`:''}
+      ` : b.cancellable ? `
+        <button class="ghost small" data-start-cancel="${b.id}" style="margin-top:8px;">Cancel session</button>
+      ` : `
+        <div class="note" style="margin-top:8px;">Within ${portalClient.cancelCutoffHours} hours of your session &mdash; please contact Heshy directly to cancel.</div>
+      `}
+    </div>`;
   });
   let pastHtml = past.length===0 ? `<div class="empty">No past sessions yet.</div>` : '';
   past.forEach(b=>{
@@ -1224,7 +1284,7 @@ function renderPortal(){
 function renderClient(){
   const pct = bookingStep===1 ? 10 : bookingStep===2 ? 55 : 100;
   const durationOptions = (state.settings.durationOptions && state.settings.durationOptions.length) ? state.settings.durationOptions : [60];
-  if(!durationOptions.includes(selectedDuration)) selectedDuration = durationOptions[0];
+  if(!durationOptions.includes(selectedDuration) && selectedDuration !== 15) selectedDuration = durationOptions[0];
 
   let inner = '';
   if(bookingStep===1){
@@ -1244,6 +1304,21 @@ function renderClient(){
       inner += `</div>`;
       const longestOffered = Math.max(...durationOptions);
       inner += `<div style="margin-top:10px;margin-bottom:24px;font-size:12.5px;color:var(--muted);font-style:italic;">Need more than ${longestOffered} min? Book the ${longestOffered}-min session &mdash; we'll sort out the rest together once we're talking.</div>`;
+    }
+    if(selectedType==='virtual'){
+      inner += `<div class="divider-label">For returning clients</div>`;
+      inner += `<div class="qci-card ${selectedDuration===15?'active':''}" data-duration="15">
+        <div class="qci-top">
+          <div class="qci-row">
+            <div class="qci-radio"></div>
+            <div>
+              <div class="qci-title">Quick Check-in</div>
+              <div class="qci-sub">15 min &middot; for clients who've worked with Heshy before</div>
+            </div>
+          </div>
+          <div class="qci-badge">15 min</div>
+        </div>
+      </div>`;
     }
     // Find the next ~56 days that have at least one valid start time for the chosen type+duration.
     const candidateDates = [];
@@ -1286,16 +1361,18 @@ function renderClient(){
   } else if(bookingStep===2){
     inner += `<h1>Your details</h1>`;
     const isMinimumBilling = state.settings.billingMode === 'minimum';
+    const isQuickCheckin = selectedDuration === 15;
     inner += `
       <div class="fact">
         <div class="fact-row"><span>Time</span><span>${fmtDate(selectedDay)}, ${fmtTime(selectedStartTime)}</span></div>
         <div class="fact-row"><span>Length</span><span>${selectedDuration} min</span></div>
-        <div class="fact-row"><span>Format</span><span>${selectedType==='virtual'?'Video call':'In person'}</span></div>
+        <div class="fact-row"><span>Format</span><span>${isQuickCheckin ? 'Phone call' : (selectedType==='virtual'?'Video call':'In person')}</span></div>
         <div class="fact-row"><span>Rate</span><span>$500/hour</span></div>
         <div class="fact-row"><span>Charged</span><span>${isMinimumBilling ? `After the session, for at least the ${selectedDuration} min booked` : 'After the session, for actual time used'}</span></div>
         <div class="fact-row"><span>Receipt</span><span>Emailed automatically once charged</span></div>
       </div>
       ${isMinimumBilling ? `<div class="note" style="margin-top:-10px;margin-bottom:20px;">If the session runs shorter than ${selectedDuration} min, you're still billed for the full ${selectedDuration} min booked \u2014 sessions running longer are billed for the actual time.</div>` : ''}
+      ${isQuickCheckin ? `<div class="qci-notice">You don't need to call in &mdash; Heshy will call you directly at ${fmtTime(selectedStartTime)}. If he can't reach you, he'll try again about a minute later. If there's still no answer and the session hasn't been cancelled ahead of time, it will still be billed for the ${selectedDuration} minutes reserved.</div>` : ''}
       <div class="form-section">
         <div class="section-title">Contact</div>
         <label>Name <span class="required-mark">*</span></label>
@@ -1333,10 +1410,11 @@ function renderClient(){
         <div class="fact">
           <div class="fact-row"><span>Time</span><span>${fmtDate(selectedDay)}, ${fmtTime(selectedStartTime)}</span></div>
           <div class="fact-row"><span>Length</span><span>${selectedDuration} min</span></div>
-          <div class="fact-row"><span>Format</span><span>${selectedType==='virtual'?'Video call':'In person'}</span></div>
+          <div class="fact-row"><span>Format</span><span>${selectedDuration===15 ? 'Phone call' : (selectedType==='virtual'?'Video call':'In person')}</span></div>
           <div class="fact-row"><span>Rate</span><span>${confirmedComped ? 'Complimentary — no charge' : confirmedCouponDiscount ? `$500/hour (${confirmedCouponDiscount.type==='percent' ? confirmedCouponDiscount.value+'% off applied' : money(confirmedCouponDiscount.value)+' off applied'})` : '$500/hour'}</span></div>
           ${confirmedCouponCode ? `<div class="fact-row"><span>Coupon</span><span>${confirmedCouponCode}</span></div>` : ''}
         </div>
+        ${selectedDuration===15 ? `<div class="qci-notice" style="margin-top:20px;">You don't need to call in &mdash; Heshy will call you directly at ${fmtTime(selectedStartTime)}. If he can't reach you, he'll try again about a minute later. If there's still no answer and the session hasn't been cancelled ahead of time, it will still be billed for the ${selectedDuration} minutes reserved.</div>` : ''}
         ${selectedType==='virtual'
           ? `<div class="join-block"><div class="section-title">Join link</div><a href="${confirmedMeetLink||'#'}" class="join-link">${confirmedMeetLink||'Link will be sent before the session'}</a></div>`
           : `<div class="join-block"><div class="section-title">Location</div><div class="location-text">${(confirmedLocation||'Address will be sent before the session').replace(/\n/g,'<br>')}</div></div>`}
@@ -1583,12 +1661,14 @@ function renderAdmin(){
         recordingStatus[b.id]==='done' ? 'Notes ready below.' :
         'Recording failed: ' + (recordingError[b.id] || 'unknown error') + '. You can still add notes manually below.'
       }</div>` : ''}`;
-    // Virtual: plain Join Meeting (opens tab + starts timer only — no browser recording, since
-    // Gemini (native to Meet, works from any device) is the note-taker for virtual calls.
-    const meetBlock = (b.meetLink && b.type==='virtual') ? `
-      <label>Google Meet link</label>
-      <input type="text" value="${b.meetLink||''}" data-meet="${b.id}">
-      ${!running ? `<button class="primary small" data-join-start="${b.id}" style="margin-top:10px;">Join meeting &amp; start timer</button>` : ''}
+    // Virtual: Join Meeting (video, opens tab + starts timer, notes via Gemini) or Call (phone,
+    // opens your phone's own dialer + starts timer only — no notes possible over a real call).
+    const meetBlock = b.type==='virtual' ? `
+      ${b.meetLink ? `<label>Google Meet link</label><input type="text" value="${b.meetLink||''}" data-meet="${b.id}">` : ''}
+      ${!running ? `<div style="display:flex;gap:10px;margin-top:10px;flex-wrap:wrap;">
+        ${b.meetLink ? `<button class="primary small" data-join-start="${b.id}">Join meeting &amp; start timer</button>` : ''}
+        ${b.clientPhone ? `<button class="ghost small" data-call-start="${b.id}">Call ${b.clientPhone} &amp; start timer</button>` : ''}
+      </div>` : ''}
     ` : '';
     const controls = `
         <div class="session-controls">
@@ -1661,7 +1741,7 @@ function renderAdmin(){
             <div class="session-name">${b.clientId?`<a class="client-link" data-view-client="${b.clientId}">${b.clientName}</a>`:b.clientName}</div>
             <div class="session-time-big">${fmtTime(b.time)}</div>
             <div class="session-meta">${fmtDate(b.date)} &middot; ${b.durationMin} min scheduled${b.actualMinutes?', '+b.actualMinutes+' min actual':''}</div>
-            <div class="session-format">${b.type==='virtual'?'Video call':'In person'}${b.comped?' &middot; comped ('+b.couponCode+')':(b.couponDiscount?' &middot; '+couponDescribe({discountType:b.couponDiscount.type,discountValue:b.couponDiscount.value})+' ('+b.couponCode+')':'')}</div>
+            <div class="session-format">${b.durationMin===15?'Phone call':(b.type==='virtual'?'Video call':'In person')}${b.comped?' &middot; comped ('+b.couponCode+')':(b.couponDiscount?' &middot; '+couponDescribe({discountType:b.couponDiscount.type,discountValue:b.couponDiscount.value})+' ('+b.couponCode+')':'')}</div>
           </div>
           <span class="tag status-${b.status}">${b.status}</span>${b.cancelled ? ` <span class="tag status-cancelled">cancelled</span>` : ''}
         </div>
@@ -1973,6 +2053,12 @@ function renderAdmin(){
           <label style="display:flex;align-items:center;gap:6px;font-weight:normal;"><input type="checkbox" id="dur-60" ${(state.settings.durationOptions||[60]).includes(60)?'checked':''}> 60 min</label>
           <label style="display:flex;align-items:center;gap:6px;font-weight:normal;"><input type="checkbox" id="dur-120" ${(state.settings.durationOptions||[60]).includes(120)?'checked':''}> 120 min (extended)</label>
         </div>
+        <label>Minimum notice required to book</label>
+        <div class="note" style="margin-bottom:8px;">Clients can't see or book a time closer than this many hours away.</div>
+        <input type="text" id="set-lead-hours" style="max-width:120px;" value="${(state.settings.minLeadHours!=null)?state.settings.minLeadHours:12}">
+        <label>Client self-cancel cutoff</label>
+        <div class="note" style="margin-bottom:8px;">Clients can cancel their own sessions from their portal, but only up to this many hours before &mdash; inside that window they're told to contact you directly.</div>
+        <input type="text" id="set-cancel-hours" style="max-width:120px;" value="${(state.settings.clientCancelCutoffHours!=null)?state.settings.clientCancelCutoffHours:3}">
         <label>Default billing</label>
         <div class="note" style="margin-bottom:8px;">Actual time tracked is always shown, regardless of this setting \u2014 this only controls what a new charge defaults to. You can always switch it for one session when charging.</div>
         <div class="type-toggle" style="max-width:420px;">
@@ -2106,6 +2192,9 @@ function attachHandlers(){
   const portalLogoutBtn = $('portal-logout-btn'); if(portalLogoutBtn) portalLogoutBtn.onclick = portalLogout;
   const portalUpdateCardBtn = $('portal-update-card-btn'); if(portalUpdateCardBtn) portalUpdateCardBtn.onclick = ()=>{ portalShowCardForm = true; portalCardError=''; render(); };
   const portalCancelCardBtn = $('portal-cancel-card-btn'); if(portalCancelCardBtn) portalCancelCardBtn.onclick = ()=>{ portalShowCardForm = false; portalCardError=''; render(); };
+  document.querySelectorAll('[data-start-cancel]').forEach(el=>{ el.onclick = ()=>{ portalCancellingId = el.getAttribute('data-start-cancel'); portalCancelError=''; render(); }; });
+  document.querySelectorAll('[data-abort-cancel]').forEach(el=>{ el.onclick = ()=>{ portalCancellingId = null; portalCancelError=''; render(); }; });
+  document.querySelectorAll('[data-confirm-cancel]').forEach(el=>{ el.onclick = ()=>{ submitPortalCancel(el.getAttribute('data-confirm-cancel')); }; });
   const portalSaveCardBtn = $('portal-save-card-btn'); if(portalSaveCardBtn) portalSaveCardBtn.onclick = savePortalCard;
   mountPortalCardElementIfNeeded();
 
@@ -2205,7 +2294,7 @@ function attachHandlers(){
         await saveState(); render();
       };
     });
-    const meetEl=$('set-meet'), locEl=$('set-location'), intakeEl=$('set-intake'), dur60El=$('dur-60'), dur120El=$('dur-120');
+    const meetEl=$('set-meet'), locEl=$('set-location'), intakeEl=$('set-intake'), dur60El=$('dur-60'), dur120El=$('dur-120'), leadHoursEl=$('set-lead-hours'), cancelHoursEl=$('set-cancel-hours');
     const billingActualBtn = $('billing-mode-actual'), billingMinimumBtn = $('billing-mode-minimum');
     if(billingActualBtn) billingActualBtn.onclick = ()=>{ state.settings.billingMode = 'actual'; render(); };
     if(billingMinimumBtn) billingMinimumBtn.onclick = ()=>{ state.settings.billingMode = 'minimum'; render(); };
@@ -2219,6 +2308,8 @@ function attachHandlers(){
         if(dur60El && dur60El.checked) chosenDurations.push(60);
         if(dur120El && dur120El.checked) chosenDurations.push(120);
         state.settings.durationOptions = chosenDurations.length ? chosenDurations : [60];
+        if(leadHoursEl){ const n = Number(leadHoursEl.value); state.settings.minLeadHours = isNaN(n) ? 12 : Math.max(0, n); }
+        if(cancelHoursEl){ const n2 = Number(cancelHoursEl.value); state.settings.clientCancelCutoffHours = isNaN(n2) ? 3 : Math.max(0, n2); }
         saveSettingsBtn.disabled = true; saveSettingsBtn.textContent = 'Saving…';
         const ok = await saveState();
         saveSettingsBtn.disabled = false; saveSettingsBtn.textContent = 'Save settings';
@@ -2317,6 +2408,17 @@ function attachHandlers(){
         const id = el.getAttribute('data-join-start');
         const b = state.bookings.find(x=>x.id===id);
         if(b && b.meetLink) window.open(b.meetLink, '_blank');
+        startTimer(id);
+      };
+    });
+    document.querySelectorAll('[data-call-start]').forEach(el=>{
+      el.onclick = ()=>{
+        const id = el.getAttribute('data-call-start');
+        const b = state.bookings.find(x=>x.id===id);
+        if(b && b.clientPhone){
+          const digits = b.clientPhone.replace(/[^\d+]/g,'');
+          window.location.href = 'tel:'+digits;
+        }
         startTimer(id);
       };
     });
