@@ -731,31 +731,22 @@ function computeFreeRanges(ds, type){
   });
   return free.filter(([s,e])=>e>s);
 }
-// Valid start times (15-min granularity) for a chosen duration on a given date, excluding past times.
+// Valid start times for a chosen duration on a given date, excluding past times. For every
+// duration, only the two edges of each open window are offered — never a middle position.
+// Booking from an edge always leaves ONE clean remaining block behind; booking from the middle
+// would split the window into two smaller, less useful pieces for whatever gets booked next.
 function computeStartTimes(ds, type, durationMin){
   const ranges = computeFreeRanges(ds, type);
   const times = [];
   ranges.forEach(([s,e])=>{
-    if(durationMin === 15){
-      // Quick Check-in: only offer the two edges of this open window, never a middle position.
-      // Booking from an edge always leaves ONE remaining contiguous block behind — booking from
-      // the middle would split it into two smaller, less useful pieces for future longer sessions.
-      if(s + 15 <= e){
-        const startT = minToTimeC(s);
-        if(isFutureSlot({date:ds, time:startT})) times.push(startT);
-        const lateStart = e - 15;
-        if(lateStart !== s){
-          const endT = minToTimeC(lateStart);
-          if(isFutureSlot({date:ds, time:endT})) times.push(endT);
-        }
+    if(s + durationMin <= e){
+      const startT = minToTimeC(s);
+      if(isFutureSlot({date:ds, time:startT})) times.push(startT);
+      const lateStart = e - durationMin;
+      if(lateStart !== s){
+        const endT = minToTimeC(lateStart);
+        if(isFutureSlot({date:ds, time:endT})) times.push(endT);
       }
-      return;
-    }
-    let cursor = s;
-    while(cursor + durationMin <= e){
-      const t = minToTimeC(cursor);
-      if(isFutureSlot({date:ds, time:t})) times.push(t);
-      cursor += durationMin;
     }
   });
   return times.sort();
