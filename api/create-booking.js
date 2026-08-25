@@ -185,61 +185,28 @@ export default async function handler(req, res) {
       return res.status(400).json({ error: 'That time was just booked or is no longer available. Please pick another time.' });
     }
 
-    let client = data.clients.find(c => c.email.toLowerCase() === email.toLowerCase());
-    if (client && client.blocked) {
+    const blockedClient = data.clients.find(c => c.email.toLowerCase() === email.toLowerCase());
+    if (blockedClient && blockedClient.blocked) {
       return res.status(403).json({ error: 'Unable to book at this time.' });
     }
-    if (!client) {
-      let storedWgPdfData = '';
-      if (wgPdfData && wgPdfName) {
-        try {
-          const base64 = wgPdfData.split(',')[1];
-          const buffer = Buffer.from(base64, 'base64');
-          const safeName = wgPdfName.replace(/[^a-zA-Z0-9._-]/g, '_');
-          const blob = await put('wg-pdfs/' + Date.now() + '-' + safeName, buffer, { access: 'public', contentType: 'application/pdf' });
-          storedWgPdfData = blob.url;
-        } catch (e) { /* if upload fails, just skip storing the PDF rather than blocking the booking */ }
-      }
-      client = {
-        id: uid(), name, email, phone,
-        intakeAnswers: intakeAnswers || [], wgPdfName: wgPdfName || '', wgPdfData: storedWgPdfData,
-        blocked: false, createdAt: Date.now(), stripeCustomerId
-      };
-      data.clients.push(client);
-    }
-    client.stripeCustomerId = stripeCustomerId; // keep this current even for a returning client
 
-    let comped = false;
-    let appliedCoupon = null;
-    let couponDiscount = null;
-    if (couponCode) {
-      const couponResult = validateCoupon(data, couponCode, email);
-      if (couponResult.valid) {
-        appliedCoupon = couponResult.coupon;
-        comped = appliedCoupon.discountType === 'free' || !appliedCoupon.discountType; // treat legacy coupons (no discountType set) as free, matching prior behavior
-        couponDiscount = comped ? null : { type: appliedCoupon.discountType, value: appliedCoupon.discountValue };
-      }
+    // Upload the WG PDF now (independent of the shared data blob, so no race risk here) — but
+    // hold off on touching data.clients/data.bookings until right before the final write below.
+    let storedWgPdfData = '';
+    if (!blockedClient && wgPdfData && wgPdfName) {
+      try {
+        const base64 = wgPdfData.split(',')[1];
+        const buffer = Buffer.from(base64, 'base64');
+        const safeName = wgPdfName.replace(/[^a-zA-Z0-9._-]/g, '_');
+        const blob = await put('wg-pdfs/' + Date.now() + '-' + safeName, buffer, { access: 'public', contentType: 'application/pdf' });
+        storedWgPdfData = blob.url;
+      } catch (e) { /* if upload fails, just skip storing the PDF rather than blocking the booking */ }
     }
 
     const resolvedAddress = type === 'in-person' ? resolveAddress(data, date) : '';
-
-    const booking = {
-      id: uid(), slotId: null, date, time,
-      durationMin: Number(durationMin), type,
-      clientId: client.id, clientName: name, clientEmail: email, clientPhone: phone,
-      stripeCustomerId, status: 'scheduled', comped, couponCode: appliedCoupon ? appliedCoupon.code : '', couponDiscount,
-      meetLink: '', location: resolvedAddress, summary: '', clientSummary: '', actualMinutes: null, amount: null, createdAt: Date.now()
-    };
-    data.bookings.push(booking);
-    if (appliedCoupon) {
-      appliedCoupon.usedCount = (appliedCoupon.usedCount || 0) + 1;
-      if (!Array.isArray(appliedCoupon.usedByEmails)) appliedCoupon.usedByEmails = [];
-      appliedCoupon.usedByEmails.push(String(email).trim().toLowerCase());
-      // Permanent referral tag on the client themselves — stays even after this one discounted
-      // booking, so later full-price bookings from the same client are still traceable back to
-      // whoever referred them. First coupon they ever use wins; never overwritten afterward.
-      if (!client.referralSource) client.referralSource = appliedCoupon.code;
-    }
+    const bookingId = uid();
+    let meetLink = '';
+    let calendarEventId = null;
 
     try {
       const accessToken = await getGoogleAccessToken();
@@ -256,28 +223,86 @@ export default async function handler(req, res) {
             attendees: [{ email }],
             conferenceData: {
               createRequest: {
-                requestId: booking.id,
+                requestId: bookingId,
                 conferenceSolutionKey: { type: 'hangoutsMeet' }
               }
             }
           })
         });
         const evData = await evRes.json();
-        if (evData.hangoutLink) {
-          booking.meetLink = evData.hangoutLink;
-        }
-        if (evData.id) {
-          booking.calendarEventId = evData.id;
-        }
+        if (evData.hangoutLink) meetLink = evData.hangoutLink;
+        if (evData.id) calendarEventId = evData.id;
       }
     } catch (e) { /* calendar sync is best-effort */ }
 
-    await kv.set('app-data', data);
+    // Re-fetch the freshest possible data right before committing — everything above this point
+    // (Calendar checks, event creation) can take several seconds, during which something else
+    // could have changed the shared data. Re-reading here shrinks that risk window down to just
+    // this final read-then-write, instead of the whole request's duration.
+    const freshData = (await kv.get('app-data')) || data;
+    if (!freshData.clients) freshData.clients = [];
+    if (!freshData.bookings) freshData.bookings = [];
+
+    if (!isRangeAvailable(freshData, date, time, Number(durationMin), type, null, calendarBusyRanges)) {
+      return res.status(400).json({ error: 'That time was just booked or is no longer available. Please pick another time.' });
+    }
+
+    let client = freshData.clients.find(c => c.email.toLowerCase() === email.toLowerCase());
+    if (client && client.blocked) {
+      return res.status(403).json({ error: 'Unable to book at this time.' });
+    }
+    if (!client) {
+      client = {
+        id: uid(), name, email, phone,
+        intakeAnswers: intakeAnswers || [], wgPdfName: wgPdfName || '', wgPdfData: storedWgPdfData,
+        blocked: false, createdAt: Date.now(), stripeCustomerId
+      };
+      freshData.clients.push(client);
+    }
+    // Keep name/phone current for a returning client too — otherwise a stale or mistaken value
+    // from an earlier booking stays stuck forever, even though every later booking has the
+    // correct info right there. Email stays as the matching key and is never silently changed.
+    client.name = name;
+    client.phone = phone;
+    client.stripeCustomerId = stripeCustomerId; // keep this current even for a returning client
+
+    let comped = false;
+    let appliedCoupon = null;
+    let couponDiscount = null;
+    if (couponCode) {
+      const couponResult = validateCoupon(freshData, couponCode, email);
+      if (couponResult.valid) {
+        appliedCoupon = couponResult.coupon;
+        comped = appliedCoupon.discountType === 'free' || !appliedCoupon.discountType; // treat legacy coupons (no discountType set) as free, matching prior behavior
+        couponDiscount = comped ? null : { type: appliedCoupon.discountType, value: appliedCoupon.discountValue };
+      }
+    }
+
+    const booking = {
+      id: bookingId, slotId: null, date, time,
+      durationMin: Number(durationMin), type,
+      clientId: client.id, clientName: name, clientEmail: email, clientPhone: phone,
+      stripeCustomerId, status: 'scheduled', comped, couponCode: appliedCoupon ? appliedCoupon.code : '', couponDiscount,
+      meetLink, location: resolvedAddress, summary: '', clientSummary: '', actualMinutes: null, amount: null, createdAt: Date.now()
+    };
+    if (calendarEventId) booking.calendarEventId = calendarEventId;
+    freshData.bookings.push(booking);
+    if (appliedCoupon) {
+      appliedCoupon.usedCount = (appliedCoupon.usedCount || 0) + 1;
+      if (!Array.isArray(appliedCoupon.usedByEmails)) appliedCoupon.usedByEmails = [];
+      appliedCoupon.usedByEmails.push(String(email).trim().toLowerCase());
+      // Permanent referral tag on the client themselves — stays even after this one discounted
+      // booking, so later full-price bookings from the same client are still traceable back to
+      // whoever referred them. First coupon they ever use wins; never overwritten afterward.
+      if (!client.referralSource) client.referralSource = appliedCoupon.code;
+    }
+
+    await kv.set('app-data', freshData);
 
     try {
-      const confirmation = bookingConfirmationEmail(booking, data.settings || {});
+      const confirmation = bookingConfirmationEmail(booking, freshData.settings || {});
       await sendEmail({ to: booking.clientEmail, subject: confirmation.subject, html: confirmation.html });
-      const alert = newBookingAlertEmail(booking, data.settings || {}, client);
+      const alert = newBookingAlertEmail(booking, freshData.settings || {}, client);
       await sendEmail({ to: 'heshy@catalystconsultingnyc.com', subject: alert.subject, html: alert.html });
     } catch (e) { /* email is best-effort */ }
 
