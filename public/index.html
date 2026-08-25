@@ -404,17 +404,21 @@ function couponDiscountLabel(check){
   if(check.discountType==='fixed') return `${money(check.discountValue)} off this session.`;
   return 'this session will be complimentary.';
 }
-function refocusCouponInput(){
-  const el = $('f-coupon');
-  if(el){ el.focus(); el.setSelectionRange(el.value.length, el.value.length); }
+function updateCouponStatusDisplay(){
+  const el = document.getElementById('coupon-status');
+  if(!el) return;
+  el.style.color = couponCheckState.status==='valid' ? '#2E5B27' : couponCheckState.status==='invalid' ? '#A5433A' : 'var(--muted)';
+  el.textContent = couponCheckState.status==='checking' ? 'Checking…'
+    : couponCheckState.status==='valid' ? ('\u2713 Code applied \u2014 ' + couponDiscountLabel(couponCheckState))
+    : couponCheckState.status==='invalid' ? couponCheckState.message
+    : '';
 }
 function scheduleCouponCheck(){
   clearTimeout(couponCheckTimer);
   const code = clientForm.couponCode.trim();
-  if(!code){ couponCheckState = { status: 'idle', message: '' }; render(); refocusCouponInput(); return; }
+  if(!code){ couponCheckState = { status: 'idle', message: '' }; updateCouponStatusDisplay(); return; }
   couponCheckState = { status: 'checking', message: '' };
-  render();
-  refocusCouponInput();
+  updateCouponStatusDisplay();
   couponCheckTimer = setTimeout(async ()=>{
     try{
       const r = await fetch('/api/create-booking?action=check-coupon&code='+encodeURIComponent(code)+'&email='+encodeURIComponent(clientForm.email||''));
@@ -426,8 +430,7 @@ function scheduleCouponCheck(){
     }catch(e){
       couponCheckState = { status: 'idle', message: '' };
     }
-    render();
-    refocusCouponInput();
+    updateCouponStatusDisplay();
   }, 500);
 }
 let selectedType = 'virtual';
