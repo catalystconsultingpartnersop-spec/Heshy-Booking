@@ -471,6 +471,7 @@ async function submitPortalCancel(bookingId){
 }
 let expandedClientId = null;
 let viewingClientId = null;
+let editingClientContact = false;
 let clientSearch = '';
 let reschedulingId = null;
 let billingBasisChoice = {}; // bookingId -> 'actual' | 'minimum', overrides the global default per session
@@ -2004,9 +2005,20 @@ function renderAdmin(){
         <div class="admin-block">
           <button class="ghost small" data-back-to-clients="1">&larr; Back to clients</button>
           <div style="margin-top:18px;display:flex;justify-content:space-between;align-items:start;">
-            <div>
-              <div style="font-size:26px;font-weight:600;font-family:Georgia,serif;">${c.name}${wgLetters ? ` <span class="wg-badge-big" title="Working Genius">${wgLetters}</span>` : ''}</div>
-              <div class="sub" style="margin-top:4px;">${c.email}${c.phone ? ' &middot; <strong>' + c.phone + '</strong>' : ''}</div>
+            <div style="flex:1;">
+              ${editingClientContact ? `
+                <div class="row2" style="max-width:420px;">
+                  <div><label>Name</label><input type="text" id="edit-client-name" value="${c.name}"></div>
+                  <div><label>Phone</label><input type="text" id="edit-client-phone" value="${c.phone||''}"></div>
+                </div>
+                <div style="margin-top:10px;display:flex;gap:8px;">
+                  <button class="primary small" data-save-client-contact="${c.id}">Save</button>
+                  <button class="ghost small" data-cancel-edit-contact="1">Cancel</button>
+                </div>
+              ` : `
+                <div style="font-size:26px;font-weight:600;font-family:Georgia,serif;">${c.name}${wgLetters ? ` <span class="wg-badge-big" title="Working Genius">${wgLetters}</span>` : ''}</div>
+                <div class="sub" style="margin-top:4px;">${c.email}${c.phone ? ' &middot; <strong>' + c.phone + '</strong>' : ''} &middot; <a href="#" data-edit-client-contact="1" style="color:var(--ink);">edit</a></div>
+              `}
             </div>
             ${c.blocked ? `<span class="tag blocked">blocked</span>` : ''}
           </div>
@@ -2497,7 +2509,25 @@ function attachHandlers(){
       el.onclick = ()=>{ adminView = 'client-detail'; viewingClientId = el.getAttribute('data-view-client-profile'); render(); };
     });
     document.querySelectorAll('[data-back-to-clients]').forEach(el=>{
-      el.onclick = ()=>{ adminView = 'clients'; render(); };
+      el.onclick = ()=>{ adminView = 'clients'; editingClientContact = false; render(); };
+    });
+    document.querySelectorAll('[data-edit-client-contact]').forEach(el=>{
+      el.onclick = (e)=>{ e.preventDefault(); editingClientContact = true; render(); };
+    });
+    document.querySelectorAll('[data-cancel-edit-contact]').forEach(el=>{
+      el.onclick = ()=>{ editingClientContact = false; render(); };
+    });
+    document.querySelectorAll('[data-save-client-contact]').forEach(el=>{
+      el.onclick = async ()=>{
+        const id = el.getAttribute('data-save-client-contact');
+        const client = state.clients.find(x=>x.id===id);
+        if(!client) return;
+        const nameEl = $('edit-client-name'), phoneEl = $('edit-client-phone');
+        if(nameEl && nameEl.value.trim()) client.name = nameEl.value.trim();
+        if(phoneEl) client.phone = phoneEl.value.trim();
+        editingClientContact = false;
+        await saveState(); render();
+      };
     });
     document.querySelectorAll('[data-client-notes]').forEach(el=>{
       el.onblur = async ()=>{
