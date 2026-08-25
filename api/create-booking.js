@@ -150,8 +150,10 @@ export default async function handler(req, res) {
     }
 
     // Only allow durations you've actually configured as offered, so a crafted request can't book
-    // an arbitrary length.
-    const allowedDurations = (data.settings?.durationOptions && data.settings.durationOptions.length) ? data.settings.durationOptions : [60];
+    // an arbitrary length. Quick Check-in (15 min) is always allowed separately from this list,
+    // since it's a standing option regardless of which standard durations are toggled on.
+    const configuredDurations = (data.settings?.durationOptions && data.settings.durationOptions.length) ? data.settings.durationOptions : [60];
+    const allowedDurations = [15, ...configuredDurations];
     if (!allowedDurations.includes(Number(durationMin))) {
       return res.status(400).json({ error: 'That session length is not offered.' });
     }
