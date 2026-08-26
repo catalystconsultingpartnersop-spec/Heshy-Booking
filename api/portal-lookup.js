@@ -2,6 +2,20 @@ import { kv } from '@vercel/kv';
 import Stripe from 'stripe';
 import { randomToken } from './_lib/auth.js';
 
+// Converts an Eastern-time wall-clock date+time into the true UTC instant (DST-aware).
+// Vercel servers run UTC; naive parsing skews every time comparison by 4-5 hours.
+function etToUtc(date, time) {
+  const probe = new Date(date + 'T12:00:00Z');
+  const part = new Intl.DateTimeFormat('en-US', { timeZone: 'America/New_York', timeZoneName: 'shortOffset' })
+    .formatToParts(probe).find(p => p.type === 'timeZoneName').value;
+  const m = part.match(/GMT([+-]\d+)(?::(\d+))?/);
+  const offH = parseInt(m[1], 10), offM = m[2] ? parseInt(m[2], 10) : 0;
+  const [y, mo, d] = date.split('-').map(Number);
+  const [h, mi] = time.split(':').map(Number);
+  return new Date(Date.UTC(y, mo - 1, d, h - offH, mi - (offH < 0 ? -offM : offM)));
+}
+
+
 const stripe = new Stripe(process.env.STRIPE_SECRET_KEY);
 
 async function getGoogleAccessToken() {
@@ -35,7 +49,7 @@ function clientSummary(client, bookings, settings) {
     .filter(b => !b.cancelled && b.status !== 'charged')
     .map(b => ({
       id: b.id, date: b.date, time: b.time, type: b.type,
-      cancellable: new Date(b.date + 'T' + b.time + ':00') >= cutoff
+      cancellable: etToUtc(b.date, b.time) >= cutoff
     }));
   // Past/history: any session that was actually charged stays visible here regardless of
   // whether it was later cancelled (e.g. cancelled afterward just to free up the original slot)
@@ -132,7 +146,7 @@ async function handleCancelBooking(req, res) {
   // still cancellable, since that display could be stale by the time they click.
   const cutoffHours = (data.settings?.clientCancelCutoffHours != null) ? data.settings.clientCancelCutoffHours : 3;
   const cutoff = new Date(Date.now() + cutoffHours * 60 * 60 * 1000);
-  const sessionDateTime = new Date(booking.date + 'T' + booking.time + ':00');
+  const sessionDateTime = etToUtc(booking.date, booking.time);
   if (sessionDateTime < cutoff) {
     return res.status(400).json({ error: `Sessions can only be cancelled online at least ${cutoffHours} hours in advance. Please contact Heshy directly for shorter notice.` });
   }
