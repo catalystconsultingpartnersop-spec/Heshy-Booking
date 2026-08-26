@@ -1,6 +1,13 @@
 const FROM = 'Heshy <bookings@catalystconsultingnyc.com>';
 const REPLY_TO = 'heshy@catalystconsultingnyc.com';
 
+// Escape user-supplied values before interpolating into email HTML, so a malicious
+// name/email/phone can't inject markup into the message rendered in the owner's inbox.
+function esc(v){
+  if(v == null) return '';
+  return String(v).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;').replace(/'/g,'&#39;');
+}
+
 export async function sendEmail({ to, subject, html }) {
   try {
     const res = await fetch('https://api.resend.com/emails', {
@@ -84,7 +91,7 @@ export function bookingConfirmationEmail(booking, settings) {
     subject: `You're booked with Heshy — ${dateStr} at ${timeStr}`,
     html: wrap(`
       <div style="font-size:22px;font-family:Georgia,serif;margin-bottom:8px;">You're booked.</div>
-      <div style="font-size:14px;font-family:Arial,sans-serif;color:#6E6E6E;margin-bottom:20px;">Hi ${firstName || 'there'} &mdash; your session with Heshy is confirmed. Here are the details:</div>
+      <div style="font-size:14px;font-family:Arial,sans-serif;color:#6E6E6E;margin-bottom:20px;">Hi ${esc(firstName) || 'there'} &mdash; your session with Heshy is confirmed. Here are the details:</div>
       <table style="width:100%;border-collapse:collapse;font-family:Arial,sans-serif;">
         ${factRow('Time', `${dateStr}, ${timeStr}`)}
         ${factRow('Format', isQuickCheckin ? 'Phone call' : (booking.type === 'virtual' ? 'Video call' : 'In person'))}
@@ -110,7 +117,7 @@ export function newBookingAlertEmail(booking, settings, client) {
   let intakeHtml = '';
   questions.forEach((q, i) => {
     if (answers[i]) {
-      intakeHtml += `<div style="margin-bottom:10px;"><div style="font-size:12.5px;color:#6E6E6E;">${q}</div><div style="font-size:13.5px;">${answers[i]}</div></div>`;
+      intakeHtml += `<div style="margin-bottom:10px;"><div style="font-size:12.5px;color:#6E6E6E;">${esc(q)}</div><div style="font-size:13.5px;">${esc(answers[i])}</div></div>`;
     }
   });
   const intakeBlock = intakeHtml
@@ -120,16 +127,16 @@ export function newBookingAlertEmail(booking, settings, client) {
        </div>`
     : '';
   const wgBlock = wgPdfName
-    ? `<div style="margin-top:14px;font-family:Arial,sans-serif;font-size:13px;color:#6E6E6E;">Working Genius PDF uploaded: ${wgPdfName} (see Manage &rarr; Clients for the file)</div>`
+    ? `<div style="margin-top:14px;font-family:Arial,sans-serif;font-size:13px;color:#6E6E6E;">Working Genius PDF uploaded: ${esc(wgPdfName)} (see Manage &rarr; Clients for the file)</div>`
     : '';
   return {
-    subject: `New booking: ${booking.clientName}, ${dateStr}`,
+    subject: `New booking: ${esc(booking.clientName)}, ${dateStr}`,
     html: wrap(`
       <div style="font-size:20px;font-family:Georgia,serif;margin-bottom:16px;">New booking</div>
       <table style="width:100%;border-collapse:collapse;font-family:Arial,sans-serif;">
-        ${factRow('Client', booking.clientName)}
-        ${factRow('Email', booking.clientEmail)}
-        ${factRow('Phone', booking.clientPhone)}
+        ${factRow('Client', esc(booking.clientName))}
+        ${factRow('Email', esc(booking.clientEmail))}
+        ${factRow('Phone', esc(booking.clientPhone))}
         ${factRow('Time', `${dateStr}, ${timeStr}`)}
         ${factRow('Format', booking.type === 'virtual' ? 'Video call' : 'In person')}
         ${booking.type === 'virtual' && booking.meetLink ? factRow('Join link', `<a href="${booking.meetLink}">${booking.meetLink}</a>`) : ''}
@@ -168,7 +175,7 @@ export function reminderEmail(booking, settings) {
     subject: `Reminder — your session with Heshy is tomorrow`,
     html: wrap(`
       <div style="font-size:22px;font-family:Georgia,serif;margin-bottom:8px;">See you tomorrow.</div>
-      <div style="font-size:14px;font-family:Arial,sans-serif;color:#6E6E6E;margin-bottom:20px;">Hi ${firstName || 'there'} &mdash; just a reminder about your upcoming session:</div>
+      <div style="font-size:14px;font-family:Arial,sans-serif;color:#6E6E6E;margin-bottom:20px;">Hi ${esc(firstName) || 'there'} &mdash; just a reminder about your upcoming session:</div>
       <table style="width:100%;border-collapse:collapse;font-family:Arial,sans-serif;">
         ${factRow('Time', `${dateStr}, ${timeStr}`)}
         ${factRow('Format', booking.type === 'virtual' ? 'Video call' : 'In person')}
@@ -187,7 +194,7 @@ export function dailyDigestEmail(todayBookings, tomorrowBookings) {
   const row = b => {
     const timeStr = new Date(b.date + 'T' + b.time + ':00').toLocaleTimeString('en-US', { hour:'numeric', minute:'2-digit' });
     return `<div style="padding:8px 0;border-bottom:1px solid #DEDEDE;font-family:Arial,sans-serif;font-size:13.5px;">
-      <strong>${timeStr}</strong> &mdash; ${b.clientName} &middot; ${b.type === 'virtual' ? 'Video call' : 'In person'}
+      <strong>${timeStr}</strong> &mdash; ${esc(b.clientName)} &middot; ${b.type === 'virtual' ? 'Video call' : 'In person'}
     </div>`;
   };
   const section = (label, list) => `

@@ -1,4 +1,5 @@
 import { kv } from '@vercel/kv';
+import { randomBytes } from 'crypto';
 
 export async function verifyAdminToken(req) {
   const token = req.headers['x-admin-token'];
@@ -7,6 +8,10 @@ export async function verifyAdminToken(req) {
   return !!valid;
 }
 
+// Cryptographically secure token generation — used for BOTH admin sessions and client portal
+// sessions. Previously used Math.random(), which is a statistical generator whose output is
+// mathematically predictable and must never be used for security tokens. randomBytes draws from
+// the operating system's secure entropy source. 32 bytes = 256 bits, base64url = URL-safe.
 export function randomToken() {
-  return Array.from({ length: 40 }, () => Math.floor(Math.random() * 36).toString(36)).join('');
+  return randomBytes(32).toString('base64url');
 }
