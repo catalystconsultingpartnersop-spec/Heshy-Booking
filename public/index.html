@@ -334,6 +334,19 @@
 
 <script src="https://js.stripe.com/v3/"></script>
 <script>
+// Escapes HTML-special characters so user-supplied data (names, emails, notes, coupon text, etc.)
+// can never break out of its text context and execute as markup/script when interpolated into
+// the DOM. Applied to every place user-controlled data is rendered. Numbers/undefined are coerced
+// safely. This is the core defense against stored XSS.
+function esc(v){
+  if(v == null) return '';
+  return String(v)
+    .replace(/&/g,'&amp;')
+    .replace(/</g,'&lt;')
+    .replace(/>/g,'&gt;')
+    .replace(/"/g,'&quot;')
+    .replace(/'/g,'&#39;');
+}
 const STRIPE_PUBLISHABLE_KEY = 'pk_live_51TsrEPPAxQObgqV7mjxJ31V5JNhBanKcQK3mtnvWU8wnnCMrbXd9SlkpveW3jJPZFVjoqnlRuRZwppqYhhCkZkfv00kbDv2p2k';
 const stripe = Stripe(STRIPE_PUBLISHABLE_KEY);
 const elements = stripe.elements();
@@ -506,7 +519,7 @@ function intakeRegionHtml(){
     while(clientForm.intakeAnswers.length < questions.length) clientForm.intakeAnswers.push('');
     let html = `<div class="form-section q-block"><div class="section-title">A few questions</div>`;
     questions.forEach((q,i)=>{
-      html += `<label>${q}</label><input type="text" data-intake="${i}" value="${clientForm.intakeAnswers[i]||''}">`;
+      html += `<label>${q}</label><input type="text" data-intake="${i}" value="${esc(clientForm.intakeAnswers[i])}">`;
     });
     html += `</div>`;
     html += `
@@ -1262,7 +1275,7 @@ function renderPortal(){
   past.forEach(b=>{
     pastHtml += `<div class="portal-session"><div class="top"><span>${fmtDate(b.date)}</span><span>${money(b.amount||0)}</span></div>
       <div class="meta">${b.actualMinutes||b.durationMin} min, ${b.type==='virtual'?'video call':'in person'}</div>
-      ${b.clientSummary?`<div class="portal-summary-box"><div class="portal-summary-label">Session recap</div>${b.clientSummary}</div>`:''}
+      ${b.clientSummary?`<div class="portal-summary-box"><div class="portal-summary-label">Session recap</div>${esc(b.clientSummary)}</div>`:''}
     </div>`;
   });
   const cardSectionHtml = portalClient.hasCard ? `
@@ -1281,7 +1294,7 @@ function renderPortal(){
   ` : '';
   return `
     <div class="topbar"><div class="brand" id="brand-home-link" style="cursor:pointer;">Clarity Session w/ Heshy</div></div>
-    <h1>Hi ${portalClient.name.split(' ')[0]}</h1>
+    <h1>Hi ${esc(portalClient.name.split(' ')[0])}</h1>
     <div class="btn-row" style="margin-top:0;margin-bottom:32px;"><button class="primary small" id="portal-book-again">Book another session</button></div>
     <div class="section-title">Upcoming</div>
     ${upHtml}
@@ -1387,16 +1400,16 @@ function renderClient(){
       <div class="form-section">
         <div class="section-title">Contact</div>
         <label>Name <span class="required-mark">*</span></label>
-        <input type="text" id="f-name" value="${clientForm.name}">
+        <input type="text" id="f-name" value="${esc(clientForm.name)}">
         <label>Email <span class="required-mark">*</span></label>
-        <input type="email" id="f-email" value="${clientForm.email}">
+        <input type="email" id="f-email" value="${esc(clientForm.email)}">
         <label>Phone <span class="required-mark">*</span></label>
-        <input type="tel" id="f-phone" value="${clientForm.phone}">
+        <input type="tel" id="f-phone" value="${esc(clientForm.phone)}">
       </div>
       <div id="intake-region">${intakeRegionHtml()}</div>
       <div class="form-section">
         <div class="section-title">Coupon code <span class="optional-mark">(optional)</span></div>
-        <input type="text" id="f-coupon" placeholder="Have a code? Enter it here" value="${clientForm.couponCode}">
+        <input type="text" id="f-coupon" placeholder="Have a code? Enter it here" value="${esc(clientForm.couponCode)}">
         <div id="coupon-status" style="font-size:12.5px;margin-top:6px;min-height:16px;${couponCheckState.status==='valid'?'color:#2E5B27;':couponCheckState.status==='invalid'?'color:#A5433A;':'color:var(--muted);'}">
           ${couponCheckState.status==='checking' ? 'Checking…' : couponCheckState.status==='valid' ? '\u2713 Code applied \u2014 ' + couponDiscountLabel(couponCheckState) : couponCheckState.status==='invalid' ? couponCheckState.message : ''}
         </div>
@@ -1678,7 +1691,7 @@ function renderAdmin(){
       ${b.meetLink ? `<label>Google Meet link</label><input type="text" value="${b.meetLink||''}" data-meet="${b.id}">` : ''}
       ${!running ? `<div style="display:flex;gap:10px;margin-top:10px;flex-wrap:wrap;">
         ${b.meetLink ? `<button class="primary small" data-join-start="${b.id}">Join meeting &amp; start timer</button>` : ''}
-        ${b.clientPhone ? `<button class="ghost small" data-call-start="${b.id}">Call ${b.clientPhone} &amp; start timer</button>` : ''}
+        ${b.clientPhone ? `<button class="ghost small" data-call-start="${b.id}">Call ${esc(b.clientPhone)} &amp; start timer</button>` : ''}
       </div>` : ''}
     ` : '';
     const controls = `
@@ -1687,10 +1700,10 @@ function renderAdmin(){
           ${!b.cancelled ? meetBlock : ''}
           ${(!b.cancelled && b.type==='virtual' && (b.calendarEventId || b.meetLink)) ? `<button class="ghost small" data-fetch-gemini="${b.id}" style="margin-bottom:14px;">Fetch notes &amp; duration</button><span id="gemini-msg-${b.id}" style="font-size:12.5px;margin-left:10px;"></span>` : ''}
           <label>Internal notes <span class="note" style="display:inline;">(private &mdash; only you see this)</span></label>
-          <textarea class="notes-textarea" data-summary="${b.id}">${b.summary||''}</textarea>
+          <textarea class="notes-textarea" data-summary="${b.id}">${esc(b.summary)}</textarea>
           <label style="margin-top:14px;display:block;">Client-facing summary <span class="note" style="display:inline;">(shown to the client in their portal)</span></label>
           <button class="ghost small" data-copy-to-client="${b.id}" style="margin-bottom:8px;">Copy internal notes here</button>
-          <textarea class="notes-textarea" data-clientsummary="${b.id}">${b.clientSummary||''}</textarea>
+          <textarea class="notes-textarea" data-clientsummary="${b.id}">${esc(b.clientSummary)}</textarea>
         </div>
     `;
     let action = '';
@@ -1705,10 +1718,10 @@ function renderAdmin(){
       let discountNote = '';
       if(b.couponDiscount && b.couponDiscount.type==='percent'){
         defaultAmt = Math.round(baseAmt*(1-b.couponDiscount.value/100)*100)/100;
-        discountNote = `<div class="note" style="margin-bottom:8px;">Coupon <strong>${b.couponCode}</strong>: ${b.couponDiscount.value}% off &mdash; ${money(baseAmt)} \u2192 ${money(defaultAmt)}</div>`;
+        discountNote = `<div class="note" style="margin-bottom:8px;">Coupon <strong>${esc(b.couponCode)}</strong>: ${b.couponDiscount.value}% off &mdash; ${money(baseAmt)} \u2192 ${money(defaultAmt)}</div>`;
       } else if(b.couponDiscount && b.couponDiscount.type==='fixed'){
         defaultAmt = Math.max(0, Math.round((baseAmt-b.couponDiscount.value)*100)/100);
-        discountNote = `<div class="note" style="margin-bottom:8px;">Coupon <strong>${b.couponCode}</strong>: ${money(b.couponDiscount.value)} off &mdash; ${money(baseAmt)} \u2192 ${money(defaultAmt)}</div>`;
+        discountNote = `<div class="note" style="margin-bottom:8px;">Coupon <strong>${esc(b.couponCode)}</strong>: ${money(b.couponDiscount.value)} off &mdash; ${money(baseAmt)} \u2192 ${money(defaultAmt)}</div>`;
       }
       const amt = (b.amount!=null) ? b.amount : defaultAmt;
       action = `
@@ -1750,10 +1763,10 @@ function renderAdmin(){
       <div class="session">
         <div class="session-top">
           <div>
-            <div class="session-name">${b.clientId?`<a class="client-link" data-view-client="${b.clientId}">${b.clientName}</a>`:b.clientName}</div>
+            <div class="session-name">${b.clientId?`<a class="client-link" data-view-client="${b.clientId}">${esc(b.clientName)}</a>`:esc(b.clientName)}</div>
             <div class="session-time-big">${fmtTime(b.time)}</div>
             <div class="session-meta">${fmtDate(b.date)} &middot; ${b.durationMin} min scheduled${b.actualMinutes?', '+b.actualMinutes+' min actual':''}</div>
-            <div class="session-format">${b.durationMin===15?'Phone call':(b.type==='virtual'?'Video call':'In person')}${b.comped?' &middot; comped ('+b.couponCode+')':(b.couponDiscount?' &middot; '+couponDescribe({discountType:b.couponDiscount.type,discountValue:b.couponDiscount.value})+' ('+b.couponCode+')':'')}</div>
+            <div class="session-format">${b.durationMin===15?'Phone call':(b.type==='virtual'?'Video call':'In person')}${b.comped?' &middot; comped ('+esc(b.couponCode)+')':(b.couponDiscount?' &middot; '+couponDescribe({discountType:b.couponDiscount.type,discountValue:b.couponDiscount.value})+' ('+esc(b.couponCode)+')':'')}</div>
           </div>
           <span class="tag status-${b.status}">${b.status}</span>${b.cancelled ? ` <span class="tag status-cancelled">cancelled</span>` : ''}
         </div>
@@ -1932,8 +1945,8 @@ function renderAdmin(){
       clientsHtml += `
         <div class="client-row" data-view-client-profile="${c.id}">
           <div>
-            <div class="main">${c.name}${c.wgLetters ? ` <span class="wg-badge" title="Working Genius">${c.wgLetters.toUpperCase()}</span>` : (c.wgPdfData ? ' <span class="wg-badge" title="Working Genius PDF on file">WG</span>' : '')}</div>
-            <div class="sub">${c.email} &middot; ${sessionCount} session${sessionCount!==1?'s':''}${lastDate ? ' &middot; last met ' + fmtDate(lastDate) : ''}</div>
+            <div class="main">${esc(c.name)}${c.wgLetters ? ` <span class="wg-badge" title="Working Genius">${c.wgLetters.toUpperCase()}</span>` : (c.wgPdfData ? ' <span class="wg-badge" title="Working Genius PDF on file">WG</span>' : '')}</div>
+            <div class="sub">${esc(c.email)} &middot; ${sessionCount} session${sessionCount!==1?'s':''}${lastDate ? ' &middot; last met ' + fmtDate(lastDate) : ''}</div>
           </div>
           ${c.blocked ? `<span class="tag blocked">blocked</span>` : ''}
         </div>`;
@@ -1963,14 +1976,15 @@ function renderAdmin(){
       const lastBooking = pastBookings[0];
 
       let storyLine = '';
+      const fName = esc(c.name.split(' ')[0]);
       if(sessionCount===0){
         storyLine = upcomingBookings.length
-          ? `You haven\u2019t met with ${c.name.split(' ')[0]} yet \u2014 first session is ${fmtDate(upcomingBookings[upcomingBookings.length-1].date)}.`
-          : `You haven\u2019t had a session with ${c.name.split(' ')[0]} yet.`;
+          ? `You haven\u2019t met with ${fName} yet \u2014 first session is ${fmtDate(upcomingBookings[upcomingBookings.length-1].date)}.`
+          : `You haven\u2019t had a session with ${fName} yet.`;
       } else if(sessionCount===1){
-        storyLine = `You\u2019ve met ${c.name.split(' ')[0]} once, on ${fmtDate(firstBooking.date)}.`;
+        storyLine = `You\u2019ve met ${fName} once, on ${fmtDate(firstBooking.date)}.`;
       } else {
-        storyLine = `You\u2019ve met with ${c.name.split(' ')[0]} ${sessionCount} times since ${fmtDate(firstBooking.date)}. Your most recent session was ${fmtDate(lastBooking.date)}.`;
+        storyLine = `You\u2019ve met with ${fName} ${sessionCount} times since ${fmtDate(firstBooking.date)}. Your most recent session was ${fmtDate(lastBooking.date)}.`;
       }
       if(upcomingBookings.length) storyLine += ` Next session: ${fmtDate(upcomingBookings[0].date)}.`;
       if(totalBilled>0) storyLine += ` ${money(totalBilled)} billed in total.`;
@@ -1979,7 +1993,7 @@ function renderAdmin(){
       let qaHtml = '';
       questions.forEach((q,i)=>{
         if(c.intakeAnswers && c.intakeAnswers[i]){
-          qaHtml += `<div class="qa"><div class="q">${q}</div><div>${c.intakeAnswers[i]}</div></div>`;
+          qaHtml += `<div class="qa"><div class="q">${q}</div><div>${esc(c.intakeAnswers[i])}</div></div>`;
         }
       });
 
@@ -1988,7 +2002,7 @@ function renderAdmin(){
         sessHtml += `
           <div class="hist-entry">
             <div class="hist-line"><span><strong>${fmtDate(b.date)}, ${fmtTime(b.time)}</strong> &middot; ${b.type==='virtual'?'Video call':'In person'} &middot; ${b.actualMinutes||b.durationMin} min${b.cancelled?' &middot; cancelled':''}</span><span>${b.status==='charged'?money(b.amount||0):b.status}</span></div>
-            ${b.summary ? `<div class="hist-notes">${b.summary}</div>` : ''}
+            ${b.summary ? `<div class="hist-notes">${esc(b.summary)}</div>` : ''}
           </div>`;
       });
 
@@ -2001,16 +2015,16 @@ function renderAdmin(){
             <div style="flex:1;">
               ${editingClientContact ? `
                 <div class="row2" style="max-width:420px;">
-                  <div><label>Name</label><input type="text" id="edit-client-name" value="${c.name}"></div>
-                  <div><label>Phone</label><input type="text" id="edit-client-phone" value="${c.phone||''}"></div>
+                  <div><label>Name</label><input type="text" id="edit-client-name" value="${esc(c.name)}"></div>
+                  <div><label>Phone</label><input type="text" id="edit-client-phone" value="${esc(c.phone)}"></div>
                 </div>
                 <div style="margin-top:10px;display:flex;gap:8px;">
                   <button class="primary small" data-save-client-contact="${c.id}">Save</button>
                   <button class="ghost small" data-cancel-edit-contact="1">Cancel</button>
                 </div>
               ` : `
-                <div style="font-size:26px;font-weight:600;font-family:Georgia,serif;">${c.name}${wgLetters ? ` <span class="wg-badge-big" title="Working Genius">${wgLetters}</span>` : ''}</div>
-                <div class="sub" style="margin-top:4px;">${c.email}${c.phone ? ' &middot; <strong>' + c.phone + '</strong>' : ''} &middot; <a href="#" data-edit-client-contact="1" style="color:var(--ink);">edit</a></div>
+                <div style="font-size:26px;font-weight:600;font-family:Georgia,serif;">${esc(c.name)}${wgLetters ? ` <span class="wg-badge-big" title="Working Genius">${wgLetters}</span>` : ''}</div>
+                <div class="sub" style="margin-top:4px;">${esc(c.email)}${c.phone ? ' &middot; <strong>' + esc(c.phone) + '</strong>' : ''} &middot; <a href="#" data-edit-client-contact="1" style="color:var(--ink);">edit</a></div>
               `}
             </div>
             ${c.blocked ? `<span class="tag blocked">blocked</span>` : ''}
@@ -2021,7 +2035,7 @@ function renderAdmin(){
         <div class="admin-block">
           <h2 class="sect">My notes</h2>
           <div class="note" style="margin-bottom:8px;">Private &mdash; only you see this. Never shown to the client.</div>
-          <textarea id="client-notes-${c.id}" data-client-notes="${c.id}" placeholder="Anything you want to remember about this client&hellip;" style="min-height:100px;">${c.notes||''}</textarea>
+          <textarea id="client-notes-${c.id}" data-client-notes="${c.id}" placeholder="Anything you want to remember about this client&hellip;" style="min-height:100px;">${esc(c.notes)}</textarea>
           <div id="client-notes-saved-${c.id}" style="font-size:12px;color:var(--muted);margin-top:4px;"></div>
         </div>
 
@@ -2034,7 +2048,7 @@ function renderAdmin(){
 
           <label style="font-weight:600;margin-top:18px;display:block;">PDF report</label>
           ${c.wgPdfData
-            ? `<div style="margin-bottom:8px;"><a class="wg-link" href="${c.wgPdfData}" download="${c.wgPdfName||'working-genius.pdf'}"><strong>${c.wgPdfName||'Download PDF'}</strong></a></div>`
+            ? `<div style="margin-bottom:8px;"><a class="wg-link" href="${c.wgPdfData}" download="${esc(c.wgPdfName)||'working-genius.pdf'}"><strong>${esc(c.wgPdfName)||'Download PDF'}</strong></a></div>`
             : `<div class="empty" style="margin-bottom:8px;">Not on file.</div>`}
           <input type="file" id="client-wg-file-${c.id}" data-client-wg-file="${c.id}" accept="application/pdf">
           <div id="client-wg-file-saved-${c.id}" style="font-size:12px;color:var(--muted);margin-top:4px;"></div>
@@ -2097,7 +2111,7 @@ function renderAdmin(){
         <input type="text" id="set-meet" placeholder="https://meet.google.com/xxx-xxxx-xxx" value="${state.settings.meetLink}">
         <label>Default in-person location <span class="note" style="display:inline;">(fallback only)</span></label>
         <div class="note" style="margin-bottom:8px;">Set the actual location per day in Schedule \u2014 Mon-Thu can be a different address than Friday, for example. This is only used if a day's own location isn't set.</div>
-        <textarea id="set-location" placeholder="Address, parking, floor, buzzer code, etc.">${state.settings.location}</textarea>
+        <textarea id="set-location" placeholder="Address, parking, floor, buzzer code, etc.">${esc(state.settings.location)}</textarea>
         <label>Intake questions (one per line, asked only on a client's first booking)</label>
         <textarea id="set-intake" style="min-height:140px;">${(state.settings.intakeQuestions||[]).join('\n')}</textarea>
         <div class="note">Sent automatically on every confirmation, based on which format the client picked.</div>
@@ -2115,15 +2129,15 @@ function renderAdmin(){
           const referred = (state.clients||[]).filter(cl=>cl.referralSource===c.code);
           return `
           <div class="row">
-            <div><div class="main">${c.code} &middot; ${couponDescribe(c)}</div><div class="sub">${c.description||'No description'} &middot; ${c.maxUses ? (c.usedCount||0)+' of '+c.maxUses+' used' : 'Unlimited uses'}${c.usedCount>0?' &middot; used '+(c.usedCount||0)+' time'+(c.usedCount===1?'':'s'):''}</div>
-            ${referred.length ? `<div class="sub" style="margin-top:4px;">Referred: ${referred.map(cl=>`<a class="client-link" data-view-client="${cl.id}">${cl.name}</a>`).join(', ')}</div>` : ''}
+            <div><div class="main">${c.code} &middot; ${couponDescribe(c)}</div><div class="sub">${esc(c.description)||'No description'} &middot; ${c.maxUses ? (c.usedCount||0)+' of '+c.maxUses+' used' : 'Unlimited uses'}${c.usedCount>0?' &middot; used '+(c.usedCount||0)+' time'+(c.usedCount===1?'':'s'):''}</div>
+            ${referred.length ? `<div class="sub" style="margin-top:4px;">Referred: ${referred.map(cl=>`<a class="client-link" data-view-client="${cl.id}">${esc(cl.name)}</a>`).join(', ')}</div>` : ''}
             </div>
             <button class="ghost small danger-ghost" data-remove-coupon="${c.code}">Remove</button>
           </div>
         `;}).join('')}
         <div class="admin-grid" style="margin-top:16px;">
           <div><label>Code</label><input type="text" id="coupon-code" placeholder="FRIEND2026" value="${newCoupon.code}"></div>
-          <div><label>Description (optional)</label><input type="text" id="coupon-desc" placeholder="For referrals" value="${newCoupon.description}"></div>
+          <div><label>Description (optional)</label><input type="text" id="coupon-desc" placeholder="For referrals" value="${esc(newCoupon.description)}"></div>
           <div><label>Max total uses</label><input type="text" id="coupon-max" placeholder="Blank = unlimited" value="${newCoupon.maxUses}"></div>
         </div>
         <label style="margin-top:14px;">Discount</label>
