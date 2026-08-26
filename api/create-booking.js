@@ -59,7 +59,9 @@ function resolveAddress(data, date) {
 // This is the actual security boundary — the client-side UI computation is just for showing good options.
 function isRangeAvailable(data, date, time, durationMin, type, excludeBookingId, calendarBusyRanges) {
   const minLeadHours = (data.settings?.minLeadHours != null) ? data.settings.minLeadHours : 12;
-  const slotDateTime = new Date(date + 'T' + time + ':00');
+  // Parse the slot as Eastern time (not server-local time, which is UTC on Vercel). Without this,
+  // the 12-hour lead check compares the wrong clocks and blocks slots that should be available.
+  const slotDateTime = new Date(new Date(date + 'T' + time + ':00').toLocaleString('en-US', { timeZone: APP_TIMEZONE }));
   const cutoff = new Date(Date.now() + minLeadHours * 60 * 60 * 1000);
   if (slotDateTime < cutoff) return false;
 
