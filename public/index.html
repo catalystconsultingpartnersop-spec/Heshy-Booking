@@ -209,7 +209,7 @@
   .cal-cell-sm.selected{background:var(--ink);border-color:var(--ink);color:#fff;}
   .cal-cell-sm.today:not(.selected) .cal-daynum-sm{text-decoration:underline;text-underline-offset:2px;}
   .cal-daynum-sm{font-size:12px;line-height:1.1;}
-  .cal-cell-sm .cal-slot-count{font-size:9px;margin-top:1px;}
+  .cal-cell-sm .cal-slot-count{font-size:8.5px;margin-top:1px;white-space:nowrap;}
   .cal-cell-sm.selected .cal-slot-count{color:#fff;opacity:0.8;}
   .day-detail{margin-top:20px;padding-top:20px;border-top:1px solid var(--line);}
   .day-detail-header{font-family:'Source Serif 4',serif;font-size:16px;font-weight:500;margin-bottom:10px;}
@@ -585,7 +585,7 @@ async function loadState(){
     state.bookings = data.bookings || [];
     state.overrides = data.overrides || [];
     state.blockedDates = data.blockedDates || [];
-    state.settings = data.settings || { meetLink:'', location:'', intakeQuestions:[], durationOptions:[60] };
+    state.settings = data.settings || { meetLink:'', location:'', intakeQuestions:[], durationOptions:[60], hourlyRate:500 };
     state.availability = data.availability || { virtual: [], 'in-person': [] };
     await loadCalendarBusy();
     await loadJewishHolidays();
@@ -602,8 +602,9 @@ async function loadAdminState(){
     }
     const data = await r.json();
     state = data;
-    if(!state.settings) state.settings = { meetLink:'', location:'', intakeQuestions:[], durationOptions:[60] };
+    if(!state.settings) state.settings = { meetLink:'', location:'', intakeQuestions:[], durationOptions:[60], hourlyRate:500 };
     if(!state.settings.durationOptions) state.settings.durationOptions = [60];
+    if(state.settings.hourlyRate == null) state.settings.hourlyRate = 500;
     if(!state.clients) state.clients = [];
     if(!state.settings.coupons) state.settings.coupons = [];
     if(!state.availability) state.availability = { virtual: [], 'in-person': [] };
@@ -1377,7 +1378,7 @@ function renderClient(){
         <div class="fact-row"><span>Time</span><span>${fmtDate(selectedDay)}, ${fmtTime(selectedStartTime)}</span></div>
         <div class="fact-row"><span>Length</span><span>${selectedDuration} min</span></div>
         <div class="fact-row"><span>Format</span><span>${isQuickCheckin ? 'Phone call' : (selectedType==='virtual'?'Video call':'In person')}</span></div>
-        <div class="fact-row"><span>Rate</span><span>$500/hour</span></div>
+        <div class="fact-row"><span>Rate</span><span>$${state.settings.hourlyRate||500}/hour</span></div>
         <div class="fact-row"><span>Charged</span><span>${isMinimumBilling ? `After the session, for at least the ${selectedDuration} min booked` : 'After the session, for actual time used'}</span></div>
         <div class="fact-row"><span>Receipt</span><span>Emailed automatically once charged</span></div>
       </div>
@@ -1421,7 +1422,7 @@ function renderClient(){
           <div class="fact-row"><span>Time</span><span>${fmtDate(selectedDay)}, ${fmtTime(selectedStartTime)}</span></div>
           <div class="fact-row"><span>Length</span><span>${selectedDuration} min</span></div>
           <div class="fact-row"><span>Format</span><span>${selectedDuration===15 ? 'Phone call' : (selectedType==='virtual'?'Video call':'In person')}</span></div>
-          <div class="fact-row"><span>Rate</span><span>${confirmedComped ? 'Complimentary — no charge' : confirmedCouponDiscount ? `$500/hour (${confirmedCouponDiscount.type==='percent' ? confirmedCouponDiscount.value+'% off applied' : money(confirmedCouponDiscount.value)+' off applied'})` : '$500/hour'}</span></div>
+          <div class="fact-row"><span>Rate</span><span>${confirmedComped ? 'Complimentary — no charge' : confirmedCouponDiscount ? `$${state.settings.hourlyRate||500}/hour (${confirmedCouponDiscount.type==='percent' ? confirmedCouponDiscount.value+'% off applied' : money(confirmedCouponDiscount.value)+' off applied'})` : `$${state.settings.hourlyRate||500}/hour`}</span></div>
           ${confirmedCouponCode ? `<div class="fact-row"><span>Coupon</span><span>${confirmedCouponCode}</span></div>` : ''}
         </div>
         ${selectedDuration===15 ? `<div class="qci-notice" style="margin-top:20px;">You don't need to call in &mdash; Heshy will call you directly at ${fmtTime(selectedStartTime)}. If he can't reach you, he'll try again about a minute later. If there's still no answer and the session hasn't been cancelled ahead of time, it will still be billed for the ${selectedDuration} minutes reserved.</div>` : ''}
@@ -1503,7 +1504,7 @@ function renderClientCalendar(candidateDates){
     const isToday = ds === todayDs;
     cells += `<div class="cal-cell-sm ${!isAvailable?'past':''} ${isSelected?'selected':''} ${isToday?'today':''}" ${isAvailable?`data-day="${ds}"`:''} ${isHoliday?`title="${jewishHolidayNames[ds]||'Jewish holiday'}"`:''}>
       <div class="cal-daynum-sm">${d.getDate()}</div>
-      ${isAvailable ? `<div class="cal-slot-count">${count}</div>` : ''}
+      ${isAvailable ? `<div class="cal-slot-count">${count} open</div>` : ''}
     </div>`;
   }
 
@@ -1698,7 +1699,8 @@ function renderAdmin(){
       const basis = billingBasisChoice[b.id] || state.settings.billingMode || 'actual';
       const minsForBilling = basis==='minimum' ? b.durationMin : actualMins;
       const hours = Math.round((minsForBilling/60)*100)/100;
-      const baseAmt = Math.round(hours*500*100)/100;
+      const rate = state.settings.hourlyRate || 500;
+      const baseAmt = Math.round(hours*rate*100)/100;
       let defaultAmt = baseAmt;
       let discountNote = '';
       if(b.couponDiscount && b.couponDiscount.type==='percent'){
@@ -2068,6 +2070,9 @@ function renderAdmin(){
           <a class="wg-link" href="/api/google-auth-url?token=${encodeURIComponent(adminToken)}">${calendarConnected?'Reconnect':'Connect Google Calendar'}</a>
         </div>
         <div class="note">When connected, times that conflict with your personal calendar won't show as bookable, and booked sessions get added to your calendar automatically.</div>
+        <label>Hourly rate</label>
+        <div class="note" style="margin-bottom:8px;">Updates everywhere at once &mdash; the booking page, charge calculations, and confirmation emails.</div>
+        <input type="text" id="set-hourly-rate" style="max-width:120px;" value="${state.settings.hourlyRate!=null?state.settings.hourlyRate:500}">
         <label>Session lengths you offer</label>
         <div class="note" style="margin-bottom:8px;">Clients choose from these when booking, within whatever time you have open. 60 min is the standard, pre-selected option.</div>
         <div style="display:flex;gap:18px;">
@@ -2320,7 +2325,7 @@ function attachHandlers(){
         await saveState(); render();
       };
     });
-    const meetEl=$('set-meet'), locEl=$('set-location'), intakeEl=$('set-intake'), dur45El=$('dur-45'), dur60El=$('dur-60'), dur120El=$('dur-120'), leadHoursEl=$('set-lead-hours'), cancelHoursEl=$('set-cancel-hours');
+    const meetEl=$('set-meet'), locEl=$('set-location'), intakeEl=$('set-intake'), dur45El=$('dur-45'), dur60El=$('dur-60'), dur120El=$('dur-120'), leadHoursEl=$('set-lead-hours'), cancelHoursEl=$('set-cancel-hours'), rateEl=$('set-hourly-rate');
     const billingActualBtn = $('billing-mode-actual'), billingMinimumBtn = $('billing-mode-minimum');
     if(billingActualBtn) billingActualBtn.onclick = ()=>{ state.settings.billingMode = 'actual'; render(); };
     if(billingMinimumBtn) billingMinimumBtn.onclick = ()=>{ state.settings.billingMode = 'minimum'; render(); };
@@ -2337,6 +2342,7 @@ function attachHandlers(){
         state.settings.durationOptions = chosenDurations.length ? chosenDurations : [60];
         if(leadHoursEl){ const n = Number(leadHoursEl.value); state.settings.minLeadHours = isNaN(n) ? 12 : Math.max(0, n); }
         if(cancelHoursEl){ const n2 = Number(cancelHoursEl.value); state.settings.clientCancelCutoffHours = isNaN(n2) ? 3 : Math.max(0, n2); }
+        if(rateEl){ const n3 = Number(rateEl.value); state.settings.hourlyRate = (isNaN(n3) || n3 <= 0) ? 500 : n3; }
         saveSettingsBtn.disabled = true; saveSettingsBtn.textContent = 'Saving…';
         const ok = await saveState();
         saveSettingsBtn.disabled = false; saveSettingsBtn.textContent = 'Save settings';
@@ -2365,7 +2371,7 @@ function attachHandlers(){
         const amtEl = document.querySelector(`[data-amount="${id}"]`);
         const hours = parseFloat(el.value);
         if(amtEl && !isNaN(hours)){
-          amtEl.value = (Math.round(hours*500*100)/100).toFixed(2);
+          amtEl.value = (Math.round(hours*(state.settings.hourlyRate||500)*100)/100).toFixed(2);
         }
       };
     });
