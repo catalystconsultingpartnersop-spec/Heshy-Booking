@@ -35,7 +35,8 @@ export default async function handler(req, res) {
         intakeQuestions: data.settings?.intakeQuestions || [],
         durationOptions: (data.settings?.durationOptions && data.settings.durationOptions.length) ? data.settings.durationOptions : [60],
         minLeadHours: (data.settings?.minLeadHours != null) ? data.settings.minLeadHours : 12,
-        billingMode: data.settings?.billingMode || 'actual'
+        billingMode: data.settings?.billingMode || 'actual',
+        hourlyRate: (data.settings?.hourlyRate != null) ? data.settings.hourlyRate : 500
       },
       availability: data.availability || defaultAvailability()
     });
