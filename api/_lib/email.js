@@ -88,7 +88,7 @@ export function bookingConfirmationEmail(booking, settings) {
       <table style="width:100%;border-collapse:collapse;font-family:Arial,sans-serif;">
         ${factRow('Time', `${dateStr}, ${timeStr}`)}
         ${factRow('Format', isQuickCheckin ? 'Phone call' : (booking.type === 'virtual' ? 'Video call' : 'In person'))}
-        ${factRow('Rate', booking.comped ? 'Complimentary — no charge' : '$500 per hour, charged after the session')}
+        ${factRow('Rate', booking.comped ? 'Complimentary — no charge' : `$${settings.hourlyRate||500} per hour, charged after the session`)}
         ${joinRow}
       </table>
       ${isQuickCheckin ? `<div style="margin-top:16px;padding:13px 16px;background:#FAF7F0;border-left:3px solid #C9A961;border-radius:4px;font-family:Arial,sans-serif;font-size:13px;line-height:1.6;color:#5C4A20;">You don't need to call in &mdash; Heshy will call you directly at ${timeStr}. If he can't reach you, he'll try again about a minute later. If there's still no answer and the session hasn't been cancelled ahead of time, it will still be billed for the ${booking.durationMin} minutes reserved.</div>` : ''}
