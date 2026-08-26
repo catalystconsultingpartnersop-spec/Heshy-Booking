@@ -41,6 +41,7 @@ export default async function handler(req, res) {
       availability: data.availability || defaultAvailability()
     });
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    console.error('Server error:', err);
+    res.status(500).json({ error: 'Something went wrong. Please try again.' });
   }
 }

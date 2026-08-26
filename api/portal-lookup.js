@@ -109,7 +109,8 @@ async function handleConfirmCardUpdate(req, res) {
     });
     res.status(200).json({ ok: true });
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    console.error('Server error:', err);
+    res.status(500).json({ error: 'Something went wrong. Please try again.' });
   }
 }
 
@@ -164,6 +165,7 @@ export default async function handler(req, res) {
     if (req.method === 'POST' && req.body?.action === 'cancel-booking') return handleCancelBooking(req, res);
     res.status(400).json({ error: 'Unknown or missing action.' });
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    console.error('Server error:', err);
+    res.status(500).json({ error: 'Something went wrong. Please try again.' });
   }
 }

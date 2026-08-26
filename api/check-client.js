@@ -7,6 +7,7 @@ export default async function handler(req, res) {
     const client = (data?.clients || []).find(c => c.email.toLowerCase() === email);
     res.status(200).json({ exists: !!client, blocked: !!(client && client.blocked) });
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    console.error('Server error:', err);
+    res.status(500).json({ error: 'Something went wrong. Please try again.' });
   }
 }

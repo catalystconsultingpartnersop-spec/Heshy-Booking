@@ -30,22 +30,23 @@ export default async function handler(req, res) {
       for (const type of ['virtual', 'in-person']) {
         for (const rule of (data.availability[type] || [])) {
           if (!rule.days.includes(dow)) continue;
+          const ruleDuration = rule.duration || 60; // each weekly rule can now define its own session length
           let cursor = timeToMin(rule.start);
           const endMin = timeToMin(rule.end);
-          while (cursor + 60 <= endMin) {
+          while (cursor + ruleDuration <= endMin) {
             const timeStr = pad2(Math.floor(cursor / 60)) + ':' + pad2(cursor % 60);
             const key = ds + '|' + timeStr + '|' + type;
             const existing = existingMap.get(key);
             if (!existing) {
-              const slot = { id: Math.random().toString(36).slice(2, 10), date: ds, time: timeStr, duration: 60, type };
+              const slot = { id: Math.random().toString(36).slice(2, 10), date: ds, time: timeStr, duration: ruleDuration, type };
               data.slots.push(slot);
               existingMap.set(key, slot);
               added++;
-            } else if (existing.duration !== 60 && !bookedSlotIds.has(existing.id)) {
-              existing.duration = 60;
+            } else if (existing.duration !== ruleDuration && !bookedSlotIds.has(existing.id)) {
+              existing.duration = ruleDuration;
               added++;
             }
-            cursor += 60;
+            cursor += ruleDuration;
           }
         }
       }
@@ -54,6 +55,7 @@ export default async function handler(req, res) {
     if (added > 0 || removed > 0) await kv.set('app-data', data);
     res.status(200).json({ added, removed });
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    console.error('Server error:', err);
+    res.status(500).json({ error: 'Something went wrong. Please try again.' });
   }
 }

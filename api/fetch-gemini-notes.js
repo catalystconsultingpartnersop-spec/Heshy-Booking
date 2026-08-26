@@ -169,6 +169,7 @@ export default async function handler(req, res) {
       note: `${notesNote} ${durationNote}`
     });
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    console.error('Server error:', err);
+    res.status(500).json({ error: 'Something went wrong. Please try again.' });
   }
 }

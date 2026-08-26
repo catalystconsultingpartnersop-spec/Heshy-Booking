@@ -185,7 +185,8 @@ If a section has nothing to report, write "None." under it. Stay factual and con
     await kv.del(key);
     res.status(200).json({ ok: true, summary: booking.summary });
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    console.error('Server error:', err);
+    res.status(500).json({ error: 'Something went wrong. Please try again.' });
   }
 }
 
@@ -388,9 +389,19 @@ export default async function handler(req, res) {
 
     if (req.method === 'POST' && req.body && req.body.action === 'login') {
       const { password } = req.body;
+      // Rate-limit failed admin logins to blunt brute-force — mirrors the client portal's lockout.
+      // Keyed globally (single admin) rather than per-IP, since there's only one legitimate admin
+      // and IPs are spoofable/shared; a short lockout is the pragmatic protection here.
+      const failKey = 'admin-fail';
+      const fails = (await kv.get(failKey)) || 0;
+      if (fails >= 6) {
+        return res.status(429).json({ error: 'Too many attempts. Please wait a few minutes and try again.' });
+      }
       if (!password || password !== process.env.ADMIN_PASSWORD) {
+        await kv.set(failKey, fails + 1, { ex: 900 }); // reset after 15 minutes
         return res.status(401).json({ error: 'Incorrect password' });
       }
+      await kv.del(failKey); // clear on success
       const token = randomToken();
       await kv.set('admin-session:' + token, true);
       return res.status(200).json({ ok: true, token });
@@ -427,6 +438,7 @@ export default async function handler(req, res) {
     }
     res.status(405).json({ error: 'Method not allowed' });
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    console.error('Server error:', err);
+    res.status(500).json({ error: 'Something went wrong. Please try again.' });
   }
 }

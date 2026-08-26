@@ -22,6 +22,17 @@ export default async function handler(req, res) {
   try {
     const timeMin = req.query.timeMin;
     const timeMax = req.query.timeMax;
+    // Bound the queryable window: this endpoint is public (the booking page needs it), but
+    // without limits anyone could mine the owner's personal calendar patterns for any date
+    // range in history or years ahead. Only allow what the booking page legitimately needs:
+    // from yesterday to 180 days out.
+    const min = new Date(timeMin), max = new Date(timeMax);
+    const now = Date.now();
+    if (isNaN(min) || isNaN(max) || max <= min
+        || min.getTime() < now - 24*60*60*1000
+        || max.getTime() > now + 180*24*60*60*1000) {
+      return res.status(400).json({ error: 'Invalid time range.' });
+    }
     const accessToken = await getAccessToken();
     if (!accessToken) {
       return res.status(200).json({ connected: false, busy: [] });
@@ -35,6 +46,7 @@ export default async function handler(req, res) {
     const busy = (fbData.calendars && fbData.calendars.primary && fbData.calendars.primary.busy) || [];
     res.status(200).json({ connected: true, busy });
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    console.error('Server error:', err);
+    res.status(500).json({ error: 'Something went wrong. Please try again.' });
   }
 }

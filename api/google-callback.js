@@ -5,9 +5,11 @@ export default async function handler(req, res) {
     const { code, error, state } = req.query;
     if (error) return res.status(400).send('Google sign-in was cancelled or denied.');
     if (!code) return res.status(400).send('Missing authorization code.');
-    if (!state || !(await kv.get('admin-session:' + state))) {
+    // Verify the one-time state code minted by google-auth-url, then consume it (single use).
+    if (!state || !(await kv.get('oauth-state:' + state))) {
       return res.status(401).send('Unauthorized request. Please reconnect from inside Manage.');
     }
+    await kv.del('oauth-state:' + state);
 
     const params = new URLSearchParams({
       code,
@@ -31,6 +33,7 @@ export default async function handler(req, res) {
     res.writeHead(302, { Location: '/#manage' });
     res.end();
   } catch (err) {
-    res.status(500).send('Error: ' + err.message);
+    console.error('Server error:', err);
+    res.status(500).send('Something went wrong. Please try again.');
   }
 }
