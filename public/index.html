@@ -399,6 +399,13 @@ function pad2(n){ return String(n).padStart(2,'0'); }
 function dateStr(d){ return d.getFullYear()+'-'+pad2(d.getMonth()+1)+'-'+pad2(d.getDate()); }
 let adminToken = (typeof sessionStorage !== 'undefined' && sessionStorage.getItem('heshyAdminToken')) || '';
 let adminUnlocked = !!adminToken;
+// Deep link from the new-booking email: #manage/client/<id> opens that client's profile
+// directly once the admin session loads. Parsed before the letters-only view check below,
+// since client ids contain digits.
+let pendingClientId = (() => {
+  const m = location.hash.match(/client\/([a-z0-9]+)/i);
+  return m ? m[1] : null;
+})();
 let view = (() => {
   const h = location.hash.replace(/[^a-z]/gi, '');
   if(h.includes('manage')) return 'admin';
@@ -623,6 +630,14 @@ async function loadAdminState(){
     if(!state.availability) state.availability = { virtual: [], 'in-person': [] };
     if(!state.overrides) state.overrides = [];
     if(!state.blockedDates) state.blockedDates = [];
+    // Honor a #manage/client/<id> deep link now that the client list is loaded.
+    if(pendingClientId){
+      if(state.clients.some(c => c.id === pendingClientId)){
+        adminView = 'client-detail';
+        viewingClientId = pendingClientId;
+      }
+      pendingClientId = null; // one-shot, so later navigation isn't hijacked
+    }
   }catch(e){ console.error('admin load failed', e); }
 }
 async function saveState(){
@@ -1802,7 +1817,7 @@ function renderAdmin(){
     const todayBookings = state.bookings.filter(b=>b.date===todayDs && !b.cancelled).sort((a,b)=>a.time.localeCompare(b.time));
     const upcomingBookings = state.bookings.filter(b=>b.date>=todayDs && !b.cancelled).sort((a,b)=> a.date===b.date ? a.time.localeCompare(b.time) : a.date.localeCompare(b.date));
     const thisWeekBookings = state.bookings.filter(b=>b.date>=todayDs && b.date<=weekAheadDs && !b.cancelled).sort((a,b)=> a.date===b.date ? a.time.localeCompare(b.time) : a.date.localeCompare(b.date));
-    const unbilledBookings = state.bookings.filter(b=>b.date<todayDs && b.status==='scheduled').sort((a,b)=> a.date===b.date ? a.time.localeCompare(b.time) : a.date.localeCompare(b.date));
+    const unbilledBookings = state.bookings.filter(b=>b.date<todayDs && b.status==='scheduled' && !b.cancelled).sort((a,b)=> a.date===b.date ? a.time.localeCompare(b.time) : a.date.localeCompare(b.date));
 
     if(!dashboardStatFilter) dashboardStatFilter = 'today';
 
