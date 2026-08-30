@@ -126,8 +126,20 @@ export function newBookingAlertEmail(booking, settings, client) {
          ${intakeHtml}
        </div>`
     : '';
-  const wgBlock = wgPdfName
-    ? `<div style="margin-top:14px;font-family:Arial,sans-serif;font-size:13px;color:#6E6E6E;">Working Genius PDF uploaded: ${esc(wgPdfName)} (see Manage &rarr; Clients for the file)</div>`
+  const wgLetters = ((client && client.wgLetters) || '').toUpperCase();
+  // Three distinct states, so the alert always says something definite about Working Genius
+  // rather than staying silent when nothing is on file.
+  const wgText = wgLetters
+    ? `Working Genius: <strong style="color:#111111;letter-spacing:0.08em;">${esc(wgLetters)}</strong>`
+    : wgPdfName
+      ? `Working Genius PDF uploaded: ${esc(wgPdfName)} &mdash; results not entered yet (open the client to add them)`
+      : `No Working Genius assessment on file for this client yet.`;
+  const wgBlock = `<div style="margin-top:14px;font-family:Arial,sans-serif;font-size:13px;color:#6E6E6E;">${wgText}</div>`;
+  const baseUrl = process.env.SITE_URL || 'https://heshy-booking.vercel.app';
+  const profileBlock = (client && client.id)
+    ? `<div style="margin-top:18px;font-family:Arial,sans-serif;font-size:13.5px;">
+         <a href="${baseUrl}/#manage/client/${encodeURIComponent(client.id)}" style="color:#111111;text-decoration:underline;">Open ${esc((booking.clientName || '').split(' ')[0] || 'client')}&rsquo;s profile</a>
+       </div>`
     : '';
   return {
     subject: `New booking: ${esc(booking.clientName)}, ${dateStr}`,
@@ -143,6 +155,7 @@ export function newBookingAlertEmail(booking, settings, client) {
       </table>
       ${intakeBlock}
       ${wgBlock}
+      ${profileBlock}
     `)
   };
 }
