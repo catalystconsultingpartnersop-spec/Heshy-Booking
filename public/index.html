@@ -692,8 +692,63 @@ async function loadJewishHolidays(){
   }catch(e){ jewishHolidayDates = new Set(); jewishHolidayNames = {}; }
 }
 let calendarConnected = false;
+
+// --- Eastern-time helpers -------------------------------------------------
+// Every time in this app is an Eastern wall-clock time. Parsing "2027-01-20T11:00" with
+// new Date() uses *the viewer's* timezone, so a client in Chicago or Israel would see
+// availability shifted by hours. These mirror api/_lib/time.js — keep the two in step.
+// Uses only long-supported Intl options (no shortOffset, no hourCycle) so this can't throw on
+// an older phone browser. hour12:false reports midnight as "24" on some engines, hence the % 24.
+const APP_TZ = 'America/New_York';
+function etFieldsAtC(instant){
+  const parts = new Intl.DateTimeFormat('en-CA',{
+    timeZone:APP_TZ, year:'numeric', month:'2-digit', day:'2-digit',
+    hour:'2-digit', minute:'2-digit', second:'2-digit', hour12:false
+  }).formatToParts(instant);
+  const p={}; for(const part of parts) p[part.type]=part.value;
+  return { year:Number(p.year), month:Number(p.month), day:Number(p.day),
+           hour:Number(p.hour)%24, minute:Number(p.minute), second:Number(p.second) };
+}
+function etOffsetMinutesAtC(instant){
+  const f = etFieldsAtC(instant);
+  const asUtc = Date.UTC(f.year, f.month-1, f.day, f.hour, f.minute, f.second);
+  return Math.round((asUtc - instant.getTime())/60000);
+}
+function etToUtcC(date, time){
+  const [y,mo,d] = date.split('-').map(Number);
+  const [h,mi] = time.split(':').map(Number);
+  const asIfUtc = Date.UTC(y,mo-1,d,h,mi);
+  let offset = etOffsetMinutesAtC(new Date(date+'T12:00:00Z'));
+  let instant = new Date(asIfUtc - offset*60000);
+  const refined = etOffsetMinutesAtC(instant);
+  if(refined !== offset) instant = new Date(asIfUtc - refined*60000);
+  return instant;
+}
+function etPartsOfC(instant){
+  const f = etFieldsAtC(instant);
+  const pad = n => String(n).padStart(2,'0');
+  return { date:`${f.year}-${pad(f.month)}-${pad(f.day)}`, minutes:f.hour*60+f.minute };
+}
+function busyRangesForDateC(busy, targetDate){
+  const ranges = [];
+  for(const b of busy||[]){
+    const start = new Date(b.start), end = new Date(b.end);
+    if(isNaN(start) || isNaN(end) || end <= start) continue;
+    const s = etPartsOfC(start), e = etPartsOfC(end);
+    if(e.date < targetDate || s.date > targetDate) continue;
+    if(e.date === targetDate && e.minutes === 0) continue;
+    const startMin = s.date < targetDate ? 0 : s.minutes;
+    const endMin = e.date > targetDate ? 24*60 : e.minutes;
+    if(endMin > startMin) ranges.push([startMin, endMin]);
+  }
+  return ranges;
+}
+// Today's date on the Eastern calendar, regardless of where the viewer is.
+function etTodayC(){ return etPartsOfC(new Date()).date; }
+// --------------------------------------------------------------------------
+
 function slotOverlapsBusy(slot){
-  const slotStart = new Date(slot.date+'T'+slot.time+':00');
+  const slotStart = etToUtcC(slot.date, slot.time);
   const slotEnd = new Date(slotStart.getTime() + slot.duration*60000);
   return calendarBusy.some(b=>{
     const bStart = new Date(b.start), bEnd = new Date(b.end);
@@ -712,7 +767,7 @@ async function loadCalendarBusy(){
 }
 function isFutureSlot(s){
   const minLeadHours = (state.settings.minLeadHours != null) ? state.settings.minLeadHours : 12;
-  const slotDateTime = new Date(s.date + 'T' + s.time + ':00');
+  const slotDateTime = etToUtcC(s.date, s.time);
   const cutoff = new Date(Date.now() + minLeadHours * 60 * 60 * 1000);
   return slotDateTime >= cutoff;
 }
@@ -742,12 +797,7 @@ function computeFreeRanges(ds, type){
   const busy = (state.bookings||[]).filter(b=>b.date===ds && b.type===type && !b.cancelled).map(b=>{
     const s = timeToMinC(b.time); return [s, s+(b.durationMin||60)];
   });
-  calendarBusy.forEach(b=>{
-    const bs = new Date(b.start), be = new Date(b.end);
-    const dayStart = new Date(ds+'T00:00:00'), dayEnd = new Date(ds+'T23:59:59');
-    if(be <= dayStart || bs >= dayEnd) return;
-    busy.push([Math.max(0, Math.round((bs - dayStart)/60000)), Math.min(24*60, Math.round((be - dayStart)/60000))]);
-  });
+  busyRangesForDateC(calendarBusy, ds).forEach(r => busy.push(r));
   let free = merged;
   busy.forEach(([bs,be])=>{
     const next = [];
@@ -1361,8 +1411,9 @@ function renderClient(){
     }
     // Find the next ~56 days that have at least one valid start time for the chosen type+duration.
     const candidateDates = [];
+    const [cy, cmo, cd] = etTodayC().split('-').map(Number);
     for(let i=0;i<56;i++){
-      const d = new Date(); d.setDate(d.getDate()+i);
+      const d = new Date(cy, cmo - 1, cd); d.setDate(d.getDate()+i);
       const ds = dateStr(d);
       if(jewishHolidayDates.has(ds)) continue;
       const times = computeStartTimes(ds, selectedType, selectedDuration);
@@ -1515,8 +1566,11 @@ function renderDashboardCalendar(){
 function renderClientCalendar(candidateDates){
   const countsByDate = {};
   candidateDates.forEach(c=>{ countsByDate[c.date] = c.times.length; });
-  const today = new Date(); today.setHours(0,0,0,0);
-  const todayDs = dateStr(today);
+  // Anchor the grid to today in Eastern time, not the viewer's timezone, so a client booking
+  // from another timezone sees the same days Heshy does.
+  const todayDs = etTodayC();
+  const [ty, tmo, td] = todayDs.split('-').map(Number);
+  const today = new Date(ty, tmo - 1, td);
   const todayDow = today.getDay();
 
   const totalCells = clientCalWeeksShown * 7;

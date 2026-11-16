@@ -1,6 +1,7 @@
 import { kv } from '@vercel/kv';
 import { put } from '@vercel/blob';
 import { sendEmail, bookingConfirmationEmail, newBookingAlertEmail } from './_lib/email.js';
+import { APP_TIMEZONE, etToUtc, busyRangesForDate, etDayBounds } from './_lib/time.js';
 
 async function getGoogleAccessToken() {
   const refreshToken = await kv.get('google-refresh-token');
@@ -19,8 +20,6 @@ async function getGoogleAccessToken() {
   const d = await r.json();
   return d.access_token || null;
 }
-
-const APP_TIMEZONE = 'America/New_York';
 
 // Shared by both the live coupon check and the actual booking submission, so they always agree.
 function validateCoupon(data, code, email) {
@@ -57,22 +56,7 @@ function resolveAddress(data, date) {
 // Authoritative check: is [time, time+durationMin) fully inside an open window on this date/type,
 // after subtracting every other booking of the same type and (if available) real Calendar busy time?
 // This is the actual security boundary — the client-side UI computation is just for showing good options.
-// Converts an Eastern-time wall-clock date+time into the true UTC instant, using the actual
-// ET offset in effect on that date (handles daylight saving automatically). Needed because
-// Vercel servers run in UTC — naively parsing "2026-08-27T11:00" there produces 11:00 UTC,
-// which is 4-5 hours earlier than the real slot, silently corrupting every time comparison.
-function etToUtc(date, time) {
-  const probe = new Date(date + 'T12:00:00Z');
-  const part = new Intl.DateTimeFormat('en-US', { timeZone: APP_TIMEZONE, timeZoneName: 'shortOffset' })
-    .formatToParts(probe).find(p => p.type === 'timeZoneName').value; // e.g. "GMT-4"
-  const m = part.match(/GMT([+-]\d+)(?::(\d+))?/);
-  const offH = parseInt(m[1], 10), offM = m[2] ? parseInt(m[2], 10) : 0;
-  const [y, mo, d] = date.split('-').map(Number);
-  const [h, mi] = time.split(':').map(Number);
-  return new Date(Date.UTC(y, mo - 1, d, h - offH, mi - (offH < 0 ? -offM : offM)));
-}
-
-function isRangeAvailable(data, date, time, durationMin, type, excludeBookingId, calendarBusyRanges) {
+export function isRangeAvailable(data, date, time, durationMin, type, excludeBookingId, calendarBusyRanges) {
   const minLeadHours = (data.settings?.minLeadHours != null) ? data.settings.minLeadHours : 12;
   const slotDateTime = etToUtc(date, time);
   const cutoff = new Date(Date.now() + minLeadHours * 60 * 60 * 1000);
@@ -180,19 +164,19 @@ export default async function handler(req, res) {
     try {
       const accessTokenForCheck = await getGoogleAccessToken();
       if (accessTokenForCheck) {
-        const dayStart = new Date(date + 'T00:00:00');
-        const dayEnd = new Date(date + 'T23:59:59');
+        // Query the Eastern calendar day, not the UTC one — otherwise the window is shifted by
+        // 4-5 hours and misses part of the real day.
+        const bounds = etDayBounds(date);
         const fbRes = await fetch('https://www.googleapis.com/calendar/v3/freeBusy', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${accessTokenForCheck}` },
-          body: JSON.stringify({ timeMin: dayStart.toISOString(), timeMax: dayEnd.toISOString(), items: [{ id: 'primary' }] })
+          body: JSON.stringify({ timeMin: bounds.start.toISOString(), timeMax: bounds.end.toISOString(), items: [{ id: 'primary' }] })
         });
         const fbData = await fbRes.json();
-        const busy = fbData.calendars?.primary?.busy || [];
-        calendarBusyRanges = busy.map(b => {
-          const bs = new Date(b.start), be = new Date(b.end);
-          return [Math.max(0, Math.round((bs - dayStart) / 60000)), Math.min(24 * 60, Math.round((be - dayStart) / 60000))];
-        });
+        // Convert each busy interval to Eastern wall-clock minutes — the same scale the rest of
+        // this file measures times on. Subtracting raw UTC instants here was reading an 11am
+        // meeting as 4pm, so the conflict check was looking at the wrong part of the day.
+        calendarBusyRanges = busyRangesForDate(fbData.calendars?.primary?.busy || [], date);
       }
     } catch (e) { /* best-effort; skip if it fails */ }
 
