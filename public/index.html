@@ -2830,6 +2830,16 @@ function renderAdmin(){
                 <div class="sub">Old links are replaced and the originals deleted, a few each night. Session audio is deleted once it's been transcribed.</div>
                 ${systemStatus.files.remaining > 0 ? `<div style="margin-top:8px;"><button class="ghost small" id="secureFilesBtn">Do the rest now</button></div>` : ''}
               </div>
+              <div style="padding:9px 0;border-bottom:1px solid var(--line);">
+                <div><strong>Sign in with Google</strong> &mdash; ${
+                  !systemStatus.google ? 'not checked yet.'
+                  : systemStatus.google.ok ? 'Google accepts the setup.'
+                  : esc(systemStatus.google.message || 'there is a problem.')}</div>
+                <div class="sub">${systemStatus.google && systemStatus.google.ok
+                  ? 'One thing this can\'t check: if your Google consent screen is still in Testing mode, only accounts you listed as testers can sign in. Try it once with a Google account that isn\'t yours.'
+                  : 'Clients can still sign in with a password or a one-time code.'}</div>
+                <div style="margin-top:8px;"><button class="ghost small" id="testGoogleBtn">Test it</button></div>
+              </div>
               <div style="padding:9px 0;">
                 <div><strong>Refunds &amp; disputes</strong> &mdash; ${systemStatus.stripe.configured
                   ? 'connected. Stripe tells the app when money moves.'
@@ -3250,6 +3260,15 @@ function attachHandlers(){
       await loadSystemStatus();
       if(m) m.textContent = 'Done.';
     }catch(e){ if(m) m.textContent = 'Could not finish that just now.'; }
+    render();
+  };
+  const testGoogleBtn = $('testGoogleBtn');
+  if(testGoogleBtn) testGoogleBtn.onclick = async ()=>{
+    testGoogleBtn.disabled = true; testGoogleBtn.textContent = 'Asking Google\u2026';
+    try{
+      const r = await fetch('/api/admin-data?action=test-google-signin', { headers:{ 'X-Admin-Token': adminToken } });
+      systemStatus = { ...(systemStatus||{files:{},stripe:{}}), google: await r.json() };
+    }catch(e){ systemStatus = { ...(systemStatus||{files:{},stripe:{}}), google: { ok:false, message:'Could not run the check.' } }; }
     render();
   };
   const setupStripeBtn = $('setupStripeBtn');

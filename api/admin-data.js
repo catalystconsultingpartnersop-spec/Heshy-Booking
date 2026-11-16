@@ -766,6 +766,58 @@ export default async function handler(req, res) {
       return res.status(200).json({ configured: hasSecret, id: id || null });
     }
 
+    // Asks Google itself whether this sign-in would work, from the server — where Google is
+    // reachable. It checks the parts that are configuration: is the client id real, is the
+    // redirect address registered, are the scopes accepted. It cannot check whether the consent
+    // screen is still in Testing mode, because Google only enforces that after someone picks an
+    // account; that one needs a real sign-in by somebody who isn't the project owner.
+    if (req.query?.action === 'test-google-signin' || req.body?.action === 'test-google-signin') {
+      const clientId = process.env.GOOGLE_CLIENT_ID;
+      const redirectUri = process.env.GOOGLE_REDIRECT_URI;
+      if (!clientId || !redirectUri) {
+        return res.status(200).json({ ok: false, problem: 'missing-config',
+          message: 'Google isn\'t configured on the server at all (no client id or redirect address).' });
+      }
+      const probe = `https://accounts.google.com/o/oauth2/v2/auth?client_id=${encodeURIComponent(clientId)}`
+        + `&redirect_uri=${encodeURIComponent(redirectUri)}&response_type=code`
+        + `&scope=${encodeURIComponent('openid email profile')}&state=probe&prompt=select_account`;
+      try {
+        const r = await fetch(probe, { redirect: 'manual', headers: { 'User-Agent': 'Mozilla/5.0' } });
+        const body = await r.text().catch(() => '');
+        const found = m => body.toLowerCase().includes(m);
+
+        if (found('redirect_uri_mismatch')) {
+          return res.status(200).json({ ok: false, problem: 'redirect-mismatch', redirectUri,
+            message: 'Google does not recognise this app\'s redirect address. It has to be listed exactly, in the Google Cloud console.' });
+        }
+        if (found('invalid_client') || r.status === 401) {
+          return res.status(200).json({ ok: false, problem: 'bad-client',
+            message: 'Google does not recognise the client id this app is using.' });
+        }
+        if (found('invalid_scope')) {
+          return res.status(200).json({ ok: false, problem: 'bad-scope',
+            message: 'Google refused the sign-in permissions this app asks for.' });
+        }
+        if (found('accounterror') || found('error 400') || found('error 401') || found('error 403')) {
+          return res.status(200).json({ ok: false, problem: 'refused', status: r.status,
+            message: 'Google refused the request. The exact reason is on its error page.' });
+        }
+        // A 200 sign-in page or a redirect into Google's own login flow both mean the
+        // configuration is accepted and a real person would now be asked to choose an account.
+        const reachedSignIn = r.status === 200 || (r.status >= 300 && r.status < 400
+          && /accounts\.google\.com|accounts\.youtube\.com/.test(r.headers.get('location') || ''));
+        if (reachedSignIn) {
+          return res.status(200).json({ ok: true, redirectUri,
+            message: 'Google accepted the request and would now ask the client to choose an account.' });
+        }
+        return res.status(200).json({ ok: false, problem: 'unexpected', status: r.status,
+          message: `Google answered unexpectedly (${r.status}).` });
+      } catch (err) {
+        await logError('test-google-signin', err, {});
+        return res.status(200).json({ ok: false, problem: 'unreachable', message: 'Could not reach Google: ' + err.message });
+      }
+    }
+
     if (req.query?.action === 'secure-files' || req.body?.action === 'secure-files') {
       return handleSecureFiles(req, res);
     }

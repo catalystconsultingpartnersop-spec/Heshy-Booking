@@ -139,5 +139,72 @@ check('...with the session token taken from the fragment, not the query string',
 check('...and cleared from the address bar', /history\.replaceState\(null, '', window\.location\.pathname \+ '#portal'\)/.test(html));
 check('a Google account with no matching client is explained', /isn.t on file/.test(html));
 
+// --- the Google configuration check ----------------------------------------------------------
+// It asks Google from the server, where Google is reachable, and reports what comes back.
+const adminMod = await import('../api/admin-data.js');
+const adminHandler = adminMod.default;
+process.env.GOOGLE_CLIENT_ID = 'cid'; process.env.GOOGLE_REDIRECT_URI = 'https://x/api/google-callback';
+store.set('admin-session:tok', true);
+appData = appData || { clients: [], bookings: [], settings: {} };
+
+async function probeWith(reply) {
+  const realFetch = globalThis.fetch;
+  globalThis.fetch = async (url) => {
+    if (String(url).includes('accounts.google.com')) return reply;
+    return realFetch(url);
+  };
+  const r = mockRes();
+  await adminHandler({ method:'GET', query:{ action:'test-google-signin' }, headers:{ 'x-admin-token':'tok' }, body:null }, r);
+  globalThis.fetch = realFetch;
+  return r.body;
+}
+const page = (body, status = 200, location = null) => ({
+  status, text: async () => body, headers: { get: () => location }
+});
+
+let out = await probeWith(page('<html>Choose an account</html>', 200));
+check('a working setup reports ok', out?.ok === true, JSON.stringify(out));
+check('...and says what would happen next', /choose an account/i.test(out?.message || ''));
+
+out = await probeWith(page('Error 400: redirect_uri_mismatch', 400));
+check('an unregistered redirect address is identified', out?.ok === false && out?.problem === 'redirect-mismatch', JSON.stringify(out));
+check('...and names the address Google rejected', out?.redirectUri === 'https://x/api/google-callback');
+
+out = await probeWith(page('Error 401: invalid_client', 401));
+check('a wrong client id is identified', out?.problem === 'bad-client', JSON.stringify(out));
+
+out = await probeWith(page('Error 400: invalid_scope', 400));
+check('refused permissions are identified', out?.problem === 'bad-scope', JSON.stringify(out));
+
+out = await probeWith(page('', 302, 'https://accounts.google.com/signin/v2/identifier'));
+check('a redirect into Google sign-in counts as working', out?.ok === true, JSON.stringify(out));
+
+out = await probeWith(page('', 302, 'https://evil.example.com/'));
+check('a redirect somewhere else does not count as working', out?.ok === false, JSON.stringify(out));
+
+{
+  const realFetch = globalThis.fetch;
+  globalThis.fetch = async (url) => { if (String(url).includes('accounts.google.com')) throw new Error('network down'); return realFetch(url); };
+  const r = mockRes();
+  await adminHandler({ method:'GET', query:{ action:'test-google-signin' }, headers:{ 'x-admin-token':'tok' }, body:null }, r);
+  globalThis.fetch = realFetch;
+  check('a network failure is reported, not thrown', r.body?.problem === 'unreachable', JSON.stringify(r.body));
+}
+
+{
+  const saved = process.env.GOOGLE_CLIENT_ID;
+  delete process.env.GOOGLE_CLIENT_ID;
+  const r = mockRes();
+  await adminHandler({ method:'GET', query:{ action:'test-google-signin' }, headers:{ 'x-admin-token':'tok' }, body:null }, r);
+  process.env.GOOGLE_CLIENT_ID = saved;
+  check('missing configuration is reported plainly', r.body?.problem === 'missing-config', JSON.stringify(r.body));
+}
+
+const r401 = mockRes();
+await adminHandler({ method:'GET', query:{ action:'test-google-signin' }, headers:{}, body:null }, r401);
+check('the check needs an admin session', r401.statusCode === 401);
+
+check('Manage warns that Testing mode cannot be detected this way', /Testing mode/.test(html));
+
 console.log(`\n${pass} passed, ${fail} failed`);
 if (fail) { console.log('\nFAILURES:\n' + failures.map(f => '  ' + f).join('\n')); process.exit(1); }
