@@ -1,7 +1,7 @@
 import { kv } from '@vercel/kv';
 import { put } from '@vercel/blob';
-import { verifyAdminToken, verifyAgentKey, randomToken } from './_lib/auth.js';
-import { sendEmail, reminderEmail, dailyDigestEmail, rescheduledEmail } from './_lib/email.js';
+import { verifyAdminToken, verifyAgentKey, randomToken, issueScopedToken } from './_lib/auth.js';
+import { sendEmail, reminderEmail, dailyDigestEmail, rescheduledEmail, strengthsInviteEmail } from './_lib/email.js';
 import { checkSlot } from './_lib/availability.js';
 import { logError, readErrors, clearErrors, logAgentAccess, readAgentLog } from './_lib/errorlog.js';
 import { buildSummary, buildDetail } from './_lib/diagnostics.js';
@@ -567,6 +567,31 @@ export default async function handler(req, res) {
     }
 
     if (!(await verifyAdminToken(req))) return res.status(401).json({ error: 'Unauthorized' });
+
+    // Nudge a client to take the strengths assessment: emails them a direct link carrying a
+    // token that names only their own record, so they don't have to sign in or type anything.
+    if (req.method === 'POST' && req.body?.action === 'send-strengths-invite') {
+      const { clientId } = req.body;
+      const data = await kv.get('app-data');
+      const client = (data?.clients || []).find(c => c.id === clientId);
+      if (!client) return res.status(404).json({ error: 'Client not found.' });
+      if (!client.email) return res.status(400).json({ error: 'That client has no email address on file.' });
+      try {
+        const token = await issueScopedToken('strengths-invite', client.id, 60 * 60 * 24 * 60);
+        const mail = strengthsInviteEmail(client, token);
+        const sent = await sendEmail({ to: client.email, subject: mail.subject, html: mail.html });
+        if (!sent) {
+          await logError('send-strengths-invite', new Error('sendEmail reported failure'), { clientId });
+          return res.status(502).json({ error: "The email didn't go out. Check the Problem log in Settings." });
+        }
+        client.strengthsInviteSentAt = Date.now();
+        await kv.set('app-data', data);
+        return res.status(200).json({ ok: true, sentAt: client.strengthsInviteSentAt, to: client.email });
+      } catch (err) {
+        await logError('send-strengths-invite', err, { clientId });
+        return res.status(500).json({ error: 'Something went wrong sending that email.' });
+      }
+    }
 
     if (req.body?.action === 'agent-log' || req.query?.action === 'agent-log') {
       return res.status(200).json({ entries: await readAgentLog(40) });

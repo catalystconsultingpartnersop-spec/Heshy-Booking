@@ -276,3 +276,41 @@ export function dailyDigestEmail(todayBookings, tomorrowBookings) {
     `)
   };
 }
+
+/**
+ * The nudge Heshy sends from Manage: a direct link into the strengths assessment, with the
+ * client's invite token in it, so they can start without signing in or typing anything.
+ */
+export function strengthsInviteEmail(client, token) {
+  const baseUrl = process.env.SITE_URL || 'https://heshy-booking.vercel.app';
+  const link = `${baseUrl}/?strengths=${encodeURIComponent(token)}`;
+  const firstName = (client.name || '').split(' ')[0];
+  return {
+    subject: 'A short assessment before our session',
+    html: wrap(`
+      <div style="font-size:22px;font-family:Georgia,serif;margin-bottom:8px;">Before we meet</div>
+      <div style="font-size:14px;font-family:Arial,sans-serif;color:#3C3C3C;line-height:1.65;margin-bottom:16px;">
+        Hi ${esc(firstName) || 'there'} &mdash; I'd like you to spend about ten minutes on this before our session.
+      </div>
+      <div style="font-size:14px;font-family:Arial,sans-serif;color:#3C3C3C;line-height:1.65;margin-bottom:16px;">
+        It tells me how you're actually wired &mdash; what energises you, what you're good at, and what quietly
+        drains you. Without it, I spend the first part of our time working that out. With it, we start at the
+        real conversation.
+      </div>
+      <div style="padding:14px 16px;background:#FAF7F0;border-left:3px solid #C9A961;border-radius:4px;font-family:Arial,sans-serif;font-size:13.5px;line-height:1.65;color:#5C4A20;margin-bottom:22px;">
+        This used to cost money. I built my own version so I can give it to you as part of working together,
+        at no charge.
+      </div>
+      <div style="font-family:Arial,sans-serif;margin-bottom:18px;">
+        <a href="${link}" style="display:inline-block;background:#111111;color:#FFFFFF;text-decoration:none;
+           font-size:14px;padding:13px 26px;border-radius:6px;">Start the assessment</a>
+      </div>
+      <div style="font-family:Arial,sans-serif;font-size:12.5px;color:#6E6E6E;line-height:1.6;">
+        There's nothing to study for and no wrong answers &mdash; answer how you actually feel, not how you
+        think you should. If the button doesn't work, paste this into your browser:<br>
+        <span style="color:#3C3C3C;word-break:break-all;">${esc(link)}</span>
+      </div>
+      <div style="font-family:Arial,sans-serif;font-size:13.5px;color:#3C3C3C;margin-top:22px;">Thanks,<br>Heshy</div>
+    `)
+  };
+}
