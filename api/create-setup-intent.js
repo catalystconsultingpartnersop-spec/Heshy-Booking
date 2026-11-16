@@ -1,35 +1,30 @@
-import Stripe from 'stripe';
+import { kv } from '@vercel/kv';
 import { logError } from './_lib/errorlog.js';
-
-const stripe = new Stripe(process.env.STRIPE_SECRET_KEY);
+import { stripe, resolveCustomer, issueSetupToken } from './_lib/stripecustomer.js';
 
 export default async function handler(req, res) {
   if (req.method !== 'POST') return res.status(405).json({ error: 'Method not allowed' });
   try {
-    const { name, email, phone, customerId } = req.body;
-    let customer;
-    if (customerId) {
-      // Reusing an existing customer — e.g. a returning client updating their card from the
-      // portal, rather than a brand new booking.
-      customer = await stripe.customers.retrieve(customerId);
-      if (!customer || customer.deleted) return res.status(400).json({ error: 'That customer no longer exists.' });
-    } else {
-      if (!name || !email) return res.status(400).json({ error: 'Name and email are required' });
-      customer = await stripe.customers.create({ name, email, phone });
-    }
+    const { name, email, phone } = req.body || {};
+    if (!name || !email) return res.status(400).json({ error: 'Name and email are required' });
+
+    // The customer is resolved here, from the email, against our own client records — a
+    // returning client reuses the customer they already have instead of collecting a new one
+    // per booking. The browser no longer sends a customer id and no longer receives one back:
+    // it gets a token that only create-booking can redeem, and only for this same email.
+    const data = (await kv.get('app-data')) || { clients: [] };
+    const { customer } = await resolveCustomer(data, { name, email, phone });
 
     const setupIntent = await stripe.setupIntents.create({
       customer: customer.id,
       payment_method_types: ['card']
     });
+    const setupToken = await issueSetupToken(customer.id, email);
 
-    res.status(200).json({
-      clientSecret: setupIntent.client_secret,
-      customerId: customer.id
-    });
+    res.status(200).json({ clientSecret: setupIntent.client_secret, setupToken });
   } catch (err) {
     console.error('Server error:', err);
-    await logError('create-setup-intent', err, { method: req.method, action: req.body?.action || req.query?.action });
+    await logError('create-setup-intent', err, { method: req.method, email: req.body?.email });
     res.status(500).json({ error: 'Something went wrong. Please try again.' });
   }
 }

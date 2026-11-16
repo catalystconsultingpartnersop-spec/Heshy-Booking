@@ -4,6 +4,7 @@ import { sendEmail, bookingConfirmationEmail, newBookingAlertEmail } from './_li
 import { APP_TIMEZONE, busyRangesForDate, etDayBounds } from './_lib/time.js';
 import { isRangeAvailable } from './_lib/availability.js';
 import { logError } from './_lib/errorlog.js';
+import { redeemSetupToken } from './_lib/stripecustomer.js';
 
 async function getGoogleAccessToken() {
   const refreshToken = await kv.get('google-refresh-token');
@@ -91,8 +92,8 @@ export default async function handler(req, res) {
   }
   if (req.method !== 'POST') return res.status(405).json({ error: 'Method not allowed' });
   try {
-    const { date, time, durationMin, type, name, email, phone, intakeAnswers, wgPdfName, wgPdfData, stripeCustomerId, couponCode } = req.body || {};
-    if (!date || !time || !durationMin || !type || !name || !email || !phone || !stripeCustomerId) {
+    const { date, time, durationMin, type, name, email, phone, intakeAnswers, wgPdfName, wgPdfData, setupToken, couponCode } = req.body || {};
+    if (!date || !time || !durationMin || !type || !name || !email || !phone || !setupToken) {
       return res.status(400).json({ error: 'Missing required fields.' });
     }
     if (type !== 'virtual' && type !== 'in-person') {
@@ -169,6 +170,14 @@ export default async function handler(req, res) {
       return res.status(403).json({ error: 'Unable to book at this time.' });
     }
 
+    // Which Stripe customer this booking belongs to is decided by the token issued when the card
+    // was saved, not by anything the browser claims. The token is only valid for the same email
+    // it was issued for, so a caller can't attach their booking to someone else's customer.
+    const stripeCustomerId = await redeemSetupToken(setupToken, email);
+    if (!stripeCustomerId) {
+      return res.status(400).json({ error: 'Your payment details expired before the booking finished. Please re-enter your card and try again.' });
+    }
+
     // Upload the WG PDF now (independent of the shared data blob, so no race risk here) — but
     // hold off on touching data.clients/data.bookings until right before the final write below.
     let storedWgPdfData = '';
@@ -243,18 +252,33 @@ export default async function handler(req, res) {
     // correct info right there. Email stays as the matching key and is never silently changed.
     client.name = name;
     client.phone = phone;
-    client.stripeCustomerId = stripeCustomerId; // keep this current even for a returning client
+    // This used to split one person across several Stripe customers, because create-setup-intent
+    // made a brand-new customer for every booking and this line pointed the client at the newest
+    // one. The fix is upstream: resolveCustomer() reuses the customer they already have. So the
+    // id carried by the token is already theirs, and assigning it here keeps the client record
+    // and the booking in agreement — including when their old customer was deleted in Stripe and
+    // had to be replaced, which would otherwise leave a dead id on the record forever.
+    client.stripeCustomerId = stripeCustomerId;
 
     let comped = false;
     let appliedCoupon = null;
     let couponDiscount = null;
     if (couponCode) {
       const couponResult = validateCoupon(freshData, couponCode, email);
-      if (couponResult.valid) {
-        appliedCoupon = couponResult.coupon;
-        comped = appliedCoupon.discountType === 'free' || !appliedCoupon.discountType; // treat legacy coupons (no discountType set) as free, matching prior behavior
-        couponDiscount = comped ? null : { type: appliedCoupon.discountType, value: appliedCoupon.discountValue };
+      if (!couponResult.valid) {
+        // A code that was accepted while they were typing can be used up or removed by the time
+        // they finish. This used to book them at full price without a word, so they'd believe a
+        // discount applied and only find out when the bill arrived. Now the booking stops and
+        // they decide: remove the code, or go ahead at full price.
+        return res.status(409).json({
+          error: couponResult.reason || "That code is no longer valid.",
+          couponRejected: true,
+          couponCode: String(couponCode).trim().toUpperCase()
+        });
       }
+      appliedCoupon = couponResult.coupon;
+      comped = appliedCoupon.discountType === 'free' || !appliedCoupon.discountType; // treat legacy coupons (no discountType set) as free, matching prior behavior
+      couponDiscount = comped ? null : { type: appliedCoupon.discountType, value: appliedCoupon.discountValue };
     }
 
     const booking = {

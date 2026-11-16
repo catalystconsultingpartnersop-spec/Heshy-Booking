@@ -941,10 +941,22 @@ async function confirmBooking(){
         date: selectedDay, time: selectedStartTime, durationMin: selectedDuration, type: selectedType,
         name: clientForm.name, email: clientForm.email, phone: clientForm.phone,
         intakeAnswers: clientForm.intakeAnswers, wgPdfName: clientForm.wgPdfName, wgPdfData: clientForm.wgPdfData,
-        stripeCustomerId: setupData.customerId, couponCode: clientForm.couponCode
+        setupToken: setupData.setupToken, couponCode: clientForm.couponCode
       })
     });
     const bookingData = await bookingRes.json();
+    // A code that was fine while they were typing can be used up before they finish. The booking
+    // is stopped rather than quietly going through at full price, and the code is cleared so
+    // pressing Book again is a deliberate choice to pay full price.
+    if(bookingData.couponRejected){
+      clientForm.couponCode = '';
+      couponCheckState = { status:'invalid', message: bookingData.error };
+      submitting = false;
+      cardErrorMsg = bookingData.error + ' Your card has not been charged and the session is not booked — press Book session again to continue at the full rate.';
+      render();
+      const errEl = document.getElementById('card-error'); if(errEl) errEl.textContent = cardErrorMsg;
+      return;
+    }
     if(bookingData.error){ throw new Error(bookingData.error); }
     if(bookingData.meetLink) confirmedMeetLink = bookingData.meetLink;
     if(bookingData.location) confirmedLocation = bookingData.location;
@@ -1794,21 +1806,38 @@ function renderAdmin(){
     let action = '';
     if(b.status!=='charged' && !b.cancelled){
       const actualMins = b.actualMinutes || b.durationMin;
+      // A comped session never gets charge controls. It used to show the normal amount box and
+      // a Charge button, so one wrong click billed a free session in full.
+      if(b.comped){
+        action = `
+        <div class="charge-row">
+          <div class="note" style="margin-bottom:10px;">This session is complimentary${b.couponCode?` (<strong>${esc(b.couponCode)}</strong>)`:''} &mdash; no card will be charged.</div>
+          <div class="row2">
+            <div><label>Hours worked</label><input type="text" value="${Math.round((actualMins/60)*100)/100}" data-actual-hours="${b.id}"></div>
+            <div><label>Amount</label><input type="text" value="0.00" disabled></div>
+          </div>
+          <div style="margin-top:12px;"><button class="primary small" data-charge="${b.id}">Complete at no charge</button></div>
+        </div>`;
+      } else {
       const basis = billingBasisChoice[b.id] || state.settings.billingMode || 'actual';
-      const minsForBilling = basis==='minimum' ? b.durationMin : actualMins;
+      // Mirrors computeCharge() in api/_lib/billing.js. In minimum mode the booked length is a
+      // floor, not the answer: a session that ran over bills what it actually ran, which is what
+      // clients are told. This used to return the booked length and quietly undercharge.
+      const minsForBilling = basis==='minimum' ? Math.max(b.durationMin, actualMins) : actualMins;
       const hours = Math.round((minsForBilling/60)*100)/100;
       const rate = state.settings.hourlyRate || 500;
       const baseAmt = Math.round(hours*rate*100)/100;
       let defaultAmt = baseAmt;
       let discountNote = '';
       if(b.couponDiscount && b.couponDiscount.type==='percent'){
-        defaultAmt = Math.round(baseAmt*(1-b.couponDiscount.value/100)*100)/100;
+        defaultAmt = Math.round(baseAmt*(1-Math.min(100,b.couponDiscount.value)/100)*100)/100;
         discountNote = `<div class="note" style="margin-bottom:8px;">Coupon <strong>${esc(b.couponCode)}</strong>: ${b.couponDiscount.value}% off &mdash; ${money(baseAmt)} \u2192 ${money(defaultAmt)}</div>`;
-      } else if(b.couponDiscount && b.couponDiscount.type==='fixed'){
+      } else if(b.couponDiscount && (b.couponDiscount.type==='fixed'||b.couponDiscount.type==='amount')){
         defaultAmt = Math.max(0, Math.round((baseAmt-b.couponDiscount.value)*100)/100);
         discountNote = `<div class="note" style="margin-bottom:8px;">Coupon <strong>${esc(b.couponCode)}</strong>: ${money(b.couponDiscount.value)} off &mdash; ${money(baseAmt)} \u2192 ${money(defaultAmt)}</div>`;
       }
       const amt = (b.amount!=null) ? b.amount : defaultAmt;
+      const overMin = basis==='minimum' && actualMins > b.durationMin;
       action = `
         <div class="charge-row">
           <div class="note" style="margin-bottom:8px;">Actual time tracked: <strong>${actualMins} min</strong> &middot; Booked for: <strong>${b.durationMin} min</strong></div>
@@ -1816,8 +1845,9 @@ function renderAdmin(){
           <label>Bill for</label>
           <div class="type-toggle" style="margin-bottom:12px;">
             <div class="type-btn ${basis==='actual'?'active':''}" data-billing-basis="${b.id}" data-basis-value="actual">Actual time (${actualMins} min)</div>
-            <div class="type-btn ${basis==='minimum'?'active':''}" data-billing-basis="${b.id}" data-basis-value="minimum">Full booked (${b.durationMin} min)</div>
+            <div class="type-btn ${basis==='minimum'?'active':''}" data-billing-basis="${b.id}" data-basis-value="minimum">At least booked (${minsForBilling} min)</div>
           </div>
+          ${overMin?`<div class="note" style="margin-bottom:8px;">Ran ${actualMins - b.durationMin} min over the booked length, so it bills the ${actualMins} min actually worked.</div>`:''}
           <div class="row2">
             <div><label>Hours to bill</label><input type="text" value="${hours}" data-actual-hours="${b.id}"></div>
             <div><label>Amount to charge</label><input type="text" value="${amt.toFixed(2)}" data-amount="${b.id}"></div>
@@ -1825,6 +1855,7 @@ function renderAdmin(){
           <div style="margin-top:12px;"><button class="primary small" data-charge="${b.id}">Charge and send receipt</button></div>
           <button class="ghost small danger-ghost" data-skip-charge="${b.id}" style="margin-top:8px;">Mark complete, don't charge</button>
         </div>`;
+      }
     }
     const isRescheduling = reschedulingId === b.id;
     const rescheduleBlock = isRescheduling ? `
@@ -2334,10 +2365,12 @@ async function savePortalCard(){
   if(!portalCardElement) return;
   portalCardSaving = true; portalCardError = ''; render();
   try{
-    const setupRes = await fetch('/api/create-setup-intent', {
+    // The portal session identifies who this is, so the server makes the SetupIntent against
+    // their own Stripe customer. The page never sees or sends a customer id.
+    const setupRes = await fetch('/api/portal-lookup', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ customerId: portalClient.stripeCustomerId })
+      body: JSON.stringify({ action: 'start-card-update', token: portalToken })
     });
     const setupData = await setupRes.json();
     if(setupData.error){ portalCardError = setupData.error; portalCardSaving = false; render(); return; }

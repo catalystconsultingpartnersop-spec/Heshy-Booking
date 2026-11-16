@@ -1,7 +1,7 @@
 import { kv } from '@vercel/kv';
-import Stripe from 'stripe';
 import { randomToken } from './_lib/auth.js';
 import { logError } from './_lib/errorlog.js';
+import { stripe, resolveCustomer, setDefaultCard } from './_lib/stripecustomer.js';
 
 // Converts an Eastern-time wall-clock date+time into the true UTC instant (DST-aware).
 // Vercel servers run UTC; naive parsing skews every time comparison by 4-5 hours.
@@ -17,7 +17,6 @@ function etToUtc(date, time) {
 }
 
 
-const stripe = new Stripe(process.env.STRIPE_SECRET_KEY);
 
 async function getGoogleAccessToken() {
   const refreshToken = await kv.get('google-refresh-token');
@@ -113,6 +112,42 @@ async function handleSession(req, res) {
   res.status(200).json(clientSummary(client, data.bookings || [], data.settings));
 }
 
+// Starting a card replacement from the portal.
+//
+// This step didn't exist. The page asked create-setup-intent for a SetupIntent and passed it a
+// customer id taken from the portal response — but the portal response never contained one (it
+// returns only `hasCard`, deliberately, so a client's Stripe id isn't handed to the browser).
+// The id arrived undefined, so Stripe was asked to create a customer with no name, and every
+// card replacement failed. The session itself identifies the client, so the SetupIntent is made
+// here and only the client secret goes back.
+async function handleStartCardUpdate(req, res) {
+  const { token } = req.body || {};
+  if (!token) return res.status(400).json({ error: 'Missing token.' });
+  const clientId = await kv.get('portal-session:' + token);
+  if (!clientId) return res.status(401).json({ error: 'Your session has expired — please log in again.' });
+
+  const data = await kv.get('app-data');
+  const client = (data?.clients || []).find(c => c.id === clientId);
+  if (!client) return res.status(404).json({ error: 'We could not find your details.' });
+
+  try {
+    const { customer } = await resolveCustomer(data, { name: client.name, email: client.email, phone: client.phone });
+    if (client.stripeCustomerId !== customer.id) {
+      client.stripeCustomerId = customer.id;
+      await kv.set('app-data', data);
+    }
+    const setupIntent = await stripe.setupIntents.create({
+      customer: customer.id,
+      payment_method_types: ['card']
+    });
+    res.status(200).json({ clientSecret: setupIntent.client_secret });
+  } catch (err) {
+    console.error('Server error:', err);
+    await logError('portal-lookup', err, { action: 'start-card-update' });
+    res.status(500).json({ error: 'Something went wrong. Please try again.' });
+  }
+}
+
 async function handleConfirmCardUpdate(req, res) {
   const { token, paymentMethodId } = req.body || {};
   if (!token || !paymentMethodId) return res.status(400).json({ error: 'Missing token or paymentMethodId.' });
@@ -124,10 +159,27 @@ async function handleConfirmCardUpdate(req, res) {
   if (!client || !client.stripeCustomerId) return res.status(400).json({ error: 'No card on file to update.' });
 
   try {
-    await stripe.paymentMethods.attach(paymentMethodId, { customer: client.stripeCustomerId });
-    await stripe.customers.update(client.stripeCustomerId, {
-      invoice_settings: { default_payment_method: paymentMethodId }
-    });
+    // A successful SetupIntent has normally attached the card already, in which case attaching
+    // it again throws. That isn't a failure — carry on and make it the default.
+    try {
+      await stripe.paymentMethods.attach(paymentMethodId, { customer: client.stripeCustomerId });
+    } catch (e) {
+      const method = await stripe.paymentMethods.retrieve(paymentMethodId);
+      if (!method || method.customer !== client.stripeCustomerId) throw e;
+    }
+    await setDefaultCard(client.stripeCustomerId, paymentMethodId);
+
+    // Make the new card apply to sessions they haven't been billed for yet. Older bookings can
+    // still point at a separate Stripe customer from the days when each booking made its own,
+    // and those would otherwise keep charging the card attached to that old customer.
+    let moved = 0;
+    for (const b of (data.bookings || [])) {
+      if (b.clientId !== client.id) continue;
+      if (b.status === 'charged' || b.cancelled) continue;
+      if (b.stripeCustomerId !== client.stripeCustomerId) { b.stripeCustomerId = client.stripeCustomerId; moved++; }
+    }
+    if (moved) await kv.set('app-data', data);
+
     res.status(200).json({ ok: true });
   } catch (err) {
     console.error('Server error:', err);
@@ -183,6 +235,7 @@ export default async function handler(req, res) {
     // the phone match (login) or a valid session token, closing the "just an email" exposure.
     if (req.method === 'POST' && req.body?.action === 'login') return handleLogin(req, res);
     if (req.body?.action === 'session' || req.query?.action === 'session') return handleSession(req, res);
+    if (req.method === 'POST' && req.body?.action === 'start-card-update') return handleStartCardUpdate(req, res);
     if (req.method === 'POST' && req.body?.action === 'confirm-card-update') return handleConfirmCardUpdate(req, res);
     if (req.method === 'POST' && req.body?.action === 'cancel-booking') return handleCancelBooking(req, res);
     res.status(400).json({ error: 'Unknown or missing action.' });

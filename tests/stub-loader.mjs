@@ -3,7 +3,7 @@
 const STUBS = {
   '@vercel/kv': 'export const kv = { get: async()=>null, set: async()=>null, del: async()=>null, lpush: async()=>null, ltrim: async()=>null, lrange: async()=>[] };',
   '@vercel/blob': 'export const put = async()=>({url:"",pathname:""}); export const get = async()=>null; export const issueSignedToken = async()=>({}); export const presignUrl = async()=>({presignedUrl:""});',
-  'stripe': 'export default class Stripe { constructor(){ this.customers={create:async()=>({})}; this.setupIntents={create:async()=>({})}; this.paymentMethods={list:async()=>({data:[]})}; this.paymentIntents={create:async()=>({})}; } }'
+  'stripe': 'export default class Stripe { constructor(){ this.customers={create:async()=>({}),retrieve:async()=>({}),update:async()=>({})}; this.setupIntents={create:async()=>({})}; this.paymentMethods={list:async()=>({data:[]}),attach:async()=>({}),retrieve:async()=>({})}; this.paymentIntents={create:async()=>({})}; } }'
 };
 
 export async function resolve(specifier, context, next) {

@@ -1,10 +1,9 @@
-import Stripe from 'stripe';
 import { kv } from '@vercel/kv';
 import { verifyAdminToken } from './_lib/auth.js';
 import { sendEmail, receiptEmail } from './_lib/email.js';
 import { logError } from './_lib/errorlog.js';
-
-const stripe = new Stripe(process.env.STRIPE_SECRET_KEY);
+import { stripe, defaultCardFor } from './_lib/stripecustomer.js';
+import { computeCharge } from './_lib/billing.js';
 
 export default async function handler(req, res) {
   if (req.method !== 'POST') return res.status(405).json({ error: 'Method not allowed' });
@@ -16,7 +15,6 @@ export default async function handler(req, res) {
 
     const booking = data.bookings.find(b => b.id === bookingId);
     if (!booking) return res.status(404).json({ error: 'Booking not found' });
-    if (!booking.stripeCustomerId) return res.status(400).json({ error: 'No card on file for this booking' });
     // Guard against double-charging (double-click, network retry, etc.) — a booking that's
     // already been charged must never be charged again.
     if (booking.status === 'charged') return res.status(400).json({ error: 'This session has already been charged.' });
@@ -25,25 +23,43 @@ export default async function handler(req, res) {
     if (typeof actualMinutes === 'number' && !isNaN(actualMinutes) && actualMinutes >= 0) {
       booking.actualMinutes = actualMinutes;
     }
-    const mins = booking.actualMinutes || booking.durationMin;
-    const rate = (data.settings && data.settings.hourlyRate != null) ? data.settings.hourlyRate : 500;
-    const defaultAmountCents = Math.round((mins / 60) * rate * 100);
-    let amountCents = (typeof amount === 'number' && !isNaN(amount) && amount >= 0)
-      ? Math.round(amount * 100)
-      : defaultAmountCents;
+
+    // The amount comes from the booking's own saved terms — billing mode, the hours actually
+    // worked, and any coupon or complimentary status recorded when it was booked. It used to be
+    // whatever Manage sent, which meant editing the hours silently recalculated at full price
+    // and dropped the discount.
+    const quote = computeCharge(booking, data.settings || {});
+    const mins = quote.minutes;
+
+    // A complimentary session never touches a card. It used to show normal charge controls, so
+    // one wrong click billed a free session in full.
+    if (quote.comped) {
+      booking.status = 'charged';
+      booking.amount = 0;
+      booking.actualMinutes = mins;
+      await kv.set('app-data', data);
+      return res.status(200).json({ ok: true, amount: 0, comped: true });
+    }
+
+    let amountCents = quote.cents;
+    let overridden = false;
+    if (typeof amount === 'number' && !isNaN(amount) && amount >= 0) {
+      const requested = Math.round(amount * 100);
+      overridden = requested !== quote.cents;
+      amountCents = requested;
+    }
     // Defense-in-depth ceiling: even though this endpoint is admin-only, never allow a single
     // charge beyond a sane maximum, so a bug or compromised session can't trigger a runaway charge.
     // Cap is the greater of $5,000 or 3x the computed default for this session, whichever is higher.
-    const MAX_CENTS = Math.max(500000, defaultAmountCents * 3);
+    const MAX_CENTS = Math.max(500000, quote.cents * 3);
     if (amountCents > MAX_CENTS) {
       return res.status(400).json({ error: 'That charge amount looks too high — please double-check and try again.' });
     }
 
-    const paymentMethods = await stripe.paymentMethods.list({
-      customer: booking.stripeCustomerId,
-      type: 'card'
-    });
-    if (paymentMethods.data.length === 0) {
+    if (!booking.stripeCustomerId) return res.status(400).json({ error: 'No card on file for this booking' });
+    // The customer's default card, not whichever one Stripe happened to list first.
+    const paymentMethodId = await defaultCardFor(booking.stripeCustomerId);
+    if (!paymentMethodId) {
       return res.status(400).json({ error: 'No saved card found for this customer' });
     }
 
@@ -51,7 +67,7 @@ export default async function handler(req, res) {
       amount: amountCents,
       currency: 'usd',
       customer: booking.stripeCustomerId,
-      payment_method: paymentMethods.data[0].id,
+      payment_method: paymentMethodId,
       off_session: true,
       confirm: true,
       receipt_email: booking.clientEmail,
@@ -61,13 +77,14 @@ export default async function handler(req, res) {
       // (same card, same amount) can never double-charge, but if a charge is declined and the
       // client saves a NEW card, the key changes and the retry genuinely attempts the new card
       // instead of replaying Stripe's cached decline from the old one.
-      idempotencyKey: `charge-${booking.id}-${amountCents}-${paymentMethods.data[0].id}`
+      idempotencyKey: `charge-${booking.id}-${amountCents}-${paymentMethodId}`
     });
 
     booking.status = 'charged';
     booking.amount = amountCents / 100;
     booking.actualMinutes = mins;
     booking.stripePaymentIntentId = paymentIntent.id;
+    if (overridden) booking.amountOverridden = true;
 
     await kv.set('app-data', data);
 
