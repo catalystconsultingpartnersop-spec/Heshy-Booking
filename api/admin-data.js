@@ -1,7 +1,7 @@
 import { kv } from '@vercel/kv';
 import { put } from '@vercel/blob';
 import { verifyAdminToken, verifyAgentKey, randomToken, issueScopedToken } from './_lib/auth.js';
-import { sendEmail, reminderEmail, dailyDigestEmail, rescheduledEmail, strengthsInviteEmail } from './_lib/email.js';
+import { sendEmail, reminderEmail, dailyDigestEmail, rescheduledEmail, strengthsInviteEmail, cancellationEmail } from './_lib/email.js';
 import { checkSlot } from './_lib/availability.js';
 import { logError, readErrors, clearErrors, logAgentAccess, readAgentLog } from './_lib/errorlog.js';
 import { buildSummary, buildDetail } from './_lib/diagnostics.js';
@@ -380,7 +380,7 @@ async function handleUploadPdf(req, res) {
 }
 
 async function handleCancelBooking(req, res) {
-  const { bookingId } = req.body || {};
+  const { bookingId, reason } = req.body || {};
   if (!bookingId) return res.status(400).json({ error: 'Missing bookingId.' });
 
   const data = await kv.get('app-data');
@@ -420,8 +420,28 @@ async function handleCancelBooking(req, res) {
     const b = (fresh.bookings || []).find(x => x.id === booking.id);
     if (!b) return SKIP_WRITE;
     b.cancelled = true;
+    b.cancelledAt = Date.now();
+    b.cancelledBy = 'heshy';
+    if (String(reason || '').trim()) b.cancellationReason = String(reason).trim().slice(0, 1000);
   });
-  res.status(200).json({ ok: true, warning: calendarWarning });
+
+  // Tell the client. Nothing used to be sent at all: whatever they heard came from Google
+  // Calendar's own notice, or nothing.
+  let emailWarning = null;
+  if (booking.clientEmail) {
+    try {
+      const mail = cancellationEmail(booking, data.settings || {}, { by: 'heshy', reason });
+      const sent = await sendEmail({ to: booking.clientEmail, subject: mail.subject, html: mail.html });
+      if (!sent) emailWarning = "The session is cancelled, but the email to the client didn't send. Let them know yourself.";
+    } catch (e) {
+      emailWarning = "The session is cancelled, but the email to the client didn't send. Let them know yourself.";
+    }
+  } else {
+    emailWarning = 'The session is cancelled. There was no email address on file, so nothing was sent.';
+  }
+  if (emailWarning) await logError('cancel-booking', new Error(emailWarning), { bookingId });
+
+  res.status(200).json({ ok: true, warning: [calendarWarning, emailWarning].filter(Boolean).join(' ') || null });
 }
 
 async function handleRescheduleBooking(req, res) {

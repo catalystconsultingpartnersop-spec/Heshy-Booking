@@ -1,6 +1,7 @@
 import { kv } from '@vercel/kv';
 import { randomToken, redeemScopedToken } from './_lib/auth.js';
 import { score, validAnswers, profileOf } from './_lib/assessment.js';
+import { sendEmail, cancellationEmail, clientCancelledAlertEmail } from './_lib/email.js';
 import { mutate, SKIP_WRITE } from './_lib/store.js';
 import { logError } from './_lib/errorlog.js';
 import { stripe, resolveCustomer, setDefaultCard } from './_lib/stripecustomer.js';
@@ -285,7 +286,21 @@ async function handleCancelBooking(req, res) {
     const b = (fresh.bookings || []).find(x => x.id === booking.id);
     if (!b) return SKIP_WRITE;
     b.cancelled = true;
+    b.cancelledAt = Date.now();
+    b.cancelledBy = 'client';
   });
+
+  // Confirm it to the client, and tell Heshy — a client could cancel and he would only find
+  // out by happening to look at Manage.
+  try {
+    const mail = cancellationEmail(booking, data.settings || {}, { by: 'client' });
+    if (booking.clientEmail) await sendEmail({ to: booking.clientEmail, subject: mail.subject, html: mail.html });
+    const alert = clientCancelledAlertEmail(booking);
+    await sendEmail({ to: 'heshy@catalystconsultingnyc.com', subject: alert.subject, html: alert.html });
+  } catch (e) {
+    await logError('portal-cancel-email', e, { bookingId: booking.id });
+  }
+
   res.status(200).json({ ok: true });
 }
 

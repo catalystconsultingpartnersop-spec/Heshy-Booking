@@ -319,3 +319,75 @@ export function strengthsInviteEmail(client, token) {
     `)
   };
 }
+
+/**
+ * Sent to the client when a session is cancelled — by Heshy or by them. Nothing like this
+ * existed: a cancelled client heard only whatever Google Calendar happened to send, or nothing.
+ *
+ * @param {object} booking
+ * @param {object} settings
+ * @param {{ by:'heshy'|'client', reason?:string }} how
+ */
+export function cancellationEmail(booking, settings, how = {}) {
+  const when = fmtEt(booking.date, booking.time);
+  const firstName = (booking.clientName || '').split(' ')[0];
+  const byHeshy = how.by === 'heshy';
+  const reason = (how.reason || '').trim();
+  const baseUrl = process.env.SITE_URL || 'https://heshy-booking.vercel.app';
+  return {
+    subject: `Cancelled — your session on ${when.date}`,
+    html: wrap(`
+      <div style="font-size:22px;font-family:Georgia,serif;margin-bottom:8px;">Your session is cancelled.</div>
+      <div style="font-size:14px;font-family:Arial,sans-serif;color:#6E6E6E;margin-bottom:20px;">
+        Hi ${esc(firstName) || 'there'} &mdash; ${byHeshy
+          ? 'Heshy has had to cancel the session below.'
+          : 'this confirms the session below has been cancelled, as you asked.'}
+      </div>
+      <table style="width:100%;border-collapse:collapse;font-family:Arial,sans-serif;">
+        ${factRow('Was', `${when.date}, ${when.time}`)}
+        ${factRow('Length', `${booking.durationMin || 60} min`)}
+        ${factRow('Format', booking.durationMin === 15 ? 'Phone call' : (booking.type === 'virtual' ? 'Video call' : 'In person'))}
+      </table>
+      <div style="margin-top:16px;padding:13px 16px;background:#F4F7F4;border-left:3px solid #7FA37F;border-radius:4px;font-family:Arial,sans-serif;font-size:13.5px;line-height:1.6;color:#2E4A2E;">
+        You haven't been charged for this session, and there's nothing you need to do.
+      </div>
+      ${byHeshy && reason ? `
+      <div style="margin-top:16px;font-family:Arial,sans-serif;font-size:13.5px;line-height:1.6;color:#3C3C3C;">
+        <strong>From Heshy:</strong> ${esc(reason)}
+      </div>` : ''}
+      ${byHeshy && !reason ? `
+      <div style="margin-top:16px;font-family:Arial,sans-serif;font-size:13.5px;color:#3C3C3C;">
+        He'll be in touch to find another time.
+      </div>` : ''}
+      <div style="margin-top:22px;font-family:Arial,sans-serif;font-size:13.5px;">
+        <a href="${baseUrl}/" style="color:#111111;text-decoration:underline;">Book another time</a>
+        &middot;
+        <a href="${baseUrl}/#portal" style="color:#111111;text-decoration:underline;">View my sessions</a>
+      </div>
+    `)
+  };
+}
+
+/** Tells Heshy when a client cancels from their portal — otherwise he'd only find out by looking. */
+export function clientCancelledAlertEmail(booking) {
+  const when = fmtEt(booking.date, booking.time);
+  const baseUrl = process.env.SITE_URL || 'https://heshy-booking.vercel.app';
+  return {
+    subject: `${booking.clientName || 'A client'} cancelled — ${when.date}, ${when.time}`,
+    html: wrap(`
+      <div style="font-size:22px;font-family:Georgia,serif;margin-bottom:8px;">A client cancelled.</div>
+      <table style="width:100%;border-collapse:collapse;font-family:Arial,sans-serif;">
+        ${factRow('Client', esc(booking.clientName || '') || esc(booking.clientEmail || ''))}
+        ${factRow('Was', `${when.date}, ${when.time}`)}
+        ${factRow('Length', `${booking.durationMin || 60} min`)}
+        ${factRow('Format', booking.durationMin === 15 ? 'Phone call' : (booking.type === 'virtual' ? 'Video call' : 'In person'))}
+      </table>
+      <div style="margin-top:18px;font-family:Arial,sans-serif;font-size:13.5px;color:#6E6E6E;">
+        The time is free again and the calendar event has been removed.
+      </div>
+      ${booking.clientId ? `<div style="margin-top:16px;font-family:Arial,sans-serif;font-size:13.5px;">
+        <a href="${baseUrl}/#manage/client/${encodeURIComponent(booking.clientId)}" style="color:#111111;text-decoration:underline;">Open their profile</a>
+      </div>` : ''}
+    `)
+  };
+}

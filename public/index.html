@@ -1332,12 +1332,16 @@ async function skipCharge(id){
 }
 async function markComplete(id){ await updateBooking(id, { status:'completed' }); }
 async function cancelBooking(id){
-  if(!confirm('Cancel this booking? This frees up the time slot and cannot be undone.')) return;
+  if(!confirm('Cancel this booking? This frees up the time slot and cannot be undone.\n\nThe client will be emailed to let them know.')) return;
+  // Optional, and genuinely optional: leave it blank and the client is simply told it's
+  // cancelled and that Heshy will be in touch.
+  const reason = prompt('Anything to tell the client? (optional)\n\nLeave blank and they\'ll just be told it\'s cancelled and you\'ll be in touch.', '');
+  if(reason === null) return;   // they backed out
   try{
     const res = await fetch('/api/admin-data', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', 'X-Admin-Token': adminToken },
-      body: JSON.stringify({ action: 'cancel-booking', bookingId: id })
+      body: JSON.stringify({ action: 'cancel-booking', bookingId: id, reason })
     });
     const data = await res.json();
     if(data.error){ alert('Cancel failed: ' + data.error); return; }
