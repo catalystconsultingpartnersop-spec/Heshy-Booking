@@ -23,22 +23,43 @@ export default async function handler(req, res) {
     const futureBookings = (data.bookings || [])
       .filter(b => b.date >= todayStr && !b.cancelled)
       .map(b => ({ date: b.date, time: b.time, durationMin: b.durationMin, type: b.type }));
-    const futureOverrides = (data.overrides || []).filter(o => o.date >= todayStr);
+    // Availability rules and one-off dates carry BOTH a general area ("Boro Park", meant to be
+    // shown before booking) and the full street address with entry instructions (meant to be sent
+    // only after booking). Strip the private half here — this endpoint is unauthenticated, so
+    // anything returned is readable by anyone who opens the booking page. The real address is
+    // resolved server-side at booking time and returned only to the person who booked.
+    const publicRule = r => ({
+      id: r.id, days: r.days, start: r.start, end: r.end,
+      duration: r.duration, durations: r.durations,
+      generalArea: r.generalArea || ''
+    });
+    const publicOverride = o => ({
+      id: o.id, date: o.date, start: o.start, end: o.end, type: o.type,
+      duration: o.duration, durations: o.durations,
+      generalArea: o.generalArea || ''
+    });
+
+    const futureOverrides = (data.overrides || []).filter(o => o.date >= todayStr).map(publicOverride);
     const futureBlockedDates = (data.blockedDates || []).filter(bl => bl.date >= todayStr);
+    const rawAvailability = data.availability || defaultAvailability();
+    const publicAvailability = {
+      virtual: (rawAvailability.virtual || []).map(publicRule),
+      'in-person': (rawAvailability['in-person'] || []).map(publicRule)
+    };
     res.status(200).json({
       bookings: futureBookings,
       overrides: futureOverrides,
       blockedDates: futureBlockedDates,
       settings: {
-        meetLink: data.settings?.meetLink || '',
-        location: data.settings?.location || '',
+        // meetLink and location are deliberately NOT sent: the Meet link is reusable and the
+        // location is a private address. Each booking gets its own Meet link at booking time.
         intakeQuestions: data.settings?.intakeQuestions || [],
         durationOptions: (data.settings?.durationOptions && data.settings.durationOptions.length) ? data.settings.durationOptions : [60],
         minLeadHours: (data.settings?.minLeadHours != null) ? data.settings.minLeadHours : 12,
         billingMode: data.settings?.billingMode || 'actual',
         hourlyRate: (data.settings?.hourlyRate != null) ? data.settings.hourlyRate : 500
       },
-      availability: data.availability || defaultAvailability()
+      availability: publicAvailability
     });
   } catch (err) {
     console.error('Server error:', err);

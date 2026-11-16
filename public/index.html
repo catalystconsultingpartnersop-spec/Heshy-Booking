@@ -2222,7 +2222,7 @@ function renderAdmin(){
   }
 
   return `
-    <div class="topbar"><div class="brand">Heshy — Manage</div><button class="manage-link" id="backToClientBtn">Back to booking</button></div>
+    <div class="topbar"><div class="brand">Heshy — Manage</div><div style="display:flex;gap:16px;align-items:center;"><button class="manage-link" id="backToClientBtn">Back to booking</button><button class="manage-link" id="adminLogoutBtn">Log out</button></div></div>
     ${nav}
     ${body}
   `;
@@ -2286,6 +2286,21 @@ async function savePortalCard(){
 function attachHandlers(){
   const $ = id => document.getElementById(id);
   const backBtn = $('backToClientBtn'); if(backBtn) backBtn.onclick = backToClient;
+  const adminLogoutBtn = $('adminLogoutBtn');
+  if(adminLogoutBtn) adminLogoutBtn.onclick = async ()=>{
+    const old = adminToken;
+    adminUnlocked = false; adminToken = '';
+    try{ sessionStorage.removeItem('heshyAdminToken'); }catch(e){}
+    // Kill it server-side too, so the token is dead even if a copy leaked from this machine.
+    if(old){
+      try{ await fetch('/api/admin-data', {
+        method:'POST',
+        headers:{ 'Content-Type':'application/json', 'X-Admin-Token': old },
+        body: JSON.stringify({ action:'logout' })
+      }); }catch(e){}
+    }
+    render();
+  };
   const loginBtn = $('admin-login-btn'); if(loginBtn) loginBtn.onclick = tryAdminLogin;
   const passInput = $('admin-pass');
   if(passInput) passInput.onkeydown = e=>{ if(e.key==='Enter') tryAdminLogin(); };

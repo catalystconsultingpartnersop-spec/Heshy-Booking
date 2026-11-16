@@ -3,6 +3,8 @@ import { put } from '@vercel/blob';
 import { verifyAdminToken, randomToken } from './_lib/auth.js';
 import { sendEmail, reminderEmail, dailyDigestEmail } from './_lib/email.js';
 
+const ADMIN_SESSION_SECONDS = 60 * 60 * 12; // 12 hours
+
 export const maxDuration = 60;
 
 function defaultState() {
@@ -403,8 +405,18 @@ export default async function handler(req, res) {
       }
       await kv.del(failKey); // clear on success
       const token = randomToken();
-      await kv.set('admin-session:' + token, true);
+      // Expire after 12 hours. Previously these never expired, so any token that ever leaked —
+      // through a log, a shared machine, browser recovery — stayed valid forever with no way
+      // to revoke it. 12 hours covers a working day without a re-login mid-session.
+      await kv.set('admin-session:' + token, true, { ex: ADMIN_SESSION_SECONDS });
       return res.status(200).json({ ok: true, token });
+    }
+
+    // Lets Manage actually end a session server-side rather than only forgetting it locally.
+    if (req.method === 'POST' && req.body && req.body.action === 'logout') {
+      const token = req.headers['x-admin-token'];
+      if (token) await kv.del('admin-session:' + token);
+      return res.status(200).json({ ok: true });
     }
 
     if (!(await verifyAdminToken(req))) return res.status(401).json({ error: 'Unauthorized' });
