@@ -1,5 +1,5 @@
 import { kv } from '@vercel/kv';
-import { put } from '@vercel/blob';
+import { storeFile, removeFile, rotateFile, isLegacyPath } from './_lib/files.js';
 import { verifyAdminToken, verifyAgentKey, randomToken, issueScopedToken } from './_lib/auth.js';
 import { sendEmail, reminderEmail, dailyDigestEmail, rescheduledEmail, strengthsInviteEmail, cancellationEmail } from './_lib/email.js';
 import { checkSlot } from './_lib/availability.js';
@@ -8,6 +8,8 @@ import { buildSummary, buildDetail } from './_lib/diagnostics.js';
 import { mutate, SKIP_WRITE, readData } from './_lib/store.js';
 import { takeBackup, listBackups, readBackup, isDueForBackup } from './_lib/backup.js';
 import { validateAppData } from './_lib/schema.js';
+import { stripe } from './_lib/stripecustomer.js';
+import { EVENTS as STRIPE_EVENTS } from './_lib/stripeevents.js';
 import { callerIp, checkDataUrl, MAX_PDF_BYTES, MAX_AUDIO_BYTES } from './_lib/limits.js';
 
 const ADMIN_SESSION_SECONDS = 60 * 60 * 12; // 12 hours
@@ -78,14 +80,14 @@ async function handleUploadRecordingChunk(req, res) {
   try {
     const format = mimeType || 'audio/webm';
     const ext = format.includes('mp4') ? 'mp4' : format.includes('ogg') ? 'ogg' : 'webm';
+    if (chunkBase64.length > MAX_AUDIO_BYTES * 1.4) return res.status(400).json({ error: 'That audio chunk is too large.' });
     const buffer = Buffer.from(chunkBase64, 'base64');
-    const blob = await put(`recordings/${bookingId}/chunk-${String(chunkIndex).padStart(5, '0')}.${ext}`, buffer, {
-      access: 'public',
-      contentType: format
-    });
+    // Was recordings/<bookingId>/chunk-00001.webm — derivable by anyone who knew a booking id.
+    // The path is the only thing protecting a recording of a private session, so it is random.
+    const url = await storeFile('recordings', `chunk-${String(chunkIndex).padStart(5, '0')}.${ext}`, buffer, format);
     const key = 'recording-chunks:' + bookingId;
     const existing = (await kv.get(key)) || [];
-    existing.push({ index: chunkIndex, url: blob.url, mimeType: format, ext });
+    existing.push({ index: chunkIndex, url, mimeType: format, ext });
     await kv.set(key, existing);
     res.status(200).json({ ok: true });
   } catch (e) {
@@ -154,6 +156,9 @@ async function handleFinalizeRecording(req, res) {
         b.recordingSegments = booking.recordingSegments;
         b.actualMinutes = booking.actualMinutes;
       });
+      // The manifest was cleared here but the audio itself was left in storage forever. Private
+      // recordings of client sessions should not outlive the transcript they produced.
+      for (const c of chunks) await removeFile(c.url);
       await kv.del(key);
       return res.status(200).json({ ok: true, summary: booking.summary || '', note: 'No speech was detected in this segment, but the time was still logged.' });
     }
@@ -203,6 +208,8 @@ If a section has nothing to report, write "None." under it. Stay factual and con
       b.summary = booking.summary;
       if (clientVersion) b.clientSummary = booking.clientSummary;
     });
+    // Transcribed and summarised — the audio has done its job and is deleted.
+    for (const c of chunks) await removeFile(c.url);
     await kv.del(key);
     res.status(200).json({ ok: true, summary: booking.summary });
   } catch (err) {
@@ -249,6 +256,11 @@ async function handleDailyDigestAndReminders(req, res) {
   // Snapshot the record once a day, on the back of the run that is already happening. Failing
   // to back up never stops the reminders going out.
   if (await isDueForBackup(20)) await takeBackup(data, 'daily');
+
+  // Keep moving any files still on the old guessable paths. A few per night finishes quickly
+  // and never risks timing out the run that sends the reminders.
+  try { await handleSecureFiles({ query: {}, body: {} }, { status: () => ({ json: () => {} }) }); }
+  catch (e) { console.error('File securing pass failed:', e); }
 
   const now = new Date();
   const todayDs = dateStrOf(now);
@@ -322,6 +334,47 @@ async function handleDailyDigestAndReminders(req, res) {
   });
 }
 
+/**
+ * Moves files that are still on the old, guessable paths onto unguessable ones and deletes the
+ * originals, so any link that leaked stops working. Runs a few at a time so a single request
+ * can't time out; the daily job keeps calling it until there is nothing left.
+ */
+async function handleSecureFiles(req, res) {
+  const data = await readData();
+  if (!data) return res.status(404).json({ error: 'No data found' });
+
+  const todo = [];
+  for (const c of (data.clients || [])) {
+    if (c.wgPdfData && isLegacyPath(c.wgPdfData)) todo.push({ kind: 'client', id: c.id, url: c.wgPdfData, name: c.wgPdfName || 'report.pdf' });
+  }
+  for (const b of (data.bookings || [])) {
+    for (const seg of (b.recordingSegments || [])) {
+      if (seg.url && isLegacyPath(seg.url)) todo.push({ kind: 'segment', id: b.id, segUrl: seg.url, url: seg.url, name: 'segment.webm' });
+    }
+  }
+
+  const batch = todo.slice(0, 5);
+  let moved = 0, failed = 0;
+  for (const item of batch) {
+    const next = await rotateFile(item.kind === 'client' ? 'wg-pdfs' : 'recordings', item.name, item.url);
+    if (!next) { failed++; continue; }
+    await mutate(fresh => {
+      if (item.kind === 'client') {
+        const c = (fresh.clients || []).find(x => x.id === item.id);
+        if (!c || c.wgPdfData !== item.url) return SKIP_WRITE;
+        c.wgPdfData = next;
+      } else {
+        const b = (fresh.bookings || []).find(x => x.id === item.id);
+        const seg = (b?.recordingSegments || []).find(x => x.url === item.segUrl);
+        if (!seg) return SKIP_WRITE;
+        seg.url = next;
+      }
+    });
+    moved++;
+  }
+  return res.status(200).json({ ok: true, moved, failed, remaining: Math.max(0, todo.length - moved) });
+}
+
 async function handleCleanupLargePdfs(req, res) {
   const data = await kv.get('app-data');
   if (!data) return res.status(404).json({ error: 'No data found' });
@@ -333,9 +386,9 @@ async function handleCleanupLargePdfs(req, res) {
     const base64 = target.wgPdfData.split(',')[1];
     const buffer = Buffer.from(base64, 'base64');
     const safeName = (target.wgPdfName || 'working-genius.pdf').replace(/[^a-zA-Z0-9._-]/g, '_');
-    const blob = await put('wg-pdfs/' + Date.now() + '-' + safeName, buffer, { access: 'public', contentType: 'application/pdf' });
-    if (!blob || !blob.url) throw new Error('Storage did not return a url for the uploaded file.');
-    target.wgPdfData = blob.url;
+    const url = await storeFile('wg-pdfs', safeName, buffer, 'application/pdf');
+    if (!url) throw new Error('Storage did not return a url for the uploaded file.');
+    target.wgPdfData = url;
     migrated = true;
     status = 'migrated to Blob storage';
   } catch (e) {
@@ -369,11 +422,8 @@ async function handleUploadPdf(req, res) {
     if (!base64) return res.status(400).json({ error: 'Invalid file data.' });
     const buffer = Buffer.from(base64, 'base64');
     const safeName = fileName.replace(/[^a-zA-Z0-9._-]/g, '_');
-    const blob = await put('wg-pdfs/' + Date.now() + '-' + safeName, buffer, {
-      access: 'public',
-      contentType: 'application/pdf'
-    });
-    res.status(200).json({ ok: true, url: blob.url });
+    const url = await storeFile('wg-pdfs', safeName, buffer, 'application/pdf');
+    res.status(200).json({ ok: true, url });
   } catch (e) {
     res.status(500).json({ error: 'Upload failed: ' + e.message });
   }
@@ -685,6 +735,39 @@ export default async function handler(req, res) {
         await logError('send-strengths-invite', err, { clientId });
         return res.status(500).json({ error: 'Something went wrong sending that email.' });
       }
+    }
+
+    // Registers the webhook with Stripe using the secret key the app already holds, and stores
+    // the signing secret Stripe returns. Nothing to do in the Stripe dashboard.
+    if (req.method === 'POST' && req.body?.action === 'setup-stripe-webhook') {
+      try {
+        const url = (process.env.SITE_URL || 'https://heshy-booking.vercel.app') + '/api/stripe-webhook';
+        const existing = await stripe.webhookEndpoints.list({ limit: 100 });
+        for (const e of (existing.data || [])) {
+          if (e.url === url) await stripe.webhookEndpoints.del(e.id);   // replace, don't duplicate
+        }
+        const created = await stripe.webhookEndpoints.create({
+          url,
+          enabled_events: STRIPE_EVENTS,
+          description: 'Heshy booking app — refunds, disputes and late payment failures'
+        });
+        if (!created.secret) return res.status(500).json({ error: 'Stripe did not return a signing secret.' });
+        await kv.set('stripe-webhook-secret', created.secret);
+        await kv.set('stripe-webhook-id', created.id);
+        return res.status(200).json({ ok: true, url, events: STRIPE_EVENTS.length });
+      } catch (err) {
+        await logError('setup-stripe-webhook', err, {});
+        return res.status(500).json({ error: 'Could not set up the Stripe webhook: ' + err.message });
+      }
+    }
+    if (req.query?.action === 'stripe-webhook-status' || req.body?.action === 'stripe-webhook-status') {
+      const id = await kv.get('stripe-webhook-id');
+      const hasSecret = !!(await kv.get('stripe-webhook-secret'));
+      return res.status(200).json({ configured: hasSecret, id: id || null });
+    }
+
+    if (req.query?.action === 'secure-files' || req.body?.action === 'secure-files') {
+      return handleSecureFiles(req, res);
     }
 
     if (req.query?.action === 'backups' || req.body?.action === 'backups') {

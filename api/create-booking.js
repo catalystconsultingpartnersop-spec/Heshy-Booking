@@ -1,5 +1,5 @@
 import { kv } from '@vercel/kv';
-import { put } from '@vercel/blob';
+import { storeFile } from './_lib/files.js';
 import { sendEmail, bookingConfirmationEmail, newBookingAlertEmail } from './_lib/email.js';
 import { APP_TIMEZONE, busyRangesForDate, etDayBounds } from './_lib/time.js';
 import { isRangeAvailable } from './_lib/availability.js';
@@ -204,8 +204,7 @@ export default async function handler(req, res) {
         const base64 = wgPdfData.split(',')[1];
         const buffer = Buffer.from(base64, 'base64');
         const safeName = wgPdfName.replace(/[^a-zA-Z0-9._-]/g, '_');
-        const blob = await put('wg-pdfs/' + Date.now() + '-' + safeName, buffer, { access: 'public', contentType: 'application/pdf' });
-        storedWgPdfData = blob.url;
+        storedWgPdfData = await storeFile('wg-pdfs', safeName, buffer, 'application/pdf');
       } catch (e) { /* if upload fails, just skip storing the PDF rather than blocking the booking */ }
     }
 

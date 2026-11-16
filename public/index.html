@@ -546,6 +546,7 @@ let expandedClientId = null;
 let errorEntries = null; // null = not loaded yet
 let agentEntries = null; // null = not loaded yet
 let backupEntries = null; // null = not loaded yet
+let systemStatus = null;  // file securing + Stripe webhook
 let viewingClientId = null;
 let editingClientContact = false;
 let clientSearch = '';
@@ -2681,6 +2682,31 @@ function renderAdmin(){
       </div>
 
       <div class="admin-block">
+        <h2>Files &amp; payments</h2>
+        <div class="note" style="margin-bottom:10px;">Two things that run themselves. Shown here so you can see they're done rather than take my word for it.</div>
+        ${systemStatus === null
+          ? `<button class="ghost small" id="loadSystemBtn">Check</button>`
+          : `<div style="font-size:13.5px;">
+              <div style="padding:9px 0;border-bottom:1px solid var(--line);">
+                <div><strong>Stored files</strong> &mdash; ${systemStatus.files.remaining === 0
+                  ? 'all on unguessable links.'
+                  : `${systemStatus.files.remaining} still on old guessable links.`}</div>
+                <div class="sub">Old links are replaced and the originals deleted, a few each night. Session audio is deleted once it's been transcribed.</div>
+                ${systemStatus.files.remaining > 0 ? `<div style="margin-top:8px;"><button class="ghost small" id="secureFilesBtn">Do the rest now</button></div>` : ''}
+              </div>
+              <div style="padding:9px 0;">
+                <div><strong>Refunds &amp; disputes</strong> &mdash; ${systemStatus.stripe.configured
+                  ? 'connected. Stripe tells the app when money moves.'
+                  : 'not connected yet.'}</div>
+                <div class="sub">Without this, refunding in Stripe leaves the session showing as charged here.</div>
+                ${systemStatus.stripe.configured ? '' : `<div style="margin-top:8px;"><button class="primary small" id="setupStripeBtn">Connect it</button></div>`}
+              </div>
+            </div>
+            <div style="margin-top:10px;"><button class="ghost small" id="loadSystemBtn">Refresh</button></div>`}
+        <div id="system-msg" style="font-size:12.5px;color:var(--muted);margin-top:8px;"></div>
+      </div>
+
+      <div class="admin-block">
         <h2>Backups</h2>
         <div class="note" style="margin-bottom:10px;">A snapshot is kept every day, before anything is restored, and before any save that removes clients or sessions. The last 20 are kept for 45 days. If something ever goes wrong, you can put it back.</div>
         ${backupEntries === null
@@ -3032,6 +3058,51 @@ function attachHandlers(){
       });
       errorEntries = [];
     }catch(e){}
+    render();
+  };
+  const sysMsg = ()=> $('system-msg');
+  async function loadSystemStatus(){
+    const [f, st] = await Promise.all([
+      fetch('/api/admin-data?action=secure-files', { headers:{ 'X-Admin-Token': adminToken } }).then(r=>r.json()).catch(()=>({remaining:0})),
+      fetch('/api/admin-data?action=stripe-webhook-status', { headers:{ 'X-Admin-Token': adminToken } }).then(r=>r.json()).catch(()=>({configured:false}))
+    ]);
+    systemStatus = { files: f, stripe: st };
+  }
+  const loadSystemBtn = $('loadSystemBtn');
+  if(loadSystemBtn) loadSystemBtn.onclick = async ()=>{
+    loadSystemBtn.disabled = true; loadSystemBtn.textContent = 'Checking\u2026';
+    await loadSystemStatus(); render();
+  };
+  const secureFilesBtn = $('secureFilesBtn');
+  if(secureFilesBtn) secureFilesBtn.onclick = async ()=>{
+    secureFilesBtn.disabled = true; secureFilesBtn.textContent = 'Working\u2026';
+    const m = sysMsg();
+    try{
+      // A few at a time, so one request can't time out.
+      for(let i=0;i<20;i++){
+        const r = await fetch('/api/admin-data?action=secure-files', { headers:{ 'X-Admin-Token': adminToken } });
+        const d = await r.json();
+        if(m) m.textContent = `${d.remaining} left\u2026`;
+        if(!d.remaining) break;
+      }
+      await loadSystemStatus();
+      if(m) m.textContent = 'Done.';
+    }catch(e){ if(m) m.textContent = 'Could not finish that just now.'; }
+    render();
+  };
+  const setupStripeBtn = $('setupStripeBtn');
+  if(setupStripeBtn) setupStripeBtn.onclick = async ()=>{
+    setupStripeBtn.disabled = true; setupStripeBtn.textContent = 'Connecting\u2026';
+    const m = sysMsg();
+    try{
+      const r = await fetch('/api/admin-data', { method:'POST',
+        headers:{ 'Content-Type':'application/json', 'X-Admin-Token': adminToken },
+        body: JSON.stringify({ action:'setup-stripe-webhook' }) });
+      const d = await r.json();
+      if(d.error) throw new Error(d.error);
+      if(m) m.textContent = 'Connected.';
+      await loadSystemStatus();
+    }catch(e){ if(m) m.textContent = e.message || 'Could not connect it just now.'; }
     render();
   };
   const backupMsg = ()=> $('backup-msg');
