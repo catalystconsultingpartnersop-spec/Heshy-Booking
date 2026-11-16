@@ -1,0 +1,112 @@
+<title>Portal Sign-In Change</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<style>
+/* Layout: the three things a client actually sees, in order, then what changed underneath. */
+:root{
+  --bg:#f6f5f2; --surface:#fffefc; --ink:#1b1a18; --muted:#6c6963; --line:#e2dfd8;
+  --bad:#a8392a; --bad-bg:#fbeeeb; --bad-line:#eccfc8;
+  --good:#2f6b4a; --good-bg:#ecf4ef; --good-line:#c9e0d2;
+  --fh:'Space Grotesk',ui-sans-serif,system-ui,sans-serif;
+  --fb:'Inter',ui-sans-serif,system-ui,-apple-system,sans-serif;
+}
+@media (prefers-color-scheme:dark){:root:not([data-theme="light"]){
+  --bg:#161719; --surface:#1e2023; --ink:#ebe9e5; --muted:#9a968e; --line:#313438;
+  --bad:#e68a79; --bad-bg:#2c201e; --bad-line:#4a2f2a;
+  --good:#7cbd96; --good-bg:#1b2823; --good-line:#2f4a3b;
+  color-scheme:dark;}}
+:root[data-theme="dark"]{
+  --bg:#161719; --surface:#1e2023; --ink:#ebe9e5; --muted:#9a968e; --line:#313438;
+  --bad:#e68a79; --bad-bg:#2c201e; --bad-line:#4a2f2a;
+  --good:#7cbd96; --good-bg:#1b2823; --good-line:#2f4a3b;
+  color-scheme:dark;}
+
+*{box-sizing:border-box}
+body{background:var(--bg);color:var(--ink);font-family:var(--fb);font-size:15px;line-height:1.55;margin:0;
+  padding-left:max(16px,env(safe-area-inset-left,0px));
+  padding-right:max(16px,env(safe-area-inset-right,0px));
+  padding-block:30px 70px}
+.wrap{max-width:780px;margin:0 auto}
+h1{font-family:var(--fh);font-size:27px;margin:0 0 4px;letter-spacing:-.02em}
+.sub{color:var(--muted);font-size:13.5px;margin:0 0 28px}
+
+.step{margin-bottom:30px}
+.step h2{font-family:var(--fh);font-size:15px;margin:0 0 3px;display:flex;align-items:baseline;gap:9px}
+.step h2 i{font-style:normal;font-size:11px;letter-spacing:.1em;text-transform:uppercase;color:var(--muted);font-weight:600}
+.step p{color:var(--muted);font-size:13.5px;margin:0 0 12px;max-width:62ch}
+.shot{border:1px solid var(--line);border-radius:9px;overflow:hidden;background:var(--surface);
+  box-shadow:0 1px 2px rgba(0,0,0,.04)}
+.shot img{display:block;width:100%;height:auto}
+
+.pair{display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-top:8px}
+@media (max-width:620px){.pair{grid-template-columns:1fr}}
+.side{border:1px solid var(--line);border-radius:9px;padding:14px;min-width:0}
+.side.now{background:var(--bad-bg);border-color:var(--bad-line)}
+.side.next{background:var(--good-bg);border-color:var(--good-line)}
+.tag{font-family:var(--fh);font-size:10.5px;letter-spacing:.11em;text-transform:uppercase;font-weight:600;margin:0 0 9px}
+.now .tag{color:var(--bad)} .next .tag{color:var(--good)}
+.side ul{margin:0;padding-left:18px;font-size:13.5px}
+.side li{margin-bottom:5px}
+.side li:last-child{margin-bottom:0}
+
+.guards{border:1px solid var(--line);background:var(--surface);border-radius:9px;padding:16px 18px;margin-top:26px}
+.guards h3{font-family:var(--fh);font-size:12px;letter-spacing:.1em;text-transform:uppercase;color:var(--muted);margin:0 0 10px}
+.guards div{display:flex;gap:9px;align-items:baseline;font-size:13.5px;margin-bottom:6px}
+.guards div:last-child{margin-bottom:0}
+.guards b{color:var(--good);flex:0 0 auto}
+</style>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600&family=Space+Grotesk:wght@500;600&display=swap">
+
+<div class="wrap">
+  <h1>Signing in to the portal</h1>
+  <p class="sub">What your clients will see. Real screens, not mock-ups.</p>
+
+  <div class="step">
+    <h2><i>Step 1</i> They type their email</h2>
+    <p>That's all. No phone number any more.</p>
+    <div class="shot"><img src="shots/shot-portal1.png" alt="The portal sign-in asking only for an email address, with an 'Email me a code' button."></div>
+  </div>
+
+  <div class="step">
+    <h2><i>Step 2</i> A code arrives</h2>
+    <p>The code is in the subject line too, so it shows on a phone's lock screen without opening the email.</p>
+    <div class="shot"><img src="shots/shot-email.png" alt="The email showing a six-digit sign-in code in a gold box, saying it works once and expires in ten minutes."></div>
+  </div>
+
+  <div class="step">
+    <h2><i>Step 3</i> They type it in</h2>
+    <p>On a phone, the keyboard offers the code automatically. It submits itself on the sixth digit &mdash; there's nothing to press.</p>
+    <div class="shot"><img src="shots/shot-portal2.png" alt="The code entry screen, saying a six-digit code is on its way and that it works once and expires in ten minutes."></div>
+  </div>
+
+  <div class="step">
+    <h2>What changed underneath</h2>
+    <div class="pair">
+      <div class="side now"><p class="tag">Before</p>
+        <ul>
+          <li>Email + phone number was the password</li>
+          <li>Both are findable &mdash; signatures, websites, shared contacts, data brokers</li>
+          <li>Anyone holding them could read a client's session history and cancel their appointments</li>
+          <li>Typing an email told you whether that person was a client</li>
+        </ul>
+      </div>
+      <div class="side next"><p class="tag">Now</p>
+        <ul>
+          <li>The email only decides where a code is sent</li>
+          <li>Access needs the inbox, not two facts about the person</li>
+          <li>Same standard the confirmation emails already rely on</li>
+          <li>The page answers identically for any address</li>
+        </ul>
+      </div>
+    </div>
+  </div>
+
+  <div class="guards">
+    <h3>Guards on the code</h3>
+    <div><b>&#10003;</b><span>Works once, then it's gone</span></div>
+    <div><b>&#10003;</b><span>Expires after ten minutes</span></div>
+    <div><b>&#10003;</b><span>Five wrong tries and it's discarded</span></div>
+    <div><b>&#10003;</b><span>Compared in constant time, so the comparison gives nothing away</span></div>
+    <div><b>&#10003;</b><span>Sending is capped per address, so it can't be used to flood an inbox</span></div>
+    <div><b>&#10003;</b><span>A blocked client is sent nothing at all</span></div>
+  </div>
+</div>
