@@ -491,6 +491,7 @@ async function submitPortalCancel(bookingId){
 }
 let expandedClientId = null;
 let errorEntries = null; // null = not loaded yet
+let agentEntries = null; // null = not loaded yet
 let viewingClientId = null;
 let editingClientContact = false;
 let clientSearch = '';
@@ -2263,6 +2264,35 @@ function renderAdmin(){
                  <button class="ghost small" id="clearErrorsBtn">Clear</button>
                </div>`}
       </div>
+
+      <div class="admin-block">
+        <h2>Claude's access log</h2>
+        <div class="note" style="margin-bottom:10px;">Claude has a read-only key, separate from your password. It can look at your data; it can't change anything, and it can't log in as you. Routine checks return counts and structure only &mdash; no client names, emails, phone numbers or session notes. Every look is recorded here. To revoke it, change or delete <strong>AGENT_READ_KEY</strong> in Vercel; your own password is unaffected.</div>
+        ${agentEntries === null
+          ? `<button class="ghost small" id="loadAgentLogBtn">Show access log</button>`
+          : agentEntries.length === 0
+            ? `<div class="empty">Claude hasn't looked at anything yet.</div>
+               <div style="margin-top:10px;"><button class="ghost small" id="loadAgentLogBtn">Refresh</button></div>`
+            : `<div style="font-size:13px;">
+                 ${agentEntries.map(e=>{
+                   const when = new Date(e.at).toLocaleString('en-US',{month:'short',day:'numeric',hour:'numeric',minute:'2-digit'});
+                   const label = { summary:'Overview — counts and structure, no client details',
+                                   problems:'Problem log',
+                                   detail:'One full record',
+                                   rejected:'Rejected — wrong key',
+                                   'unknown-view':'Unrecognised request' }[e.view] || esc(e.view);
+                   const ctx = Object.entries(e.context||{}).map(([k,v])=>`${esc(k)}: ${esc(v)}`).join(' &middot; ');
+                   return `<div style="padding:9px 0;border-bottom:1px solid var(--line);">
+                     <div style="display:flex;justify-content:space-between;gap:12px;">
+                       <span>${label}</span>
+                       <span class="sub" style="white-space:nowrap;">${when}</span>
+                     </div>
+                     ${ctx?`<div class="sub" style="margin-top:3px;">${ctx}</div>`:''}
+                   </div>`;
+                 }).join('')}
+               </div>
+               <div style="margin-top:12px;"><button class="ghost small" id="loadAgentLogBtn">Refresh</button></div>`}
+      </div>
     `;
   }
 
@@ -2524,6 +2554,16 @@ function attachHandlers(){
       });
       errorEntries = [];
     }catch(e){}
+    render();
+  };
+  const loadAgentLogBtn = $('loadAgentLogBtn');
+  if(loadAgentLogBtn) loadAgentLogBtn.onclick = async ()=>{
+    loadAgentLogBtn.disabled = true; loadAgentLogBtn.textContent = 'Loading…';
+    try{
+      const r = await fetch('/api/admin-data?action=agent-log', { headers:{ 'X-Admin-Token': adminToken } });
+      const d = await r.json();
+      agentEntries = d.entries || [];
+    }catch(e){ agentEntries = []; }
     render();
   };
   const addCouponBtn = $('addCouponBtn'); if(addCouponBtn) addCouponBtn.onclick = addCoupon;

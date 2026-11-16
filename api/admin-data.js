@@ -1,9 +1,10 @@
 import { kv } from '@vercel/kv';
 import { put } from '@vercel/blob';
-import { verifyAdminToken, randomToken } from './_lib/auth.js';
+import { verifyAdminToken, verifyAgentKey, randomToken } from './_lib/auth.js';
 import { sendEmail, reminderEmail, dailyDigestEmail, rescheduledEmail } from './_lib/email.js';
 import { checkSlot } from './_lib/availability.js';
-import { logError, readErrors, clearErrors } from './_lib/errorlog.js';
+import { logError, readErrors, clearErrors, logAgentAccess, readAgentLog } from './_lib/errorlog.js';
+import { buildSummary, buildDetail } from './_lib/diagnostics.js';
 
 const ADMIN_SESSION_SECONDS = 60 * 60 * 12; // 12 hours
 
@@ -503,6 +504,38 @@ export default async function handler(req, res) {
       return handleDailyDigestAndReminders(req, res);
     }
 
+    // --- Read-only agent access -------------------------------------------------------------
+    // A separate credential (AGENT_READ_KEY) that lets Claude inspect the app's state without
+    // Heshy's password. It is handled FIRST — before login, before logout, before the admin gate
+    // — and returns from inside this block in every case. So a request carrying this header can
+    // never fall through into any other action: not a write, and not the login path that mints an
+    // admin session token. It answers exactly three read-only questions and nothing else.
+    if (req.headers['x-agent-key']) {
+      if (!verifyAgentKey(req)) {
+        await logAgentAccess('rejected', { reason: 'bad key' });
+        return res.status(401).json({ error: 'Unauthorized' });
+      }
+      const what = req.query?.view || 'summary';
+      const data = (await kv.get('app-data')) || defaultState();
+
+      if (what === 'summary') {
+        await logAgentAccess('summary', {});
+        return res.status(200).json(buildSummary(data));
+      }
+      if (what === 'problems') {
+        await logAgentAccess('problems', {});
+        return res.status(200).json({ entries: await readErrors(60) });
+      }
+      if (what === 'detail') {
+        const { bookingId, clientId } = req.query || {};
+        await logAgentAccess('detail', { bookingId, clientId });
+        return res.status(200).json(buildDetail(data, { bookingId, clientId }));
+      }
+      await logAgentAccess('unknown-view', { view: String(what).slice(0, 40) });
+      return res.status(400).json({ error: 'Unknown view. Use summary, problems or detail.' });
+    }
+    // ------------------------------------------------------------------------------------------
+
     if (req.method === 'POST' && req.body && req.body.action === 'login') {
       const { password } = req.body;
       // Rate-limit failed admin logins to blunt brute-force — mirrors the client portal's lockout.
@@ -535,6 +568,9 @@ export default async function handler(req, res) {
 
     if (!(await verifyAdminToken(req))) return res.status(401).json({ error: 'Unauthorized' });
 
+    if (req.body?.action === 'agent-log' || req.query?.action === 'agent-log') {
+      return res.status(200).json({ entries: await readAgentLog(40) });
+    }
     if (req.body?.action === 'error-log' || req.query?.action === 'error-log') {
       return res.status(200).json({ entries: await readErrors(60) });
     }

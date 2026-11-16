@@ -1,11 +1,30 @@
 import { kv } from '@vercel/kv';
-import { randomBytes } from 'crypto';
+import { randomBytes, timingSafeEqual } from 'crypto';
 
 export async function verifyAdminToken(req) {
   const token = req.headers['x-admin-token'];
   if (!token) return false;
   const valid = await kv.get('admin-session:' + token);
   return !!valid;
+}
+
+// A separate, read-only credential so Claude can inspect the app's data without being handed
+// Heshy's Manage password. Deliberately NOT a session: no login, no token minting, and it can
+// never authorise a write — see the guard in admin-data.js. Revoke by clearing or changing the
+// AGENT_READ_KEY environment variable, which leaves the admin password untouched.
+export function verifyAgentKey(req) {
+  const supplied = req.headers['x-agent-key'];
+  const expected = process.env.AGENT_READ_KEY;
+  if (!supplied || !expected) return false;
+  if (expected.length < 32) return false; // refuse a weak key outright
+  const a = Buffer.from(String(supplied));
+  const b = Buffer.from(String(expected));
+  // Compare in constant time, without leaking the expected length through an early return.
+  if (a.length !== b.length) {
+    timingSafeEqual(b, b);
+    return false;
+  }
+  return timingSafeEqual(a, b);
 }
 
 // Cryptographically secure token generation — used for BOTH admin sessions and client portal

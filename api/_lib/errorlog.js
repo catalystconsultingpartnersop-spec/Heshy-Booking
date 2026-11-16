@@ -69,3 +69,28 @@ export async function readErrors(limit = 60) {
 export async function clearErrors() {
   try { await kv.del(KEY); return true; } catch (e) { return false; }
 }
+
+// --- Agent access log -----------------------------------------------------------------------
+// Every read made with the agent key is recorded, so Heshy can see exactly what Claude looked
+// at and when. Kept separate from the problem log: these are not failures.
+const AGENT_KEY_LIST = 'agent-log';
+
+export async function logAgentAccess(view, context = {}) {
+  try {
+    const entry = { at: new Date().toISOString(), view, context: safeContext(context) };
+    await kv.lpush(AGENT_KEY_LIST, JSON.stringify(entry));
+    await kv.ltrim(AGENT_KEY_LIST, 0, 99);
+  } catch (e) {
+    console.error('Could not write to the agent log:', e);
+  }
+}
+
+export async function readAgentLog(limit = 40) {
+  try {
+    const raw = await kv.lrange(AGENT_KEY_LIST, 0, Math.max(0, limit - 1));
+    return (raw || []).map(r => { try { return typeof r === 'string' ? JSON.parse(r) : r; } catch (e) { return null; } }).filter(Boolean);
+  } catch (e) {
+    console.error('Could not read the agent log:', e);
+    return [];
+  }
+}
