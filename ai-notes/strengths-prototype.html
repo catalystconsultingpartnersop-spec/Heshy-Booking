@@ -1,78 +1,104 @@
 <title>Strengths Assessment</title>
 <meta name="claude:viewport-fit-sides" content="cover">
 <style>
-/* Layout: one question at a time, centred, with a thin progress rule at the top. */
+/* Matches the booking site exactly: its tokens, its Source Serif headings, its one gold accent
+   (the Quick Check-in card). Single light theme, like the rest of the site. */
 :root{
-  --bg:#f7f5f1; --surface:#fffefb; --fg:#1c1a17; --muted:#6e6a62; --line:#e3dfd6;
-  --accent:#2f6b57; --accent-soft:#e8f0ec; --accent-ink:#fff;
-  --warm:#9a6b2f;
-  --fh:'Fraunces',Georgia,serif; --fb:'Inter',ui-sans-serif,system-ui,sans-serif;
+  --ink:#111111;
+  --muted:#6E6E6E;
+  --line:#DEDEDE;
+  --line-strong:#B8B8B8;
+  --paper:#FFFFFF;
+  --bg:#FBFBFA;
+  --gold:#8A6D2F;
+  --gold-soft:#F3EBDA;
+  --gold-line:#C9A961;
+  color-scheme:light;
 }
-@media (prefers-color-scheme:dark){:root:not([data-theme="light"]){
-  --bg:#15171a; --surface:#1d2024; --fg:#ecebe7; --muted:#9b978f; --line:#31353a;
-  --accent:#74bba0; --accent-soft:#1d2a26; --accent-ink:#12201b; --warm:#d6a05c;
-  color-scheme:dark;}}
-:root[data-theme="dark"]{
-  --bg:#15171a; --surface:#1d2024; --fg:#ecebe7; --muted:#9b978f; --line:#31353a;
-  --accent:#74bba0; --accent-soft:#1d2a26; --accent-ink:#12201b; --warm:#d6a05c;
-  color-scheme:dark;}
-
 *{box-sizing:border-box}
-body{background:var(--bg);color:var(--fg);font-family:var(--fb);font-size:16px;line-height:1.5;margin:0;
-  padding-left:max(16px,env(safe-area-inset-left,0px));
-  padding-right:max(16px,env(safe-area-inset-right,0px));
-  padding-block:0 60px}
-.bar{position:sticky;top:env(safe-area-inset-top,0px);height:3px;background:var(--line);z-index:10}
-.bar i{display:block;height:100%;background:var(--accent);width:0;transition:width .25s ease}
+body{margin:0;background:var(--bg);color:var(--ink);
+  font-family:'Inter',ui-sans-serif,system-ui,sans-serif;-webkit-font-smoothing:antialiased;
+  font-size:15px;line-height:1.55;
+  padding-left:max(24px,env(safe-area-inset-left,0px));
+  padding-right:max(24px,env(safe-area-inset-right,0px));
+  padding-block:0 100px}
 body::before{content:"";position:fixed;inset:0 0 auto;height:env(safe-area-inset-top,0px);background:var(--bg);z-index:11}
-.wrap{max-width:620px;margin:0 auto;padding-top:34px}
+.wrap{max-width:640px;margin:0 auto}
 
-.kicker{font-size:11.5px;letter-spacing:.12em;text-transform:uppercase;color:var(--muted);font-weight:600;margin:0 0 10px}
-h1{font-family:var(--fh);font-size:31px;line-height:1.15;margin:0 0 12px;font-weight:600;letter-spacing:-.01em;text-wrap:balance}
-.lede{color:var(--muted);font-size:15.5px;margin:0 0 26px}
-.q{font-family:var(--fh);font-size:25px;line-height:1.3;margin:0 0 22px;font-weight:600;text-wrap:balance}
+.topbar{display:flex;align-items:center;justify-content:space-between;
+  padding:32px 0 20px;border-bottom:1px solid var(--line);margin-bottom:28px}
+.brand{font-family:'Source Serif 4',Georgia,serif;font-size:20px;font-weight:500}
+.step-label{font-size:13px;color:var(--muted);margin-bottom:8px}
+.step-line{height:2px;background:var(--line);margin-bottom:34px;position:relative}
+.step-line::after{content:'';position:absolute;left:0;top:0;height:2px;background:var(--ink);
+  width:var(--pct,0%);transition:width .3s ease}
+
+h1{font-family:'Source Serif 4',Georgia,serif;font-weight:500;font-size:26px;line-height:1.25;
+  margin:0 0 18px;text-wrap:balance}
+p{margin:0 0 15px}
+.lede{color:var(--muted);font-size:15px}
+.q{font-family:'Source Serif 4',Georgia,serif;font-weight:500;font-size:22px;line-height:1.35;
+  margin:0 0 22px;text-wrap:balance}
 
 .opts{display:flex;flex-direction:column;gap:8px}
-button.opt{font:inherit;text-align:left;cursor:pointer;background:var(--surface);color:var(--fg);
-  border:1px solid var(--line);border-radius:9px;padding:13px 15px;transition:border-color .12s,background .12s}
-button.opt:hover{border-color:var(--accent)}
-button.opt:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
-button.opt.sel{border-color:var(--accent);background:var(--accent-soft)}
-button.opt .big{font-size:16.5px}
-button.opt .sm{display:block;font-size:13px;color:var(--muted);margin-top:3px}
+button.opt{font:inherit;font-size:14px;font-weight:500;text-align:left;cursor:pointer;
+  background:var(--paper);color:var(--ink);border:1px solid var(--line-strong);border-radius:6px;
+  padding:13px 15px;transition:border-color .12s,background .12s}
+button.opt:hover{border-color:var(--ink)}
+button.opt:focus-visible{outline:2px solid var(--ink);outline-offset:2px}
+button.opt.sel{background:var(--ink);color:#fff;border-color:var(--ink)}
 
-.nav{display:flex;justify-content:space-between;align-items:center;margin-top:24px;gap:12px}
-button.ghost{font:inherit;font-size:14px;background:none;border:none;color:var(--muted);cursor:pointer;padding:8px 0}
-button.ghost:hover{color:var(--fg)}
-button.go{font:inherit;font-size:15px;font-weight:600;background:var(--accent);color:var(--accent-ink);
-  border:none;border-radius:8px;padding:11px 22px;cursor:pointer}
-button.go[disabled]{opacity:.4;cursor:default}
-.count{font-size:12.5px;color:var(--muted);font-variant-numeric:tabular-nums}
+button.primary{font:inherit;font-size:15px;font-weight:500;background:var(--ink);color:#fff;
+  border:none;border-radius:6px;padding:14px 28px;cursor:pointer}
+button.primary:hover{background:#2E2E2E}
+button.link{font:inherit;font-size:13px;background:none;border:none;color:var(--muted);
+  cursor:pointer;padding:8px 0;text-decoration:underline;text-underline-offset:3px}
+button.link:hover{color:var(--ink)}
+
+.nav{display:flex;justify-content:space-between;align-items:center;margin-top:22px;gap:12px}
+.count{font-size:13px;color:var(--muted);font-variant-numeric:tabular-nums}
+
+.ask{border:1px solid var(--gold-line);background:var(--gold-soft);border-radius:8px;
+  padding:16px 18px;margin:0 0 24px}
+.ask p{margin:0;font-size:14.5px}
+.ask p + p{margin-top:9px}
+.ask strong{font-weight:600}
 
 /* result */
-.type{background:var(--accent-soft);border:1px solid var(--line);border-radius:12px;padding:22px;margin:0 0 22px}
-.type .nm{font-family:var(--fh);font-size:28px;font-weight:600;margin:0 0 6px;color:var(--accent)}
-.type .ln{margin:0;font-size:15.5px}
-.band{margin-bottom:20px}
-.band h3{font-size:11.5px;letter-spacing:.12em;text-transform:uppercase;color:var(--muted);margin:0 0 9px;font-weight:600}
-.band .pair{display:flex;flex-direction:column;gap:8px}
-.tr{background:var(--surface);border:1px solid var(--line);border-left:3px solid var(--rail,var(--line));
-  border-radius:8px;padding:12px 14px}
-.tr b{display:block;font-size:16px;margin-bottom:2px}
-.tr span{font-size:13.5px;color:var(--muted)}
-.band.top .tr{--rail:var(--accent)}
-.band.mid .tr{--rail:var(--warm)}
-.band.low .tr{--rail:var(--line)}
-.wired{font-size:14px;color:var(--muted);margin:0 0 22px}
-.wired b{color:var(--fg);font-weight:600}
-.again{font-size:13.5px;color:var(--muted);border-top:1px solid var(--line);padding-top:16px;margin-top:4px}
-.letters{font-family:var(--fh);letter-spacing:.22em;font-size:15px;color:var(--muted);margin-top:6px}
-.note{background:var(--surface);border:1px solid var(--line);border-radius:8px;padding:12px 14px;font-size:13.5px;color:var(--muted);margin-top:26px}
-</style>
-<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600&family=Fraunces:opsz,wght@9..144,600&display=swap">
+.type{border:1px solid var(--gold-line);background:var(--gold-soft);border-radius:8px;
+  padding:22px;margin:0 0 20px}
+.type .nm{font-family:'Source Serif 4',Georgia,serif;font-size:26px;font-weight:500;
+  margin:0 0 6px;color:var(--gold)}
+.type .ln{margin:0;font-size:15px}
+.wired{font-size:14.5px;color:var(--muted);margin:0 0 26px}
+.wired b{color:var(--ink);font-weight:600}
 
-<div class="bar"><i id="prog"></i></div>
-<div class="wrap" id="app"></div>
+.band{margin-bottom:22px}
+.band h3{font-size:12px;letter-spacing:.1em;text-transform:uppercase;color:var(--muted);
+  margin:0 0 9px;font-weight:600}
+.band .pair{display:flex;flex-direction:column;gap:8px}
+.tr{background:var(--paper);border:1px solid var(--line);border-left:3px solid var(--rail,var(--line));
+  border-radius:6px;padding:12px 14px}
+.tr b{display:block;font-size:15.5px;font-weight:600;margin-bottom:2px}
+.tr span{font-size:13.5px;color:var(--muted)}
+.band.top .tr{--rail:var(--gold)}
+.band.mid .tr{--rail:var(--line-strong)}
+.band.low .tr{--rail:var(--line)}
+
+.after{border-top:1px solid var(--line);padding-top:18px;margin-top:6px;font-size:14px;color:var(--muted)}
+.letters{font-family:'Source Serif 4',Georgia,serif;letter-spacing:.24em;font-size:15px;
+  color:var(--muted);margin-top:8px}
+.note{border:1px solid var(--line);background:var(--paper);border-radius:6px;
+  padding:13px 15px;font-size:13px;color:var(--muted);margin-top:28px}
+</style>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&family=Source+Serif+4:opsz,wght@8..60,500&display=swap">
+
+<div class="wrap">
+  <div class="topbar"><span class="brand">Heshy</span><span class="count" id="phase"></span></div>
+  <div class="step-label" id="steplabel"></div>
+  <div class="step-line" id="stepline"></div>
+  <div id="app"></div>
+</div>
 
 <script>
 // Heshy's own strengths assessment, brought over from The Candidate Collection.
@@ -322,20 +348,28 @@ function profileOf(rawValue) {
 
 // ---- the flow -------------------------------------------------------------------------------
 const answers = { items:{}, pairs:{}, extra:[] };
-let stage = 'intro';   // intro | items | pairs | extra | result
+let stage = 'intro';
 let idx = 0;
 let pendingExtra = null;
 let result = null;
 
 const app = document.getElementById('app');
-const prog = document.getElementById('prog');
+const stepline = document.getElementById('stepline');
+const steplabel = document.getElementById('steplabel');
+const phase = document.getElementById('phase');
 const esc = s => String(s).replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
 
 function answered(){ return Object.keys(answers.items).length + Object.keys(answers.pairs).length + answers.extra.length; }
-function setProgress(){ prog.style.width = Math.round((answered()/43)*100) + '%'; }
+
+function setChrome(label, right){
+  steplabel.textContent = label || '';
+  phase.textContent = right || '';
+  stepline.style.setProperty('--pct', Math.round((answered()/43)*100) + '%');
+  stepline.style.display = stage === 'intro' ? 'none' : 'block';
+  steplabel.style.display = stage === 'intro' ? 'none' : 'block';
+}
 
 function render(){
-  setProgress();
   if(stage === 'intro') return renderIntro();
   if(stage === 'items') return renderItem();
   if(stage === 'pairs') return renderPair();
@@ -344,27 +378,30 @@ function render(){
 }
 
 function renderIntro(){
+  setChrome('', '');
   app.innerHTML = `
-    <p class="kicker">Catalyst Consulting</p>
-    <h1>How you're wired to work</h1>
-    <p class="lede">Six kinds of work. By the end you'll know which two come naturally to you, which two you can do well, and which two quietly wear you down.</p>
-    <p class="lede">About 43 quick questions. There are no wrong answers and nothing to study for &mdash; answer how you actually feel, not how you think you should.</p>
-    <button class="go" id="start">Start</button>
-    <div class="note">Complimentary for clients. Your answers are only used to prepare for your session.</div>`;
+    <h1>Before we meet, I'd like you to do this</h1>
+    <div class="ask">
+      <p>It takes about ten minutes, and it changes our session.</p>
+      <p>It tells me how you're actually wired &mdash; what energises you, what you're good at, and what quietly drains you. Without it, I spend the first part of our time working that out. With it, we start at the real conversation.</p>
+      <p><strong>This used to cost money.</strong> I built my own version so I can give it to you as part of working together, at no charge.</p>
+    </div>
+    <p class="lede">There's nothing to study for and no wrong answers. Answer how you actually feel, not how you think you should.</p>
+    <p style="margin-top:24px;"><button class="primary" id="start">Start &mdash; about 10 minutes</button></p>`;
   document.getElementById('start').onclick = ()=>{ stage='items'; idx=0; render(); };
 }
 
 function renderItem(){
   const q = ITEMS[idx];
   const cur = answers.items[q.id];
+  setChrome('How much do you enjoy this?', `${idx+1} of 43`);
   app.innerHTML = `
-    <p class="kicker">How much do you enjoy this?</p>
     <p class="q">${esc(q.text)}</p>
     <div class="opts">${SCALE.map(s=>`
-      <button class="opt ${cur===s.v?'sel':''}" data-v="${s.v}"><span class="big">${esc(s.label)}</span></button>`).join('')}</div>
+      <button class="opt ${cur===s.v?'sel':''}" data-v="${s.v}">${esc(s.label)}</button>`).join('')}</div>
     <div class="nav">
-      <button class="ghost" id="back" ${idx===0?'style="visibility:hidden"':''}>&larr; Back</button>
-      <span class="count">${idx+1} of ${ITEMS.length}</span>
+      <button class="link" id="back" ${idx===0?'style="visibility:hidden"':''}>&larr; Back</button>
+      <span></span>
     </div>`;
   app.querySelectorAll('[data-v]').forEach(b=>{ b.onclick = ()=>{
     answers.items[q.id] = Number(b.dataset.v);
@@ -378,17 +415,14 @@ function renderItem(){
 function renderPair(){
   const p = PAIRS[idx];
   const cur = answers.pairs[p.id];
+  setChrome('Which sounds more like you?', `${ITEMS.length+idx+1} of 43`);
   app.innerHTML = `
-    <p class="kicker">Which would you rather?</p>
-    <p class="q">Pick the one that sounds more like you.</p>
+    <p class="q">Pick the one you'd rather be doing.</p>
     <div class="opts">
-      <button class="opt ${cur===p.a?'sel':''}" data-k="${p.a}"><span class="big">${esc(p.at)}</span></button>
-      <button class="opt ${cur===p.b?'sel':''}" data-k="${p.b}"><span class="big">${esc(p.bt)}</span></button>
+      <button class="opt ${cur===p.a?'sel':''}" data-k="${p.a}">${esc(p.at)}</button>
+      <button class="opt ${cur===p.b?'sel':''}" data-k="${p.b}">${esc(p.bt)}</button>
     </div>
-    <div class="nav">
-      <button class="ghost" id="back">&larr; Back</button>
-      <span class="count">${ITEMS.length+idx+1} of 43</span>
-    </div>`;
+    <div class="nav"><button class="link" id="back">&larr; Back</button><span></span></div>`;
   app.querySelectorAll('[data-k]').forEach(b=>{ b.onclick = ()=>{
     answers.pairs[p.id] = b.dataset.k;
     if(idx < PAIRS.length-1){ idx++; render(); }
@@ -403,16 +437,12 @@ function renderPair(){
 function renderExtra(){
   if(!pendingExtra){ finish(); return; }
   const e = pendingExtra;
+  setChrome('Last few — these settle the close calls', `${answered()+1} of 43`);
   app.innerHTML = `
-    <p class="kicker">Last few &mdash; these settle the close calls</p>
     <p class="q">Which sounds more like you?</p>
     <div class="opts">
-      <button class="opt" data-k="${e.a}"><span class="big">${esc(SNIPPETS[e.a][e.ai])}</span></button>
-      <button class="opt" data-k="${e.b}"><span class="big">${esc(SNIPPETS[e.b][e.bi])}</span></button>
-    </div>
-    <div class="nav">
-      <span></span>
-      <span class="count">${answered()+1} of 43</span>
+      <button class="opt" data-k="${e.a}">${esc(SNIPPETS[e.a][e.ai])}</button>
+      <button class="opt" data-k="${e.b}">${esc(SNIPPETS[e.b][e.bi])}</button>
     </div>`;
   app.querySelectorAll('[data-k]').forEach(b=>{ b.onclick = ()=>{
     answers.extra.push({ a:e.a, ai:e.ai, b:e.b, bi:e.bi, pick:b.dataset.k });
@@ -423,16 +453,14 @@ function renderExtra(){
 
 function finish(){ result = score(answers); stage='result'; render(); }
 
-function traitRow(k){
-  return `<div class="tr"><b>${esc(TRAITS[k].label)}</b><span>${esc(TRAITS[k].short)}</span></div>`;
-}
+const traitRow = k => `<div class="tr"><b>${esc(TRAITS[k].label)}</b><span>${esc(TRAITS[k].short)}</span></div>`;
 
 function renderResult(){
   const p = profileOf(result.letters);
   const t = p.type;
-  prog.style.width = '100%';
+  setChrome('Your result', 'Done');
+  stepline.style.setProperty('--pct','100%');
   app.innerHTML = `
-    <p class="kicker">Your result</p>
     ${t ? `<div class="type"><p class="nm">${esc(t.name)}</p><p class="ln">${esc(t.line)}</p></div>` : ''}
     ${t ? `<p class="wired">You're wired for <b>${esc(t.wiredFor[0])}</b>, <b>${esc(t.wiredFor[1])}</b> and <b>${esc(t.wiredFor[2])}</b>.</p>` : ''}
 
@@ -440,13 +468,14 @@ function renderResult(){
     <div class="band mid"><h3>You can do well</h3><div class="pair">${p.secondary.map(traitRow).join('')}</div></div>
     <div class="band low"><h3>Wears you down</h3><div class="pair">${p.draining.map(traitRow).join('')}</div></div>
 
-    <div class="again">
-      We'll go through this together in your session &mdash; what it means day to day, and where it's costing you.
+    <div class="after">
+      Thank you &mdash; this is genuinely useful to me. We'll go through it together in your session:
+      what it means day to day, and where it's costing you.
       <div class="letters">${esc(p.letters)}</div>
-      ${result.clear ? '' : '<div style="margin-top:8px;">A couple of these were close. That&rsquo;s worth talking through.</div>'}
+      ${result.clear ? '' : '<div style="margin-top:8px;">A couple of these were close, which is worth talking through.</div>'}
     </div>
-    <div class="note">Prototype &mdash; this is the real assessment and the real scoring. Nothing is saved from this page.
-      <div style="margin-top:8px;"><button class="ghost" id="restart" style="color:var(--accent);font-weight:600;">Take it again &rarr;</button></div>
+    <div class="note">Prototype &mdash; the real questions and the real scoring. Nothing is saved from this page.
+      <div style="margin-top:8px;"><button class="link" id="restart" style="color:var(--ink);">Take it again &rarr;</button></div>
     </div>`;
   document.getElementById('restart').onclick = ()=>{
     answers.items={}; answers.pairs={}; answers.extra=[];
