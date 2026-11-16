@@ -73,155 +73,63 @@ h2:first-of-type{margin-top:0}
 <div class="wrap">
   <h1>Booking App — What's Still Open</h1>
   <p class="sub">heshy-booking.vercel.app · reconciled against the live code, not the old audit</p>
-  <p class="asof">November 16, 2026 · 14 earlier findings now fixed and deployed</p>
+  <p class="asof">Updated November 16, 2026, evening · 25 of the 31 items are now done</p>
 
   <div class="tally">
-    <div><b>6</b><span>Money</span></div>
-    <div><b>4</b><span>Privacy &amp; files</span></div>
-    <div><b>5</b><span>Data integrity</span></div>
-    <div><b>5</b><span>Access &amp; abuse</span></div>
-    <div><b>7</b><span>Polish</span></div>
-    <div><b>4</b><span>Features you asked for</span></div>
+    <div><b>0</b><span>Money</span></div>
+    <div><b>2</b><span>Privacy &amp; files</span></div>
+    <div><b>0</b><span>Data integrity</span></div>
+    <div><b>1</b><span>Access &amp; abuse</span></div>
+    <div><b>3</b><span>Polish</span></div>
+    <div><b>3</b><span>Features you asked for</span></div>
   </div>
 
-  <h2>Money</h2>
-  <p class="why">These can charge the wrong amount, the wrong card, or nothing at all. Do these first.</p>
+  <div class="note" style="border-left-color:var(--accent);margin-bottom:28px;">
+    <p><strong>Everything below still needs doing.</strong> The rest &mdash; all six money items, every data-integrity item, the recording disclosure, rate limits, backups, keyboard access and the rest &mdash; is built, tested and either live or waiting on your next deploy.</p>
+  </div>
+
+  <h2>Needs something from you</h2>
+  <p class="why">I can't start these without one step at your end.</p>
 
   <div class="item hi"><div class="n">01</div><div class="body">
-    <p class="t">Clients can't replace a saved card</p>
-    <p class="d">The portal offers it, but the browser never receives the Stripe customer reference, so the request fails. A client with an expired card has to come to you.</p></div></div>
+    <p class="t">Assessment PDFs and session audio sit on public links</p>
+    <p class="d">Anyone with the URL can open them, no sign-in, no expiry. I need a <strong>private Blob store created in Vercel</strong> first &mdash; two minutes, and I'll walk you through it. Then I move the files and the links stop working for strangers.</p></div></div>
 
-  <div class="item hi"><div class="n">02</div><div class="body">
-    <p class="t">Every booking creates a new Stripe customer</p>
-    <p class="d">One person ends up with many customer records, each holding a different card. Different sessions can charge different cards, and "use this card going forward" can't work until this is fixed. 8 of your 14 clients have a card on file, so this is live.</p></div></div>
+  <div class="item med"><div class="n">02</div><div class="body">
+    <p class="t">Refunds and disputes never reach your records</p>
+    <p class="d">Needs a webhook endpoint added in Stripe, which only you can do. Until then a refund in Stripe leaves the session still marked charged here.</p></div></div>
 
-  <div class="item hi"><div class="n">03</div><div class="body">
-    <p class="t">Long sessions get undercharged</p>
-    <p class="d">You're in <code>minimum</code> billing mode. A 90-minute session booked as 60 still defaults to a 60-minute charge, even though clients are told longer runs bill actual time.</p></div></div>
+  <h2>Needs a decision from you</h2>
 
-  <div class="item hi"><div class="n">04</div><div class="body">
-    <p class="t">Coupons and comps aren't enforced at charge time</p>
-    <p class="d">Discounts affect the suggested figure in Manage only. Editing the hours recalculates at full price and drops the coupon. A comped session still shows normal charge buttons — one wrong click overcharges a free session.</p></div></div>
-
-  <div class="item hi"><div class="n">05</div><div class="body">
-    <p class="t">A coupon can vanish silently during booking</p>
-    <p class="d">If the code is used up or removed between typing and saving, the booking goes through at full price without telling the client. They think they got the discount; you bill them in full.</p></div></div>
-
-  <div class="item med"><div class="n">06</div><div class="body">
-    <p class="t">The browser picks which Stripe customer to use</p>
-    <p class="d">The server trusts a customer ID sent from the page instead of deriving it. Needs the same fix as #02 — resolve it server-side.</p></div></div>
-
-  <h2>Privacy &amp; files</h2>
-  <p class="why">Assessment reports and session audio are the most sensitive things the app holds.</p>
-
-  <div class="item hi"><div class="n">07</div><div class="body">
-    <p class="t">Working Genius PDFs and session audio sit on public links</p>
-    <p class="d">Anyone with the URL can open them, with no sign-in and no expiry. 5 clients have a PDF stored. Needs a private Blob store, which has to be created before I can change the code.</p></div></div>
-
-  <div class="item hi"><div class="n">08</div><div class="body">
-    <p class="t">Clients are never told sessions can be recorded</p>
-    <p class="d">No privacy notice, no consent step, no retention statement anywhere in the booking flow. This is the one with legal exposure, not just technical.</p></div></div>
-
-  <div class="item med"><div class="n">09</div><div class="body">
-    <p class="t">Recording audio is never deleted, and the end can be missing</p>
-    <p class="d">Uploads aren't awaited — the page waits a flat 1.5 seconds and finalizes, so the last chunk can be lost. Nothing cleans up the audio afterward.</p></div></div>
-
-  <div class="item med"><div class="n">10</div><div class="body">
-    <p class="t"><code>fix.html</code> can destroy a client's only PDF</p>
-    <p class="d">If the move to storage fails, it clears the original anyway. One bad moment and the report is gone.</p></div></div>
-
-  <h2>Data integrity</h2>
-  <p class="why">Quiet failures. Nothing looks wrong until something's missing.</p>
-
-  <div class="item hi"><div class="n">11</div><div class="body">
-    <p class="t">A client booking while Manage is open can wipe your edits</p>
-    <p class="d">Almost everything lives in one record that's read, changed and written back whole. Two writes at once and the later one silently erases the earlier. This is the one that worries me most in this group.</p></div></div>
-
-  <div class="item med"><div class="n">12</div><div class="body">
-    <p class="t">Manage can save anything, unchecked</p>
-    <p class="d">The server accepts whatever JSON it's handed as your complete business record. A stale tab or a bad request can blank required fields.</p></div></div>
-
-  <div class="item med"><div class="n">13</div><div class="body">
-    <p class="t">Dates, phones and coupon values are weakly validated</p>
-    <p class="d">Discount percentages can exceed 100 or go negative through a direct save.</p></div></div>
-
-  <div class="item low"><div class="n">14</div><div class="body">
-    <p class="t">Record IDs are short and random</p>
-    <p class="d">Unlikely to collide at your scale, but two records could end up ambiguous. Cheap to fix.</p></div></div>
-
-  <div class="item med"><div class="n">15</div><div class="body">
-    <p class="t">No backup or restore</p>
-    <p class="d">All of it is one mutable record. There's no export, no snapshot, no way back if something corrupts it.</p></div></div>
-
-  <h2>Access &amp; abuse</h2>
-
-  <div class="item med"><div class="n">16</div><div class="body">
+  <div class="item med"><div class="n">03</div><div class="body">
     <p class="t">Client portal login is email + phone number</p>
-    <p class="d">Both are findable. Anyone holding them can see a client's history and cancel their session. An emailed one-time code would close this.</p></div></div>
+    <p class="d">Both are findable, so anyone holding them can see a client's history and cancel their session. The fix is a one-time code emailed to them instead &mdash; but it changes how your clients sign in, so I'd rather show you first than surprise them.</p></div></div>
 
-  <div class="item med"><div class="n">17</div><div class="body">
-    <p class="t">Portal sessions last 60 days and survive logout</p>
-    <p class="d">Logging out clears the browser's copy only; the server token stays valid. The resume link also carries the token in the URL.</p></div></div>
+  <h2>Still to do</h2>
 
-  <div class="item med"><div class="n">18</div><div class="body">
-    <p class="t">A stranger can lock you out of Manage</p>
-    <p class="d">Six wrong passwords triggers one global lockout. Repeat every 15 minutes and you can't get in.</p></div></div>
+  <div class="item med"><div class="n">04</div><div class="body">
+    <p class="t">Session audio is never deleted, and the end can be cut off</p>
+    <p class="d">Uploads aren't waited for &mdash; the page pauses 1.5 seconds and finalises, so the last chunk can be lost. Nothing cleans up the audio afterwards.</p></div></div>
 
-  <div class="item med"><div class="n">19</div><div class="body">
-    <p class="t">Most public endpoints still have no rate limit</p>
-    <p class="d">Only <code>check-client</code> is limited so far. Booking attempts, Stripe setup and calendar lookups can all be hammered.</p></div></div>
-
-  <div class="item med"><div class="n">20</div><div class="body">
-    <p class="t">No size limits on uploads or form fields</p>
-    <p class="d">A PDF is trusted because it claims to be one. No check that the contents are actually a PDF.</p></div></div>
-
-  <h2>Polish</h2>
-
-  <div class="item low"><div class="n">21</div><div class="body">
-    <p class="t">Failures after booking are invisible to the client</p>
-    <p class="d">Calendar, PDF or email can fail while the page still says confirmation is on its way.</p></div></div>
-
-  <div class="item low"><div class="n">22</div><div class="body">
-    <p class="t">Times are never labelled Eastern</p>
-    <p class="d">A client in another timezone can misread their appointment. Confirmation also has no add-to-calendar or portal link.</p></div></div>
-
-  <div class="item low"><div class="n">23</div><div class="body">
-    <p class="t">Booking can't be done by keyboard</p>
-    <p class="d">Days, slots and format buttons are plain divs — no focus, no screen-reader state. Someone using a keyboard can't book.</p></div></div>
-
-  <div class="item low"><div class="n">24</div><div class="body">
-    <p class="t">The page is titled just "Heshy"</p>
-    <p class="d">No description, no favicon, no link preview. Tabs and shared links look unfinished.</p></div></div>
-
-  <div class="item low"><div class="n">25</div><div class="body">
-    <p class="t">Cancelling in Google Calendar doesn't cancel in Manage</p>
-    <p class="d">You hit this one in August and said leave it. Still true.</p></div></div>
-
-  <div class="item low"><div class="n">26</div><div class="body">
-    <p class="t">No Stripe webhooks</p>
-    <p class="d">Refunds, disputes and later payment changes never make it back into the booking record.</p></div></div>
-
-  <div class="item low"><div class="n">27</div><div class="body">
-    <p class="t">No dependency lockfile, README out of date</p>
-    <p class="d">Housekeeping. Installs aren't reproducible and security auditing can't run.</p></div></div>
-
-  <h2>Features you asked for</h2>
-
-  <div class="item feat"><div class="n">28</div><div class="body">
-    <p class="t">Replace Working Genius with the strengths assessment</p>
-    <p class="d">Pull the assessment out of your candidate app and use it here instead. Your call on whether existing WG results carry over.</p></div></div>
-
-  <div class="item feat"><div class="n">29</div><div class="body">
+  <div class="item low"><div class="n">05</div><div class="body">
     <p class="t">Edit button for weekly schedules</p>
-    <p class="d">Right now a weekly rule can only be deleted and rebuilt.</p></div></div>
+    <p class="d">A weekly rule can still only be deleted and rebuilt.</p></div></div>
 
-  <div class="item feat"><div class="n">30</div><div class="body">
+  <div class="item low"><div class="n">06</div><div class="body">
     <p class="t">Let clients reschedule themselves</p>
     <p class="d">They can cancel but not move a session, so every change comes through you.</p></div></div>
 
-  <div class="item feat"><div class="n">31</div><div class="body">
-    <p class="t">Client profile link and WG status in your booking emails</p>
-    <p class="d">You asked for this in August — a link straight to their profile, and a note on whether they've taken the assessment.</p></div></div>
+  <div class="item low"><div class="n">07</div><div class="body">
+    <p class="t">Client profile link in your booking emails</p>
+    <p class="d">You asked for this in August &mdash; a link straight to their profile from the alert email.</p></div></div>
+
+  <div class="item low"><div class="n">08</div><div class="body">
+    <p class="t">Cancelling in Google Calendar doesn't cancel in Manage</p>
+    <p class="d">You hit this in August and said leave it. Still true.</p></div></div>
+
+  <div class="item low"><div class="n">09</div><div class="body">
+    <p class="t">Housekeeping</p>
+    <p class="d">No dependency lockfile, and the README still describes three endpoints.</p></div></div>
 
   <h2>Two things only you can check</h2>
 
@@ -230,23 +138,15 @@ h2:first-of-type{margin-top:0}
   <div class="note"><p><strong>The client who couldn't check out.</strong> Still unconfirmed whether they got through after the Stripe Link fix. Worth a message.</p></div>
 
   <div class="done">
-    <h3>Already fixed and live</h3>
+    <h3>Done</h3>
     <ul>
-      <li>Calendar conflicts compared 5 hours off — server and browser</li>
-      <li>Home addresses and the Meet link exposed in the public feed</li>
-      <li>Stripe Link blocked at checkout</li>
-      <li>Rescheduling accepted invalid times, failed silently, sent no email</li>
-      <li>Online and in-person sessions could overlap</li>
-      <li>Admin sessions never expired; no real logout</li>
-      <li>Reminders marked sent when they'd failed</li>
-      <li>Portal "Upcoming" never cleared past sessions</li>
-      <li>Quick Check-in wasn't enforced on the server</li>
-      <li>Email addresses with stray spaces split clients in two</li>
-      <li>An unauthenticated endpoint could overwrite your data</li>
-      <li>Anyone could test whether an email was one of your clients</li>
-      <li>No security headers or content policy</li>
-      <li>Nothing recorded failures — now there's a problem log in Settings</li>
-      <li>No tests at all — now 1,512 checks run before anything ships</li>
+      <li><strong>Billing</strong> — duplicate Stripe customers, broken card updates, long sessions undercharged, coupons and comps ignored at charge time, dollar-off coupons that never worked, coupons vanishing silently mid-booking</li>
+      <li><strong>Data</strong> — concurrent writes erasing each other, unvalidated saves, no backups, ids that could collide, a cleanup tool that destroyed the only copy</li>
+      <li><strong>Privacy</strong> — addresses and Meet links exposed publicly, no recording disclosure, client enumeration</li>
+      <li><strong>Access</strong> — never-expiring admin sessions, 60-day portal sessions surviving logout, anyone able to lock you out, no rate limits, no size limits, PDFs trusted on their word</li>
+      <li><strong>Scheduling</strong> — calendar conflicts 5 hours off, overlapping sessions, broken rescheduling, stale "Upcoming" lists, Quick Check-in unenforced, duplicate clients from stray spaces</li>
+      <li><strong>Clients</strong> — times never labelled Eastern, no next steps after booking, no keyboard access, page titled just "Heshy", dishonest "email is on its way"</li>
+      <li><strong>New</strong> — your strengths assessment replacing Working Genius, the nudge button, the Problem log, backups with restore, and 18,312 automated checks that run before anything ships</li>
     </ul>
   </div>
 </div>
