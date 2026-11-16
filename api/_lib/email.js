@@ -26,9 +26,12 @@ export async function sendEmail({ to, subject, html }) {
     });
     if (!res.ok) {
       console.error('Resend error:', await res.text());
+      return false;
     }
+    return true;
   } catch (e) {
     console.error('Email send failed:', e);
+    return false;
   }
 }
 
@@ -76,6 +79,50 @@ function wrap(bodyHtml) {
       Catalyst Consulting Partners LLC
     </div>
   </div>`;
+}
+
+// Formats an Eastern wall-clock date+time for display, independent of the server's timezone.
+function fmtEt(date, time) {
+  const [y, mo, d] = date.split('-').map(Number);
+  const [h, mi] = time.split(':').map(Number);
+  const asUtc = new Date(Date.UTC(y, mo - 1, d, h, mi));
+  return {
+    date: asUtc.toLocaleDateString('en-US', { timeZone: 'UTC', weekday: 'short', month: 'short', day: 'numeric' }),
+    time: asUtc.toLocaleTimeString('en-US', { timeZone: 'UTC', hour: 'numeric', minute: '2-digit' })
+  };
+}
+
+// Sent to the client when Heshy moves a session. Until this existed, a rescheduled session
+// was never communicated by the app at all.
+export function rescheduledEmail(booking, previous, settings) {
+  const now = fmtEt(booking.date, booking.time);
+  const was = fmtEt(previous.date, previous.time);
+  const firstName = esc((booking.clientName || '').split(' ')[0]);
+  const meetLink = booking.meetLink || settings.meetLink;
+  const whereRow = booking.type === 'virtual'
+    ? factRow('Join link', meetLink ? `<a href="${esc(meetLink)}">${esc(meetLink)}</a>` : 'Sent before the session')
+    : factRow('Location', esc(booking.location || settings.location || 'Sent before the session').replace(/\n/g, '<br>'));
+  return {
+    subject: `Your session has moved — now ${now.date} at ${now.time}`,
+    html: wrap(`
+      <div style="font-size:22px;font-family:Georgia,serif;margin-bottom:8px;">Your session has moved.</div>
+      <div style="font-size:14px;font-family:Arial,sans-serif;color:#6E6E6E;margin-bottom:20px;">
+        Hi ${firstName || 'there'} &mdash; Heshy has moved your session. Here are the new details.
+      </div>
+      <table style="width:100%;border-collapse:collapse;font-family:Arial,sans-serif;">
+        ${factRow('New time', `<strong>${now.date}, ${now.time}</strong>`)}
+        ${factRow('Was', `<span style="color:#6E6E6E;text-decoration:line-through;">${was.date}, ${was.time}</span>`)}
+        ${factRow('Format', booking.type === 'virtual' ? 'Video call' : 'In person')}
+        ${whereRow}
+      </table>
+      <div style="margin-top:22px;font-family:Arial,sans-serif;font-size:13px;">
+        <a href="${esc(googleCalendarAddLink(booking, settings))}">Add the new time to your calendar</a>
+      </div>
+      <div style="margin-top:18px;font-size:13px;color:#6E6E6E;font-family:Arial,sans-serif;">
+        If the new time doesn't work, just reply to this email.
+      </div>
+    `)
+  };
 }
 
 export function bookingConfirmationEmail(booking, settings) {

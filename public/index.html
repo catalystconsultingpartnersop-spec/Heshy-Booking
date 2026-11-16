@@ -794,7 +794,10 @@ function computeFreeRanges(ds, type){
     if(windows[i][0] <= last[1]) last[1] = Math.max(last[1], windows[i][1]);
     else merged.push(windows[i].slice());
   }
-  const busy = (state.bookings||[]).filter(b=>b.date===ds && b.type===type && !b.cancelled).map(b=>{
+  // Every active booking blocks, whatever its format — Heshy can't take a video call and an
+  // in-person session at the same time. This used to filter on b.type===type, so an online
+  // session and an in-person one could be offered in the same hour.
+  const busy = (state.bookings||[]).filter(b=>b.date===ds && !b.cancelled).map(b=>{
     const s = timeToMinC(b.time); return [s, s+(b.durationMin||60)];
   });
   busyRangesForDateC(calendarBusy, ds).forEach(r => busy.push(r));
@@ -844,7 +847,16 @@ function resolveLocation(ds, type){
 }
 
 function selectDay(d){ selectedDay = d; selectedStartTime = null; render(); }
-function selectType(t){ selectedType = t; selectedDay = null; selectedStartTime = null; clientCalWeeksShown = 2; render(); }
+function selectType(t){
+  selectedType = t;
+  // Quick Check-in is a phone call, so it can't survive a switch to In person. Without this the
+  // 15-minute selection stayed active and offered a combination that isn't actually available.
+  if(selectedDuration === 15 && t !== 'virtual'){
+    const opts = (state.settings.durationOptions && state.settings.durationOptions.length) ? state.settings.durationOptions : [60];
+    selectedDuration = opts.includes(60) ? 60 : opts[0];
+  }
+  selectedDay = null; selectedStartTime = null; clientCalWeeksShown = 2; render();
+}
 function selectDuration(d){ selectedDuration = d; selectedDay = null; selectedStartTime = null; clientCalWeeksShown = 2; render(); }
 function selectStartTime(t){ selectedStartTime = t; render(); }
 function goStep(n){ bookingStep = n; render(); }
@@ -1338,7 +1350,9 @@ function renderPortal(){
   });
   let pastHtml = past.length===0 ? `<div class="empty">No past sessions yet.</div>` : '';
   past.forEach(b=>{
-    pastHtml += `<div class="portal-session"><div class="top"><span>${fmtDate(b.date)}</span><span>${money(b.amount||0)}</span></div>
+    // A past session that hasn't been billed yet shouldn't claim it cost $0.00.
+    const amountLabel = b.awaitingBilling ? `<span class="note">Not yet billed</span>` : money(b.amount||0);
+    pastHtml += `<div class="portal-session"><div class="top"><span>${fmtDate(b.date)}</span><span>${amountLabel}</span></div>
       <div class="meta">${b.actualMinutes||b.durationMin} min, ${b.type==='virtual'?'video call':'in person'}</div>
       ${b.clientSummary?`<div class="portal-summary-box"><div class="portal-summary-label">Session recap</div>${esc(b.clientSummary)}</div>`:''}
     </div>`;
@@ -1907,7 +1921,9 @@ function renderAdmin(){
       ? `<div class="empty">Nothing here.</div>`
       : active.list.map(b=>sessionCardHtml(b)).join('');
 
-    const todayOnlyBookings = state.bookings.filter(b=>b.date===todayDs).sort((a,b)=>a.time.localeCompare(b.time));
+    // Exclude cancelled, matching the "Today" counter above — the two used to disagree, so a
+    // cancelled session still appeared in this list while the number said otherwise.
+    const todayOnlyBookings = state.bookings.filter(b=>b.date===todayDs && !b.cancelled).sort((a,b)=>a.time.localeCompare(b.time));
     const todayOnlyHtml = todayOnlyBookings.length===0 ? `<div class="empty">No sessions today.</div>` : todayOnlyBookings.map(b=>sessionCardHtml(b)).join('');
     const fixedTodayBlock = `
       <div class="admin-block">
@@ -2514,6 +2530,9 @@ function attachHandlers(){
           });
           const data = await res.json();
           if(data.error){ alert('Reschedule failed: ' + data.error); el.disabled = false; el.textContent = 'Save new time'; return; }
+          // Surface anything that didn't fully work (calendar out of step, client email not
+          // sent) instead of reporting a clean success.
+          if(data.warning) alert(data.warning);
           reschedulingId = null;
           delete rescheduleType[id];
           await loadAdminState();

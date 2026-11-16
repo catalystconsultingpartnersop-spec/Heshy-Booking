@@ -1,7 +1,8 @@
 import { kv } from '@vercel/kv';
 import { put } from '@vercel/blob';
 import { verifyAdminToken, randomToken } from './_lib/auth.js';
-import { sendEmail, reminderEmail, dailyDigestEmail } from './_lib/email.js';
+import { sendEmail, reminderEmail, dailyDigestEmail, rescheduledEmail } from './_lib/email.js';
+import { checkSlot } from './_lib/availability.js';
 
 const ADMIN_SESSION_SECONDS = 60 * 60 * 12; // 12 hours
 
@@ -241,18 +242,51 @@ async function handleDailyDigestAndReminders(req, res) {
   } catch (e) { /* best-effort */ }
 
   let remindersSent = 0;
+  const reminderFailures = [];
   for (const booking of tomorrowBookings) {
     if (booking.reminderSent) continue;
+    if (!booking.clientEmail) continue;
     try {
       const reminder = reminderEmail(booking, data.settings || {});
-      await sendEmail({ to: booking.clientEmail, subject: reminder.subject, html: reminder.html });
-      booking.reminderSent = true;
-      remindersSent++;
-    } catch (e) { /* best-effort, try again tomorrow's run won't help since booking will have passed — log and move on */ }
+      // Only record it as sent if it actually sent. sendEmail used to swallow failures and
+      // return normally, so a reminder that never left Resend was still marked done — and
+      // then never retried.
+      const ok = await sendEmail({ to: booking.clientEmail, subject: reminder.subject, html: reminder.html });
+      if (ok) {
+        booking.reminderSent = true;
+        booking.reminderSentAt = new Date().toISOString();
+        remindersSent++;
+      } else {
+        reminderFailures.push({ bookingId: booking.id, client: booking.clientName });
+      }
+    } catch (e) {
+      console.error('Reminder failed for', booking.id, e);
+      reminderFailures.push({ bookingId: booking.id, client: booking.clientName });
+    }
   }
   if (remindersSent > 0) await kv.set('app-data', data);
 
-  res.status(200).json({ ok: true, digestSentFor: { today: todayBookings.length, tomorrow: tomorrowBookings.length }, remindersSent });
+  if (reminderFailures.length) {
+    console.error('Reminders that did not send:', JSON.stringify(reminderFailures));
+    try {
+      await sendEmail({
+        to: 'heshy@catalystconsultingnyc.com',
+        subject: `Heads up: ${reminderFailures.length} reminder${reminderFailures.length === 1 ? '' : 's'} did not send`,
+        html: `<div style="font-family:Arial,sans-serif;font-size:14px;line-height:1.6;">
+          These clients have a session tomorrow and did <strong>not</strong> get their reminder:
+          <ul>${reminderFailures.map(f => `<li>${f.client || f.bookingId}</li>`).join('')}</ul>
+          The app will try again on the next run. You may want to message them directly.
+        </div>`
+      });
+    } catch (e) { /* if even this can't send, the console log above is the record */ }
+  }
+
+  res.status(200).json({
+    ok: true,
+    digestSentFor: { today: todayBookings.length, tomorrow: tomorrowBookings.length },
+    remindersSent,
+    reminderFailures: reminderFailures.length
+  });
 }
 
 async function handleCleanupLargePdfs(req, res) {
@@ -348,27 +382,84 @@ async function handleRescheduleBooking(req, res) {
   const booking = (data.bookings || []).find(b => b.id === bookingId);
   if (!booking) return res.status(404).json({ error: 'Booking not found' });
 
+  if (booking.cancelled) return res.status(400).json({ error: 'That session is cancelled. Un-cancel it first, or book a new one.' });
+
   const targetDate = newDate, targetTime = newTime, targetDuration = booking.durationMin;
   const targetType = (newType === 'virtual' || newType === 'in-person') ? newType : booking.type;
+
+  // Moving a session used to accept anything: a date in the past, a time outside open hours,
+  // or a slot where another session already sits. Run the same check a client booking runs,
+  // ignoring this booking's own slot, and without the client notice period (an admin moving
+  // something to tomorrow morning is legitimate).
+  const verdict = checkSlot(data, {
+    date: targetDate, time: targetTime, durationMin: targetDuration, type: targetType,
+    excludeBookingId: booking.id, requireLeadTime: false
+  });
+  if (!verdict.ok) return res.status(400).json({ error: verdict.reason });
+
+  const previous = { date: booking.date, time: booking.time, type: booking.type };
   const targetLocation = targetType === 'in-person' ? resolveAddress(data, targetDate) : '';
 
-  if (booking.calendarEventId) {
-    try {
-      const accessToken = await getGoogleAccessToken();
-      if (accessToken) {
-        const endAt = addMinutes(targetDate, targetTime, targetDuration);
-        const patchBody = {
-          start: { dateTime: targetDate + 'T' + targetTime + ':00', timeZone: APP_TIMEZONE },
-          end: { dateTime: endAt.date + 'T' + endAt.time + ':00', timeZone: APP_TIMEZONE },
-          location: targetLocation
-        };
-        await fetch(`https://www.googleapis.com/calendar/v3/calendars/primary/events/${booking.calendarEventId}?sendUpdates=all`, {
+  // Keep Google Calendar in step, and report honestly when we can't.
+  let calendarWarning = null;
+  let newCalendarEventId = booking.calendarEventId || null;
+  let newMeetLink = booking.meetLink || '';
+  try {
+    const accessToken = await getGoogleAccessToken();
+    if (!accessToken) {
+      calendarWarning = 'Session moved, but Google Calendar is not connected — your calendar still shows the old time.';
+    } else {
+      const endAt = addMinutes(targetDate, targetTime, targetDuration);
+      const start = { dateTime: targetDate + 'T' + targetTime + ':00', timeZone: APP_TIMEZONE };
+      const end = { dateTime: endAt.date + 'T' + endAt.time + ':00', timeZone: APP_TIMEZONE };
+
+      let patched = false;
+      if (booking.calendarEventId) {
+        const r = await fetch(`https://www.googleapis.com/calendar/v3/calendars/primary/events/${booking.calendarEventId}?sendUpdates=all`, {
           method: 'PATCH',
           headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${accessToken}` },
-          body: JSON.stringify(patchBody)
+          body: JSON.stringify({ start, end, location: targetLocation })
         });
+        patched = r.ok;
+        if (!r.ok && r.status !== 404 && r.status !== 410) {
+          const body = await r.text().catch(() => '');
+          console.error('Calendar patch failed:', r.status, body.slice(0, 300));
+          calendarWarning = 'Session moved, but updating the Google Calendar event failed — please check your calendar.';
+        }
       }
-    } catch (e) { /* calendar sync is best-effort, don't block the reschedule */ }
+
+      // No event id, or the event was deleted straight out of Google Calendar (404/410).
+      // Previously the failed patch was swallowed and nothing was created, so the session
+      // simply vanished from the calendar while the app still showed it.
+      if (!patched) {
+        const evRes = await fetch('https://www.googleapis.com/calendar/v3/calendars/primary/events?conferenceDataVersion=1&sendUpdates=all', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${accessToken}` },
+          body: JSON.stringify({
+            summary: 'Clarity session — ' + (booking.clientName || ''),
+            location: targetLocation,
+            start, end,
+            attendees: booking.clientEmail ? [{ email: booking.clientEmail }] : [],
+            conferenceData: { createRequest: { requestId: booking.id + '-' + Date.now(), conferenceSolutionKey: { type: 'hangoutsMeet' } } }
+          })
+        });
+        if (evRes.ok) {
+          const ev = await evRes.json();
+          if (ev.id) newCalendarEventId = ev.id;
+          if (ev.hangoutLink) newMeetLink = ev.hangoutLink;
+          calendarWarning = booking.calendarEventId
+            ? 'The old calendar event was gone, so a new one was created at the new time.'
+            : calendarWarning;
+        } else {
+          const body = await evRes.text().catch(() => '');
+          console.error('Calendar create-on-reschedule failed:', evRes.status, body.slice(0, 300));
+          calendarWarning = 'Session moved, but it could not be added to your Google Calendar — please add it manually.';
+        }
+      }
+    }
+  } catch (e) {
+    console.error('Calendar sync on reschedule failed:', e);
+    calendarWarning = 'Session moved, but syncing Google Calendar failed — please check your calendar.';
   }
 
   booking.date = targetDate;
@@ -376,9 +467,30 @@ async function handleRescheduleBooking(req, res) {
   booking.durationMin = targetDuration;
   booking.type = targetType;
   booking.location = targetLocation;
+  booking.calendarEventId = newCalendarEventId;
+  booking.meetLink = newMeetLink;
+  // The old reminder no longer describes this session, so let the daily job send a fresh one.
+  delete booking.reminderSentAt;
+  delete booking.reminderSent;
 
   await kv.set('app-data', data);
-  res.status(200).json({ ok: true });
+
+  // Tell the client. Previously nothing was sent at all, so a moved session was only
+  // communicated if Heshy happened to email them himself.
+  let emailWarning = null;
+  if (booking.clientEmail) {
+    try {
+      const mail = rescheduledEmail(booking, previous, data.settings || {});
+      const sent = await sendEmail({ to: booking.clientEmail, subject: mail.subject, html: mail.html });
+      if (!sent) emailWarning = 'Session moved, but the email to the client did not send.';
+    } catch (e) {
+      console.error('Reschedule email failed:', e);
+      emailWarning = 'Session moved, but the email to the client did not send.';
+    }
+  }
+
+  const warning = [calendarWarning, emailWarning].filter(Boolean).join(' ');
+  res.status(200).json({ ok: true, warning: warning || undefined });
 }
 
 export default async function handler(req, res) {

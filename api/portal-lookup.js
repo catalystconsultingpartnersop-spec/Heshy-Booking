@@ -44,21 +44,27 @@ function clientSummary(client, bookings, settings) {
   const clientBookings = bookings.filter(b => b.clientId === client.id);
   const cutoffHours = (settings?.clientCancelCutoffHours != null) ? settings.clientCancelCutoffHours : 3;
   const cutoff = new Date(Date.now() + cutoffHours * 60 * 60 * 1000);
-  // Upcoming: not cancelled, not already charged.
+  // Upcoming means genuinely still ahead. This used to be "not cancelled and not charged",
+  // with no reference to the date at all — so a session from weeks ago that was never charged,
+  // or was marked complete instead of charged, sat under "Upcoming" in the client's portal
+  // forever.
+  const now = Date.now();
+  const hasPassed = b => etToUtc(b.date, b.time).getTime() + ((b.durationMin || 60) * 60000) <= now;
+
   const upcoming = clientBookings
-    .filter(b => !b.cancelled && b.status !== 'charged')
+    .filter(b => !b.cancelled && b.status !== 'charged' && !hasPassed(b))
     .map(b => ({
       id: b.id, date: b.date, time: b.time, type: b.type,
       cancellable: etToUtc(b.date, b.time) >= cutoff
     }));
-  // Past/history: any session that was actually charged stays visible here regardless of
-  // whether it was later cancelled (e.g. cancelled afterward just to free up the original slot)
-  // — the client was billed for it, so they should always be able to see it.
+  // History: anything charged (even if cancelled afterwards — they were billed, so they should
+  // always be able to see it), plus any session whose time has simply passed.
   const past = clientBookings
-    .filter(b => b.status === 'charged')
+    .filter(b => b.status === 'charged' || (!b.cancelled && hasPassed(b)))
     .map(b => ({
       date: b.date, actualMinutes: b.actualMinutes, durationMin: b.durationMin,
-      type: b.type, amount: b.amount, clientSummary: b.clientSummary
+      type: b.type, amount: b.amount, clientSummary: b.clientSummary,
+      awaitingBilling: b.status !== 'charged'
     }));
   return { found: true, name: client.name, phone: client.phone, email: client.email, upcoming, past, hasCard: !!client.stripeCustomerId, cancelCutoffHours: cutoffHours };
 }

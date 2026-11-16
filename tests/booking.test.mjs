@@ -1,4 +1,4 @@
-import { isRangeAvailable } from '../api/create-booking.js';
+import { isRangeAvailable, checkSlot } from '../api/_lib/availability.js';
 import { busyRangesForDate } from '../api/_lib/time.js';
 
 let pass = 0, fail = 0;
@@ -83,6 +83,51 @@ check('empty busy = nothing blocked',     isRangeAvailable(data, FUTURE_WED, '11
 // --- The 12-hour notice rule still works ---
 const todayEt = new Intl.DateTimeFormat('en-CA', { timeZone:'America/New_York', year:'numeric', month:'2-digit', day:'2-digit' }).format(new Date());
 check('a slot earlier today is refused', isRangeAvailable(data, todayEt, '11:00', 60, 'virtual', null, null), false);
+
+// --- online and in-person must not overlap (Heshy can only be in one place) ---
+const onlineBooked = { ...data, bookings: [
+  { id:'b9', date: FUTURE_WED, time:'11:00', durationMin:60, type:'virtual', cancelled:false }
+]};
+check('in-person blocked by an online session at the same time',
+  isRangeAvailable(onlineBooked, FUTURE_WED, '11:00', 60, 'in-person', null, null), false);
+check('in-person blocked by partial overlap with online',
+  isRangeAvailable(onlineBooked, FUTURE_WED, '11:30', 60, 'in-person', null, null), false);
+check('in-person fine once the online session has ended',
+  isRangeAvailable(onlineBooked, FUTURE_WED, '12:00', 60, 'in-person', null, null), true);
+check('a cancelled online session blocks nothing',
+  isRangeAvailable({ ...data, bookings:[{ id:'b9', date:FUTURE_WED, time:'11:00', durationMin:60, type:'virtual', cancelled:true }] },
+    FUTURE_WED, '11:00', 60, 'in-person', null, null), true);
+
+// --- checkSlot: reasons, and the admin path that skips the client notice period ---
+check('checkSlot explains an out-of-hours time',
+  checkSlot(data, { date: FUTURE_WED, time:'14:00', durationMin:60, type:'virtual' }).reason,
+  'That time is outside your open hours for that date.');
+check('checkSlot explains a clash',
+  checkSlot(withBooking, { date: FUTURE_WED, time:'11:00', durationMin:60, type:'virtual' }).reason,
+  'Another session is already booked at that time.');
+check('checkSlot explains a calendar block',
+  checkSlot(data, { date: FUTURE_WED, time:'11:00', durationMin:60, type:'virtual',
+    calendarBusyRanges: busyRangesForDate(realBusyWinter, FUTURE_WED) }).reason,
+  'That time is blocked on your Google Calendar.');
+check('moving a booking ignores its own slot',
+  checkSlot(withBooking, { date: FUTURE_WED, time:'11:00', durationMin:60, type:'virtual',
+    excludeBookingId:'b1', requireLeadTime:false }).ok, true);
+
+// Admin isn't bound by the 12-hour notice, but still can't move a session into the past.
+const soon = new Date(Date.now() + 2*60*60*1000);
+const soonEt = new Intl.DateTimeFormat('en-CA',{timeZone:'America/New_York',year:'numeric',month:'2-digit',day:'2-digit'}).format(soon);
+check('admin move is refused when the date has no open window',
+  checkSlot(data, { date: soonEt, time:'03:00', durationMin:60, type:'virtual', requireLeadTime:false }).ok, false);
+check('past date refused even for admin',
+  checkSlot(data, { date:'2020-01-06', time:'11:00', durationMin:60, type:'virtual', requireLeadTime:false }).reason,
+  'That time is in the past.');
+
+// --- input validation ---
+check('impossible date refused', checkSlot(data, { date:'2027-02-31', time:'11:00', durationMin:60, type:'virtual' }).reason, 'That date does not exist.');
+check('malformed date refused',  checkSlot(data, { date:'nonsense', time:'11:00', durationMin:60, type:'virtual' }).reason, 'That date looks wrong.');
+check('malformed time refused',  checkSlot(data, { date:FUTURE_WED, time:'9am', durationMin:60, type:'virtual' }).reason, 'That time looks wrong.');
+check('absurd duration refused', checkSlot(data, { date:FUTURE_WED, time:'11:00', durationMin:5000, type:'virtual' }).reason, 'That session length looks wrong.');
+check('zero duration refused',   checkSlot(data, { date:FUTURE_WED, time:'11:00', durationMin:0, type:'virtual' }).reason, 'That session length looks wrong.');
 
 console.log(`\n${pass} passed, ${fail} failed`);
 if (fail) { console.log('\nFAILURES:\n' + failures.map(f=>'  '+f).join('\n')); process.exit(1); }

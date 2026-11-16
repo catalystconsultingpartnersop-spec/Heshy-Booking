@@ -12,7 +12,7 @@ import { dirname, join } from 'node:path';
 const here = dirname(fileURLToPath(import.meta.url));
 const loader = join(here, 'register-loader.mjs');
 
-const SUITES = ['time.test.mjs', 'booking.test.mjs', 'browser.test.mjs', 'privacy.test.mjs'];
+const SUITES = ['time.test.mjs', 'booking.test.mjs', 'browser.test.mjs', 'privacy.test.mjs', 'portal.test.mjs'];
 // The app is Eastern-time only, so every suite must give identical results no matter where
 // the server or the viewer happens to be.
 const ZONES = ['America/New_York', 'UTC', 'America/Chicago', 'America/Los_Angeles',

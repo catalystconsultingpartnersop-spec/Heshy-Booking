@@ -1,7 +1,8 @@
 import { kv } from '@vercel/kv';
 import { put } from '@vercel/blob';
 import { sendEmail, bookingConfirmationEmail, newBookingAlertEmail } from './_lib/email.js';
-import { APP_TIMEZONE, etToUtc, busyRangesForDate, etDayBounds } from './_lib/time.js';
+import { APP_TIMEZONE, busyRangesForDate, etDayBounds } from './_lib/time.js';
+import { isRangeAvailable } from './_lib/availability.js';
 
 async function getGoogleAccessToken() {
   const refreshToken = await kv.get('google-refresh-token');
@@ -51,43 +52,6 @@ function resolveAddress(data, date) {
   const rule = (data.availability?.['in-person'] || []).find(r => r.days.includes(weekday) && r.address);
   if (rule) return rule.address;
   return data.settings?.location || '';
-}
-
-// Authoritative check: is [time, time+durationMin) fully inside an open window on this date/type,
-// after subtracting every other booking of the same type and (if available) real Calendar busy time?
-// This is the actual security boundary — the client-side UI computation is just for showing good options.
-export function isRangeAvailable(data, date, time, durationMin, type, excludeBookingId, calendarBusyRanges) {
-  const minLeadHours = (data.settings?.minLeadHours != null) ? data.settings.minLeadHours : 12;
-  const slotDateTime = etToUtc(date, time);
-  const cutoff = new Date(Date.now() + minLeadHours * 60 * 60 * 1000);
-  if (slotDateTime < cutoff) return false;
-
-  const weekday = dowOf(date);
-  const windows = [];
-  const isBlocked = (data.blockedDates || []).some(bl => bl.date === date && bl.type === type);
-  if (!isBlocked) {
-    (data.availability?.[type] || []).filter(r => r.days.includes(weekday)).forEach(r => windows.push([timeToMin(r.start), timeToMin(r.end)]));
-  }
-  (data.overrides || []).filter(o => o.date === date && o.type === type).forEach(o => windows.push([timeToMin(o.start), timeToMin(o.end)]));
-  if (windows.length === 0) return false;
-
-  const reqStart = timeToMin(time), reqEnd = reqStart + durationMin;
-  const fitsAWindow = windows.some(([ws, we]) => reqStart >= ws && reqEnd <= we);
-  if (!fitsAWindow) return false;
-
-  const conflicts = (data.bookings || [])
-    .filter(b => b.id !== excludeBookingId && b.date === date && b.type === type && !b.cancelled)
-    .some(b => {
-      const bs = timeToMin(b.time), be = bs + (b.durationMin || 60);
-      return reqStart < be && reqEnd > bs;
-    });
-  if (conflicts) return false;
-
-  if (calendarBusyRanges) {
-    const busyConflict = calendarBusyRanges.some(([bs, be]) => reqStart < be && reqEnd > bs);
-    if (busyConflict) return false;
-  }
-  return true;
 }
 
 function uid() {
@@ -155,6 +119,21 @@ export default async function handler(req, res) {
     const allowedDurations = [15, ...configuredDurations];
     if (!allowedDurations.includes(Number(durationMin))) {
       return res.status(400).json({ error: 'That session length is not offered.' });
+    }
+
+    // Quick Check-in is described to clients as a 15-minute phone call for people who have
+    // worked with Heshy before. The server accepted 15 minutes from anyone, in either format,
+    // so switching to "In person" after picking Quick Check-in produced a combination that
+    // isn't actually offered.
+    if (Number(durationMin) === 15) {
+      if (type !== 'virtual') {
+        return res.status(400).json({ error: 'Quick Check-in is a phone call — please pick a standard session length for an in-person meeting.' });
+      }
+      const normalizedEmail = String(email || '').trim().toLowerCase();
+      const returning = (data.clients || []).some(c => (c.email || '').trim().toLowerCase() === normalizedEmail);
+      if (!returning) {
+        return res.status(400).json({ error: 'Quick Check-in is for clients who have worked with Heshy before. Please pick a standard session length for a first session.' });
+      }
     }
 
     // Re-check real Google Calendar busy time at the moment of booking (best-effort — if Calendar
