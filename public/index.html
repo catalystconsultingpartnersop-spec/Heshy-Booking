@@ -504,6 +504,7 @@ async function submitPortalCancel(bookingId){
 let expandedClientId = null;
 let errorEntries = null; // null = not loaded yet
 let agentEntries = null; // null = not loaded yet
+let backupEntries = null; // null = not loaded yet
 let viewingClientId = null;
 let editingClientContact = false;
 let clientSearch = '';
@@ -2546,6 +2547,37 @@ function renderAdmin(){
       </div>
 
       <div class="admin-block">
+        <h2>Backups</h2>
+        <div class="note" style="margin-bottom:10px;">A snapshot is kept every day, before anything is restored, and before any save that removes clients or sessions. The last 20 are kept for 45 days. If something ever goes wrong, you can put it back.</div>
+        ${backupEntries === null
+          ? `<button class="ghost small" id="loadBackupsBtn">Show backups</button>`
+          : backupEntries.length === 0
+            ? `<div class="empty">No backups yet &mdash; the first is taken by tonight's run.</div>
+               <div style="margin-top:10px;display:flex;gap:8px;"><button class="ghost small" id="loadBackupsBtn">Refresh</button><button class="ghost small" id="backupNowBtn">Back up now</button></div>`
+            : `<div style="font-size:13px;">
+                 ${backupEntries.map(b=>{
+                   const when = new Date(b.at).toLocaleString('en-US',{month:'short',day:'numeric',hour:'numeric',minute:'2-digit'});
+                   const why = { daily:'Daily', manual:'Taken by you', 'before-restore':'Before a restore', 'before-removal':'Before a save that removed records' }[b.reason] || esc(b.reason);
+                   return `<div style="padding:9px 0;border-bottom:1px solid var(--line);display:flex;justify-content:space-between;gap:12px;align-items:baseline;flex-wrap:wrap;">
+                     <div>
+                       <div><strong>${when}</strong> &middot; ${why}</div>
+                       <div class="sub">${b.counts.clients} clients &middot; ${b.counts.bookings} sessions</div>
+                     </div>
+                     <div style="display:flex;gap:8px;">
+                       <button class="ghost small" data-backup-download="${esc(b.id)}">Download</button>
+                       <button class="ghost small danger-ghost" data-backup-restore="${esc(b.id)}">Restore</button>
+                     </div>
+                   </div>`;
+                 }).join('')}
+               </div>
+               <div style="margin-top:12px;display:flex;gap:8px;">
+                 <button class="ghost small" id="loadBackupsBtn">Refresh</button>
+                 <button class="ghost small" id="backupNowBtn">Back up now</button>
+               </div>`}
+        <div id="backup-msg" style="font-size:12.5px;color:var(--muted);margin-top:8px;"></div>
+      </div>
+
+      <div class="admin-block">
         <h2>Claude's access log</h2>
         <div class="note" style="margin-bottom:10px;">Claude has a read-only key, separate from your password. It can look at your data; it can't change anything, and it can't log in as you. Routine checks return counts and structure only &mdash; no client names, emails, phone numbers or session notes. Every look is recorded here. To revoke it, change or delete <strong>AGENT_READ_KEY</strong> in Vercel; your own password is unaffected.</div>
         ${agentEntries === null
@@ -2845,6 +2877,67 @@ function attachHandlers(){
     }catch(e){}
     render();
   };
+  const backupMsg = ()=> $('backup-msg');
+  const loadBackupsBtn = $('loadBackupsBtn');
+  if(loadBackupsBtn) loadBackupsBtn.onclick = async ()=>{
+    loadBackupsBtn.disabled = true; loadBackupsBtn.textContent = 'Loading\u2026';
+    try{
+      const r = await fetch('/api/admin-data?action=backups', { headers:{ 'X-Admin-Token': adminToken } });
+      const d = await r.json();
+      backupEntries = d.entries || [];
+    }catch(e){ backupEntries = []; }
+    render();
+  };
+  const backupNowBtn = $('backupNowBtn');
+  if(backupNowBtn) backupNowBtn.onclick = async ()=>{
+    backupNowBtn.disabled = true; backupNowBtn.textContent = 'Backing up\u2026';
+    try{
+      const r = await fetch('/api/admin-data', { method:'POST',
+        headers:{ 'Content-Type':'application/json', 'X-Admin-Token': adminToken },
+        body: JSON.stringify({ action:'backup-now' }) });
+      const d = await r.json();
+      if(d.error) throw new Error(d.error);
+      const r2 = await fetch('/api/admin-data?action=backups', { headers:{ 'X-Admin-Token': adminToken } });
+      backupEntries = (await r2.json()).entries || [];
+    }catch(e){ backupEntries = backupEntries || []; }
+    render();
+  };
+  document.querySelectorAll('[data-backup-download]').forEach(el=>{ el.onclick = async ()=>{
+    const id = el.getAttribute('data-backup-download');
+    const m = backupMsg(); if(m) m.textContent = 'Preparing\u2026';
+    try{
+      const r = await fetch('/api/admin-data?action=backup-download&id='+encodeURIComponent(id), { headers:{ 'X-Admin-Token': adminToken } });
+      const d = await r.json();
+      if(d.error) throw new Error(d.error);
+      const blob = new Blob([JSON.stringify(d, null, 2)], { type:'application/json' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url; a.download = 'heshy-booking-' + id + '.json';
+      document.body.appendChild(a); a.click(); a.remove();
+      setTimeout(()=>URL.revokeObjectURL(url), 2000);
+      if(m) m.textContent = 'Downloaded.';
+    }catch(e){ if(m) m.textContent = 'Could not download that backup.'; }
+  };});
+  document.querySelectorAll('[data-backup-restore]').forEach(el=>{ el.onclick = async ()=>{
+    const id = el.getAttribute('data-backup-restore');
+    if(!confirm('Restore everything to this backup?\n\nYour current data is backed up first, so this can be undone.')) return;
+    el.disabled = true; el.textContent = 'Restoring\u2026';
+    const m = backupMsg();
+    try{
+      const r = await fetch('/api/admin-data', { method:'POST',
+        headers:{ 'Content-Type':'application/json', 'X-Admin-Token': adminToken },
+        body: JSON.stringify({ action:'restore-backup', id }) });
+      const d = await r.json();
+      if(d.error) throw new Error(d.error);
+      if(m) m.textContent = 'Restored. Reloading\u2026';
+      await loadState();
+      backupEntries = null;
+      render();
+    }catch(e){
+      if(m) m.textContent = 'Could not restore that backup.';
+      el.disabled = false; el.textContent = 'Restore';
+    }
+  };});
   const loadAgentLogBtn = $('loadAgentLogBtn');
   if(loadAgentLogBtn) loadAgentLogBtn.onclick = async ()=>{
     loadAgentLogBtn.disabled = true; loadAgentLogBtn.textContent = 'Loading…';

@@ -5,7 +5,8 @@ import { sendEmail, reminderEmail, dailyDigestEmail, rescheduledEmail, strengths
 import { checkSlot } from './_lib/availability.js';
 import { logError, readErrors, clearErrors, logAgentAccess, readAgentLog } from './_lib/errorlog.js';
 import { buildSummary, buildDetail } from './_lib/diagnostics.js';
-import { mutate, SKIP_WRITE } from './_lib/store.js';
+import { mutate, SKIP_WRITE, readData } from './_lib/store.js';
+import { takeBackup, listBackups, readBackup, isDueForBackup } from './_lib/backup.js';
 import { validateAppData } from './_lib/schema.js';
 
 const ADMIN_SESSION_SECONDS = 60 * 60 * 12; // 12 hours
@@ -243,6 +244,10 @@ async function generateClientFacingSummary(internalNotes) {
 async function handleDailyDigestAndReminders(req, res) {
   const data = await kv.get('app-data');
   if (!data) return res.status(200).json({ ok: true, note: 'No data yet.' });
+
+  // Snapshot the record once a day, on the back of the run that is already happening. Failing
+  // to back up never stops the reminders going out.
+  if (await isDueForBackup(20)) await takeBackup(data, 'daily');
 
   const now = new Date();
   const todayDs = dateStrOf(now);
@@ -640,6 +645,33 @@ export default async function handler(req, res) {
       }
     }
 
+    if (req.query?.action === 'backups' || req.body?.action === 'backups') {
+      return res.status(200).json({ entries: await listBackups() });
+    }
+    if (req.method === 'POST' && req.body?.action === 'backup-now') {
+      const current = await readData();
+      const entry = await takeBackup(current, 'manual');
+      if (!entry) return res.status(500).json({ error: 'Could not take a backup just now.' });
+      return res.status(200).json({ ok: true, entry });
+    }
+    if (req.query?.action === 'backup-download') {
+      const snapshot = await readBackup(String(req.query.id || ''));
+      if (!snapshot) return res.status(404).json({ error: 'No backup with that id.' });
+      return res.status(200).json(snapshot);
+    }
+    if (req.method === 'POST' && req.body?.action === 'restore-backup') {
+      const snapshot = await readBackup(String(req.body.id || ''));
+      if (!snapshot) return res.status(404).json({ error: 'No backup with that id.' });
+      // Snapshot what is there now first, so restoring is itself undoable.
+      const current = await readData();
+      await takeBackup(current, 'before-restore');
+      await mutate(live => {
+        Object.keys(live).forEach(k => { if (!(k in snapshot)) delete live[k]; });
+        Object.keys(snapshot).forEach(k => { if (k !== 'version') live[k] = snapshot[k]; });
+      });
+      return res.status(200).json({ ok: true, restored: req.body.id });
+    }
+
     if (req.body?.action === 'agent-log' || req.query?.action === 'agent-log') {
       return res.status(200).json({ entries: await readAgentLog(40) });
     }
@@ -680,10 +712,17 @@ export default async function handler(req, res) {
       // refused with a reason instead of flattening everything.
       const incoming = req.body;
       try {
+        let shrinkSnapshot = null;
         const saved = await mutate(current => {
           const check = validateAppData({ ...incoming, __hadClients: (current.clients || []).length });
           if (!check.ok) { validationError = check.error; return SKIP_WRITE; }
           const next = check.data;
+          // A save that removes records is the shape a mistake takes. Snapshot the current state
+          // first so it can be put back, rather than discovering later that it is simply gone.
+          if ((next.clients || []).length < (current.clients || []).length ||
+              (next.bookings || []).length < (current.bookings || []).length) {
+            shrinkSnapshot = JSON.parse(JSON.stringify(current));
+          }
           // Keep the version line moving forward from whatever is actually stored.
           next.version = current.version || 0;
           Object.keys(current).forEach(k => { if (!(k in next)) next[k] = current[k]; });
@@ -692,6 +731,7 @@ export default async function handler(req, res) {
           return true;
         }, { fallback: defaultState() });
         if (validationError) return res.status(400).json({ error: validationError });
+        if (shrinkSnapshot) await takeBackup(shrinkSnapshot, 'before-removal');
         return res.status(200).json({ ok: true, saved: saved === true });
       } catch (err) {
         if (err.code === 'LOCK_TIMEOUT') return res.status(503).json({ error: err.message });
