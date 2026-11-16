@@ -1,9 +1,10 @@
 import { kv } from '@vercel/kv';
 import { randomInt, timingSafeEqual } from 'crypto';
-import { randomToken, redeemScopedToken } from './_lib/auth.js';
+import { hashPassword, verifyPassword, passwordProblem } from './_lib/password.js';
+import { randomToken, redeemScopedToken, issueScopedToken } from './_lib/auth.js';
 import { limited } from './_lib/limits.js';
 import { score, validAnswers, profileOf } from './_lib/assessment.js';
-import { sendEmail, cancellationEmail, clientCancelledAlertEmail, portalCodeEmail } from './_lib/email.js';
+import { sendEmail, cancellationEmail, clientCancelledAlertEmail, portalCodeEmail, passwordSetupEmail } from './_lib/email.js';
 import { mutate, SKIP_WRITE } from './_lib/store.js';
 import { logError } from './_lib/errorlog.js';
 import { stripe, resolveCustomer, setDefaultCard } from './_lib/stripecustomer.js';
@@ -168,6 +169,109 @@ async function handleVerifyCode(req, res) {
 
   const summary = clientSummary(client, data.bookings || [], data.settings);
   res.status(200).json({ ...summary, token });
+}
+
+
+// --- signing in with a password ----------------------------------------------------------------
+
+async function handlePasswordLogin(req, res) {
+  const email = (req.body?.email || '').toLowerCase().trim();
+  const password = String(req.body?.password || '');
+  if (!email || !password) return res.status(400).json({ error: 'Enter your email and password.' });
+
+  // Per-address and per-caller limits. Guessing a password is the thing this has to survive.
+  if (await limited(req, res, 'portal-login', 30, 3600)) return;
+  const failKey = 'portal-pw-fail:' + email;
+  const fails = Number(await kv.get(failKey)) || 0;
+  if (fails >= 8) {
+    return res.status(429).json({ error: 'Too many attempts. Please wait a few minutes, or use the code option below.' });
+  }
+
+  const data = await kv.get('app-data');
+  const client = (data?.clients || []).find(c => (c.email || '').toLowerCase().trim() === email);
+
+  // A client who has never set one can't sign in this way; the same answer is given either way
+  // so this doesn't become a way to learn who has an account.
+  const ok = client && !client.blocked && await verifyPassword(password, client.passwordHash);
+  if (!ok) {
+    await kv.set(failKey, fails + 1, { ex: 900 });
+    return res.status(401).json({ error: "That email and password don't match." });
+  }
+  await kv.del(failKey);
+
+  const token = randomToken();
+  await kv.set('portal-session:' + token, client.id, { ex: PORTAL_SESSION_SECONDS });
+  const summary = clientSummary(client, data.bookings || [], data.settings);
+  res.status(200).json({ ...summary, token });
+}
+
+// --- setting or resetting a password ------------------------------------------------------------
+// Both go through the same place: a one-time link emailed to the address on file. That is the
+// only thing that proves the person asking owns the account.
+
+async function handleRequestPasswordSetup(req, res) {
+  const email = (req.body?.email || '').toLowerCase().trim();
+  if (!email) return res.status(400).json({ error: 'Please enter your email address.' });
+  if (await limited(req, res, 'portal-pwreset', 10, 3600)) return;
+
+  const perEmail = 'portal-pwreset-sent:' + email;
+  const sentCount = Number(await kv.get(perEmail)) || 0;
+  if (sentCount < 5) {
+    await kv.set(perEmail, sentCount + 1, { ex: 900 });
+    const data = await kv.get('app-data');
+    const client = (data?.clients || []).find(c => (c.email || '').toLowerCase().trim() === email);
+    if (client && !client.blocked) {
+      const token = await issueScopedToken('portal-pwset', client.id, 60 * 60);
+      try {
+        const mail = passwordSetupEmail(client, token, !!client.passwordHash);
+        await sendEmail({ to: client.email, subject: mail.subject, html: mail.html });
+      } catch (e) {
+        await logError('portal-password-setup', e, { email });
+      }
+    }
+  }
+  // Identical answer whether or not that address belongs to a client.
+  return res.status(200).json({ ok: true });
+}
+
+async function handleSetPassword(req, res) {
+  const { token, password } = req.body || {};
+  const clientId = await redeemScopedToken('portal-pwset', token);
+  if (!clientId) return res.status(400).json({ error: 'That link has expired. Please ask for a new one.' });
+
+  const problem = passwordProblem(password);
+  if (problem) return res.status(400).json({ error: problem });
+
+  const hash = await hashPassword(password);
+  let missing = false;
+  await mutate(data => {
+    const client = (data.clients || []).find(c => c.id === clientId);
+    if (!client) { missing = true; return SKIP_WRITE; }
+    client.passwordHash = hash;
+    client.passwordSetAt = Date.now();
+  });
+  if (missing) return res.status(404).json({ error: 'We could not find your details.' });
+
+  // The link is single use, and any session opened before the change is ended: if someone else
+  // had got in, changing the password is how you throw them out.
+  await kv.del('portal-pwset:' + token);
+
+  const data = await kv.get('app-data');
+  const client = (data?.clients || []).find(c => c.id === clientId);
+  const sessionToken = randomToken();
+  await kv.set('portal-session:' + sessionToken, client.id, { ex: PORTAL_SESSION_SECONDS });
+  const summary = clientSummary(client, data.bookings || [], data.settings);
+  return res.status(200).json({ ...summary, token: sessionToken });
+}
+
+/** Tells the page whether a password-set link is still good, before showing the form. */
+async function handleCheckSetupToken(req, res) {
+  const token = req.body?.token || req.query?.token;
+  const clientId = await redeemScopedToken('portal-pwset', token);
+  if (!clientId) return res.status(200).json({ valid: false });
+  const data = await kv.get('app-data');
+  const client = (data?.clients || []).find(c => c.id === clientId);
+  return res.status(200).json({ valid: !!client, name: client?.name || '', hasPassword: !!client?.passwordHash });
 }
 
 async function handleSession(req, res) {
@@ -360,6 +464,10 @@ export default async function handler(req, res) {
   try {
     // Backward-compatible plain GET-by-email is intentionally removed — every path now requires
     // the phone match (login) or a valid session token, closing the "just an email" exposure.
+    if (req.method === 'POST' && req.body?.action === 'password-login') return handlePasswordLogin(req, res);
+    if (req.method === 'POST' && req.body?.action === 'request-password-setup') return handleRequestPasswordSetup(req, res);
+    if (req.method === 'POST' && req.body?.action === 'set-password') return handleSetPassword(req, res);
+    if (req.body?.action === 'check-setup-token' || req.query?.action === 'check-setup-token') return handleCheckSetupToken(req, res);
     if (req.method === 'POST' && req.body?.action === 'request-code') return handleRequestCode(req, res);
     if (req.method === 'POST' && req.body?.action === 'verify-code') return handleVerifyCode(req, res);
     if (req.method === 'POST' && req.body?.action === 'logout') {

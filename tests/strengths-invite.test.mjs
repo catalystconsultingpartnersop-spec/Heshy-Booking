@@ -123,7 +123,9 @@ check('...and clears it from the address bar', /history\.replaceState/.test(html
 // It has to run at boot. An earlier version of this landed inside the Manage search box's
 // keystroke handler, where it never fired on page load.
 check('the link check runs when the app starts, not inside another handler',
-      /\nif\(!openStrengthsFromLink\(\)\) loadState\(\);/.test(html));
+      /\nif\(!openStrengthsFromLink\(\)\)\{/.test(html));
+check('...and the normal page still loads when no link was followed',
+      /openPasswordSetupFromLink\(\)\.then\(handled => \{ if\(!handled\) loadState\(\); \}\)/.test(html));
 check('...and is a top-level function', /\nfunction openStrengthsFromLink\(\)\{/.test(html));
 check('Manage has a button to send it', /data-send-strengths/.test(html));
 

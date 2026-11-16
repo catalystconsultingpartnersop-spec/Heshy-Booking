@@ -412,3 +412,30 @@ export function portalCodeEmail(client, code) {
     `)
   };
 }
+
+/** The one-time link that lets a client set or reset their portal password. */
+export function passwordSetupEmail(client, token, isReset) {
+  const baseUrl = process.env.SITE_URL || 'https://heshy-booking.vercel.app';
+  const link = `${baseUrl}/?setpassword=${encodeURIComponent(token)}`;
+  const firstName = (client.name || '').split(' ')[0];
+  return {
+    subject: isReset ? 'Reset your password' : 'Set a password for your sessions',
+    html: wrap(`
+      <div style="font-size:22px;font-family:Georgia,serif;margin-bottom:8px;">${isReset ? 'Reset your password' : 'Set your password'}</div>
+      <div style="font-size:14px;font-family:Arial,sans-serif;color:#6E6E6E;line-height:1.65;margin-bottom:20px;">
+        Hi ${esc(firstName) || 'there'} &mdash; use the button below to ${isReset ? 'choose a new password' : 'pick a password'}
+        for seeing your sessions with Heshy.
+      </div>
+      <div style="font-family:Arial,sans-serif;margin-bottom:18px;">
+        <a href="${link}" style="display:inline-block;background:#111111;color:#FFFFFF;text-decoration:none;
+           font-size:14px;padding:13px 26px;border-radius:6px;">${isReset ? 'Choose a new password' : 'Set my password'}</a>
+      </div>
+      <div style="font-family:Arial,sans-serif;font-size:12.5px;color:#6E6E6E;line-height:1.6;">
+        The link works once and expires in an hour.
+        If you didn't ask for it, you can ignore this &mdash; nothing changes until the link is used.<br><br>
+        If the button doesn't work, paste this into your browser:<br>
+        <span style="color:#3C3C3C;word-break:break-all;">${esc(link)}</span>
+      </div>
+    `)
+  };
+}

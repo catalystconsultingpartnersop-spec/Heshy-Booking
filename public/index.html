@@ -103,6 +103,12 @@
   .day-cell .dcount{font-size:10.5px;color:var(--muted);margin-top:2px;}
   .day-cell.active .dcount{color:#BEBEBE;}
   .time-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:8px;}
+  .google-btn{
+    display:flex;align-items:center;justify-content:center;gap:9px;width:100%;
+    font:inherit;font-size:14px;font-weight:500;background:var(--paper);color:var(--ink);
+    border:1px solid var(--line-strong);border-radius:6px;padding:12px 0;cursor:pointer;
+  }
+  .google-btn:hover{border-color:var(--ink);}
   .qci-line{
     margin:20px 0 22px;font-size:13px;color:var(--muted);
   }
@@ -152,7 +158,7 @@
   .required-mark{color:#A5433A;}
   .optional-mark{color:var(--muted);font-weight:400;font-size:12px;margin-left:4px;}
   label:first-of-type{margin-top:0;}
-  input[type=text],input[type=email],input[type=tel]{
+  input[type=text],input[type=email],input[type=tel],input[type=password]{
     width:100%;padding:11px 12px;border:1px solid var(--line-strong);border-radius:4px;font-size:14.5px;
     font-family:'Inter',sans-serif;background:var(--paper);color:var(--ink);
   }
@@ -274,6 +280,12 @@
   }
   .slot-list-wrap{margin-top:24px;border-top:1px solid var(--line);}
   .slot-day-row{padding:12px 0;border-bottom:1px solid var(--line);}
+  .google-btn{
+    display:flex;align-items:center;justify-content:center;gap:9px;width:100%;
+    font:inherit;font-size:14px;font-weight:500;background:var(--paper);color:var(--ink);
+    border:1px solid var(--line-strong);border-radius:6px;padding:12px 0;cursor:pointer;
+  }
+  .google-btn:hover{border-color:var(--ink);}
   .qci-line{
     margin:20px 0 22px;font-size:13px;color:var(--muted);
   }
@@ -519,6 +531,13 @@ let portalPhone = '';          // no longer used to sign in; kept for display
 let portalCodeSent = false;    // have we emailed them a code yet?
 let portalCode = '';
 let portalBusy = false;
+let portalMode = 'password';   // password | code | setup
+let portalPassword = '';
+let portalSetupToken = '';     // from a "set your password" link
+let portalSetupName = '';
+let portalSetupHasPassword = false;
+let portalNewPassword = '';
+let portalNotice = '';
 let portalClient = null;
 let portalError = '';
 let portalToken = (typeof localStorage !== 'undefined' && localStorage.getItem('heshyPortalToken')) || '';
@@ -1570,6 +1589,59 @@ function renderAdminGate(){
   `;
 }
 
+async function portalSignIn(){
+  const email = (portalEmail||'').trim();
+  if(!email || !portalPassword){ portalError = 'Enter your email and password.'; render(); return; }
+  portalBusy = true; portalError=''; portalNotice=''; render();
+  try{
+    const r = await fetch('/api/portal-lookup', {
+      method:'POST', headers:{ 'Content-Type':'application/json' },
+      body: JSON.stringify({ action:'password-login', email, password: portalPassword })
+    });
+    const data = await r.json();
+    if(data.error){ portalError = data.error; portalBusy=false; render(); return; }
+    portalPassword=''; portalError=''; portalBusy=false; portalClient = data;
+    if(data.token){ portalToken = data.token; try{ localStorage.setItem('heshyPortalToken', data.token); }catch(e){} }
+    render();
+  }catch(e){ portalError='Something went wrong. Try again.'; portalBusy=false; render(); }
+}
+
+async function requestPasswordSetup(){
+  const email = (portalEmail||'').trim();
+  if(!email){ portalError='Enter your email address first.'; render(); return; }
+  portalBusy = true; portalError=''; render();
+  try{
+    await fetch('/api/portal-lookup', {
+      method:'POST', headers:{ 'Content-Type':'application/json' },
+      body: JSON.stringify({ action:'request-password-setup', email })
+    });
+  }catch(e){}
+  // Same message either way, so this can't be used to find out who is a client.
+  portalBusy=false; portalError='';
+  portalNotice = `If ${email} is on file, a link to set your password is on its way. It works once and expires in an hour.`;
+  render();
+}
+
+async function savePortalPassword(){
+  if(!portalNewPassword || portalNewPassword.length < 8){ portalError='Please use at least 8 characters.'; render(); return; }
+  portalBusy = true; portalError=''; render();
+  try{
+    const r = await fetch('/api/portal-lookup', {
+      method:'POST', headers:{ 'Content-Type':'application/json' },
+      body: JSON.stringify({ action:'set-password', token: portalSetupToken, password: portalNewPassword })
+    });
+    const data = await r.json();
+    if(data.error){ portalError = data.error; portalBusy=false; render(); return; }
+    portalNewPassword=''; portalSetupToken=''; portalMode='password'; portalBusy=false; portalClient = data;
+    if(data.token){ portalToken = data.token; try{ localStorage.setItem('heshyPortalToken', data.token); }catch(e){} }
+    render();
+  }catch(e){ portalError='Something went wrong. Try again.'; portalBusy=false; render(); }
+}
+
+function portalGoogleSignIn(){
+  window.location.href = '/api/google-auth-url?purpose=client-signin';
+}
+
 async function requestPortalCode(){
   const email = (portalEmail||'').trim();
   if(!email){ portalError = 'Enter your email address.'; render(); return; }
@@ -1650,12 +1722,20 @@ function renderPortal(){
       <div class="topbar"><div class="brand" id="brand-home-link" style="cursor:pointer;">Clarity Session w/ Heshy</div></div>
       <div class="portal-box">
         <h1>My sessions</h1>
-        ${!portalCodeSent ? `
-          <div class="note" style="margin-bottom:14px;">Enter your email and we'll send you a code.</div>
+        ${portalNotice ? `<div class="note" style="margin-bottom:14px;color:#2E5B27;">${esc(portalNotice)}</div>` : ''}
+        ${portalMode === 'setup' ? `
+          <div class="note" style="margin-bottom:14px;">${portalSetupName ? esc(portalSetupName.split(' ')[0]) + ', choose' : 'Choose'} a password for seeing your sessions. At least 8 characters.</div>
+          <label>New password</label>
+          <input type="password" id="portal-newpass" value="${esc(portalNewPassword)}" autocomplete="new-password">
+          <div class="card-error">${portalError}</div>
+          <button class="primary" id="portal-savepass-btn" style="margin-top:14px;" ${portalBusy?'disabled':''}>${portalBusy?'Saving…':'Save and sign in'}</button>
+        ` : portalMode === 'code' ? (!portalCodeSent ? `
+          <div class="note" style="margin-bottom:14px;">We'll email you a code instead.</div>
           <label>Email</label>
-          <input type="email" id="portal-email" value="${portalEmail}" autocomplete="email">
+          <input type="email" id="portal-email" value="${esc(portalEmail)}" autocomplete="email">
           <div class="card-error">${portalError}</div>
           <button class="primary" id="portal-code-btn" style="margin-top:14px;" ${portalBusy?'disabled':''}>${portalBusy?'Sending…':'Email me a code'}</button>
+          <div style="margin-top:16px;font-size:13px;"><button class="manage-link" id="portal-use-password">Use my password instead</button></div>
         ` : `
           <div class="note" style="margin-bottom:14px;">If <strong>${esc(portalEmail)}</strong> is on file, a six-digit code is on its way. It works once and expires in ten minutes.</div>
           <label>Code</label>
@@ -1665,6 +1745,26 @@ function renderPortal(){
           <div style="display:flex;gap:10px;align-items:center;margin-top:14px;">
             <button class="primary" id="portal-verify-btn" ${portalBusy?'disabled':''}>${portalBusy?'Checking…':'View my sessions'}</button>
             <button class="manage-link" id="portal-restart-btn">Use a different email</button>
+          </div>
+        `) : `
+          <label>Email</label>
+          <input type="email" id="portal-email" value="${esc(portalEmail)}" autocomplete="email">
+          <label style="margin-top:12px;">Password</label>
+          <input type="password" id="portal-password" value="${esc(portalPassword)}" autocomplete="current-password">
+          <div class="card-error">${portalError}</div>
+          <button class="primary" id="portal-signin-btn" style="margin-top:14px;" ${portalBusy?'disabled':''}>${portalBusy?'Signing in…':'Sign in'}</button>
+
+          <div style="display:flex;align-items:center;gap:12px;margin:18px 0 14px;color:var(--muted);font-size:12px;">
+            <div style="flex:1;height:1px;background:var(--line);"></div>or<div style="flex:1;height:1px;background:var(--line);"></div>
+          </div>
+          <button class="google-btn" id="portal-google-btn">
+            <svg width="17" height="17" viewBox="0 0 48 48" aria-hidden="true"><path fill="#4285F4" d="M45.1 24.5c0-1.6-.1-3.1-.4-4.5H24v8.5h11.8c-.5 2.7-2 5-4.3 6.6v5.5h7c4.1-3.8 6.6-9.4 6.6-16.1z"/><path fill="#34A853" d="M24 46c5.8 0 10.7-1.9 14.2-5.3l-7-5.5c-1.9 1.3-4.4 2.1-7.2 2.1-5.5 0-10.2-3.7-11.9-8.7H5v5.7C8.5 41.4 15.7 46 24 46z"/><path fill="#FBBC05" d="M12.1 28.6c-.4-1.3-.7-2.7-.7-4.1s.2-2.8.7-4.1V14.7H5C3.5 17.6 2.7 20.7 2.7 24s.8 6.4 2.3 9.3l7.1-4.7z"/><path fill="#EA4335" d="M24 10.2c3.1 0 5.9 1.1 8.1 3.2l6.1-6.1C34.7 3.9 29.8 2 24 2 15.7 2 8.5 6.6 5 14.7l7.1 5.7c1.7-5 6.4-8.2 11.9-8.2z"/></svg>
+            Sign in with Google
+          </button>
+
+          <div style="margin-top:18px;font-size:13px;display:flex;flex-direction:column;gap:7px;">
+            <button class="manage-link" id="portal-setpass-link" style="text-align:left;">Set a password &middot; Forgot it?</button>
+            <button class="manage-link" id="portal-use-code" style="text-align:left;">Email me a one-time code instead</button>
           </div>
         `}
       </div>
@@ -2915,6 +3015,24 @@ function attachHandlers(){
   const loginBtn = $('admin-login-btn'); if(loginBtn) loginBtn.onclick = tryAdminLogin;
   const passInput = $('admin-pass');
   if(passInput) passInput.onkeydown = e=>{ if(e.key==='Enter') tryAdminLogin(); };
+  const portalSignInBtn = $('portal-signin-btn'); if(portalSignInBtn) portalSignInBtn.onclick = portalSignIn;
+  const portalPasswordInput = $('portal-password');
+  if(portalPasswordInput){
+    portalPasswordInput.oninput = e=> portalPassword = e.target.value;
+    portalPasswordInput.onkeydown = e=>{ if(e.key==='Enter') portalSignIn(); };
+  }
+  const portalGoogleBtn = $('portal-google-btn'); if(portalGoogleBtn) portalGoogleBtn.onclick = portalGoogleSignIn;
+  const portalSetPassLink = $('portal-setpass-link'); if(portalSetPassLink) portalSetPassLink.onclick = requestPasswordSetup;
+  const portalUseCode = $('portal-use-code');
+  if(portalUseCode) portalUseCode.onclick = ()=>{ portalMode='code'; portalCodeSent=false; portalError=''; portalNotice=''; render(); };
+  const portalUsePassword = $('portal-use-password');
+  if(portalUsePassword) portalUsePassword.onclick = ()=>{ portalMode='password'; portalError=''; portalNotice=''; render(); };
+  const portalNewPassInput = $('portal-newpass');
+  if(portalNewPassInput){
+    portalNewPassInput.oninput = e=> portalNewPassword = e.target.value;
+    portalNewPassInput.onkeydown = e=>{ if(e.key==='Enter') savePortalPassword(); };
+  }
+  const portalSavePassBtn = $('portal-savepass-btn'); if(portalSavePassBtn) portalSavePassBtn.onclick = savePortalPassword;
   const portalCodeBtn = $('portal-code-btn'); if(portalCodeBtn) portalCodeBtn.onclick = requestPortalCode;
   const portalVerifyBtn = $('portal-verify-btn'); if(portalVerifyBtn) portalVerifyBtn.onclick = verifyPortalCode;
   const portalRestartBtn = $('portal-restart-btn');
@@ -3494,7 +3612,51 @@ function openStrengthsFromLink(){
   }catch(e){ return false; }
 }
 
-if(!openStrengthsFromLink()) loadState();
+// Arriving from a "set your password" email.
+async function openPasswordSetupFromLink(){
+  try{
+    const t = new URLSearchParams(window.location.search).get('setpassword');
+    if(!t) return false;
+    history.replaceState(null, '', window.location.pathname);
+    const r = await fetch('/api/portal-lookup?action=check-setup-token&token='+encodeURIComponent(t));
+    const d = await r.json();
+    view = 'portal';
+    if(!d.valid){ portalMode='password'; portalError='That link has expired. Please ask for a new one.'; render(); return true; }
+    portalSetupToken = t; portalSetupName = d.name || ''; portalSetupHasPassword = !!d.hasPassword;
+    portalMode = 'setup'; portalError=''; render();
+    return true;
+  }catch(e){ return false; }
+}
+
+// Arriving back from Google. The session token comes through the fragment, which never reaches
+// a server, and is cleared from the address bar straight away.
+function openPortalFromGoogle(){
+  try{
+    const h = window.location.hash || '';
+    const okMatch = h.match(/portal-token=([^&]+)/);
+    const errMatch = h.match(/portal-error=([^&]+)/);
+    if(!okMatch && !errMatch) return false;
+    history.replaceState(null, '', window.location.pathname + '#portal');
+    view = 'portal';
+    if(errMatch){
+      const why = decodeURIComponent(errMatch[1]);
+      portalError = why === 'google-nomatch'
+        ? "That Google account isn't on file. Try the email address Heshy has for you, or ask him to check."
+        : "Google sign-in didn't complete. Please try again, or use your password.";
+      render();
+      return true;
+    }
+    portalToken = decodeURIComponent(okMatch[1]);
+    try{ localStorage.setItem('heshyPortalToken', portalToken); }catch(e){}
+    resumePortalSession();
+    return true;
+  }catch(e){ return false; }
+}
+
+if(!openStrengthsFromLink()){
+  if(openPortalFromGoogle()){ /* resuming that session */ }
+  else { openPasswordSetupFromLink().then(handled => { if(!handled) loadState(); }); }
+}
 </script>
 </body>
 </html>
