@@ -1,4 +1,5 @@
 import { kv } from '@vercel/kv';
+import { limited } from './_lib/limits.js';
 import { logError } from './_lib/errorlog.js';
 
 async function getAccessToken() {
@@ -21,6 +22,7 @@ async function getAccessToken() {
 
 export default async function handler(req, res) {
   try {
+    if (await limited(req, res, 'free-busy', 60, 3600)) return;
     const timeMin = req.query.timeMin;
     const timeMax = req.query.timeMax;
     // Bound the queryable window: this endpoint is public (the booking page needs it), but

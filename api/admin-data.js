@@ -8,6 +8,7 @@ import { buildSummary, buildDetail } from './_lib/diagnostics.js';
 import { mutate, SKIP_WRITE, readData } from './_lib/store.js';
 import { takeBackup, listBackups, readBackup, isDueForBackup } from './_lib/backup.js';
 import { validateAppData } from './_lib/schema.js';
+import { callerIp, checkDataUrl, MAX_PDF_BYTES, MAX_AUDIO_BYTES } from './_lib/limits.js';
 
 const ADMIN_SESSION_SECONDS = 60 * 60 * 12; // 12 hours
 
@@ -350,6 +351,10 @@ async function handleCleanupLargePdfs(req, res) {
 async function handleUploadPdf(req, res) {
   const { fileName, fileDataUrl } = req.body || {};
   if (!fileName || !fileDataUrl) return res.status(400).json({ error: 'Missing fileName or fileDataUrl.' });
+  // The declared type used to be taken at face value, and nothing bounded the size before it
+  // was decoded into memory.
+  const badFile = checkDataUrl(fileDataUrl, { expect: 'pdf', maxBytes: MAX_PDF_BYTES });
+  if (badFile) return res.status(400).json({ error: badFile });
   try {
     const base64 = fileDataUrl.split(',')[1];
     if (!base64) return res.status(400).json({ error: 'Invalid file data.' });
@@ -588,15 +593,23 @@ export default async function handler(req, res) {
       // Rate-limit failed admin logins to blunt brute-force — mirrors the client portal's lockout.
       // Keyed globally (single admin) rather than per-IP, since there's only one legitimate admin
       // and IPs are spoofable/shared; a short lockout is the pragmatic protection here.
+      // Two counters, not one. The global counter alone meant any anonymous caller could burn
+      // six guesses every fifteen minutes and keep the only administrator permanently locked out
+      // of his own app. The per-caller counter is what actually stops guessing; the global one
+      // is a much looser backstop against a distributed attempt.
       const failKey = 'admin-fail';
-      const fails = (await kv.get(failKey)) || 0;
-      if (fails >= 6) {
+      const ipKey = 'admin-fail-ip:' + callerIp(req);
+      const ipFails = Number(await kv.get(ipKey)) || 0;
+      const fails = Number(await kv.get(failKey)) || 0;
+      if (ipFails >= 6 || fails >= 40) {
         return res.status(429).json({ error: 'Too many attempts. Please wait a few minutes and try again.' });
       }
       if (!password || password !== process.env.ADMIN_PASSWORD) {
-        await kv.set(failKey, fails + 1, { ex: 900 }); // reset after 15 minutes
+        await kv.set(ipKey, ipFails + 1, { ex: 900 });   // this caller, 15 minutes
+        await kv.set(failKey, fails + 1, { ex: 900 });   // everyone, a far higher ceiling
         return res.status(401).json({ error: 'Incorrect password' });
       }
+      await kv.del(ipKey);
       await kv.del(failKey); // clear on success
       const token = randomToken();
       // Expire after 12 hours. Previously these never expired, so any token that ever leaked —

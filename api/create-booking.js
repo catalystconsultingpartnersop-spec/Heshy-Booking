@@ -7,6 +7,7 @@ import { logError } from './_lib/errorlog.js';
 import { redeemSetupToken } from './_lib/stripecustomer.js';
 import { issueScopedToken } from './_lib/auth.js';
 import { mutate, SKIP_WRITE } from './_lib/store.js';
+import { limited, checkBookingFields, checkDataUrl, MAX_PDF_BYTES } from './_lib/limits.js';
 
 async function getGoogleAccessToken() {
   const refreshToken = await kv.get('google-refresh-token');
@@ -95,6 +96,16 @@ export default async function handler(req, res) {
   if (req.method !== 'POST') return res.status(405).json({ error: 'Method not allowed' });
   try {
     const { date, time, durationMin, type, name, email, phone, intakeAnswers, wgPdfName, wgPdfData, setupToken, couponCode } = req.body || {};
+    // Generous enough that no real client will ever see it, tight enough that nobody can sit
+    // there submitting bookings in a loop.
+    if (await limited(req, res, 'book', 20, 3600)) return;
+    const tooBig = checkBookingFields({ name, email, phone, couponCode, intakeAnswers });
+    if (tooBig) return res.status(400).json({ error: tooBig });
+    if (wgPdfData) {
+      const badPdf = checkDataUrl(wgPdfData, { expect: 'pdf', maxBytes: MAX_PDF_BYTES });
+      if (badPdf) return res.status(400).json({ error: badPdf });
+    }
+
     if (!date || !time || !durationMin || !type || !name || !email || !phone || !setupToken) {
       return res.status(400).json({ error: 'Missing required fields.' });
     }
