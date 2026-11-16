@@ -1,5 +1,6 @@
 import { kv } from '@vercel/kv';
-import { randomToken } from './_lib/auth.js';
+import { randomToken, redeemScopedToken } from './_lib/auth.js';
+import { score, validAnswers, profileOf } from './_lib/assessment.js';
 import { logError } from './_lib/errorlog.js';
 import { stripe, resolveCustomer, setDefaultCard } from './_lib/stripecustomer.js';
 
@@ -66,7 +67,10 @@ function clientSummary(client, bookings, settings) {
       type: b.type, amount: b.amount, clientSummary: b.clientSummary,
       awaitingBilling: b.status !== 'charged'
     }));
-  return { found: true, name: client.name, phone: client.phone, email: client.email, upcoming, past, hasCard: !!client.stripeCustomerId, cancelCutoffHours: cutoffHours };
+  const profile = profileOf(client.strengths?.letters || client.wgLetters || '');
+  return { found: true, name: client.name, phone: client.phone, email: client.email, upcoming, past,
+           hasCard: !!client.stripeCustomerId, cancelCutoffHours: cutoffHours,
+           strengths: profile.complete ? { letters: profile.letters } : null };
 }
 
 async function handleLogin(req, res) {
@@ -110,6 +114,45 @@ async function handleSession(req, res) {
   if (!client) return res.status(200).json({ found: false });
 
   res.status(200).json(clientSummary(client, data.bookings || [], data.settings));
+}
+
+// Saving a completed strengths assessment.
+//
+// Two ways in, because two different people arrive here: a client logged into the portal, and a
+// client who has just booked and is being asked on the confirmation screen (they hold a narrow,
+// expiring token that names only their own client record).
+//
+// The browser sends raw answers, never a result. The server scores them itself, so what ends up
+// on a client record is always what their answers actually say.
+async function handleSaveStrengths(req, res) {
+  const { token, strengthsToken, answers } = req.body || {};
+
+  let clientId = null;
+  if (token) clientId = await kv.get('portal-session:' + token);
+  if (!clientId && strengthsToken) clientId = await redeemScopedToken('strengths-invite', strengthsToken);
+  if (!clientId) return res.status(401).json({ error: 'This link has expired. You can sign in to your portal to finish it.' });
+
+  if (!validAnswers(answers)) return res.status(400).json({ error: 'Those answers look incomplete. Please finish the assessment and try again.' });
+
+  const data = await kv.get('app-data');
+  const client = (data?.clients || []).find(c => c.id === clientId);
+  if (!client) return res.status(404).json({ error: 'We could not find your details.' });
+
+  const result = score(answers);
+  client.strengths = {
+    v: result.v,
+    letters: result.letters,
+    scores: result.scores,
+    clear: result.clear,
+    takenAt: Date.now(),
+    source: 'assessment'
+  };
+  // The old Working Genius letters field is what Manage has always read. Keep it in step so
+  // nothing that displays it has to care which of the two produced the result.
+  client.wgLetters = result.letters;
+  await kv.set('app-data', data);
+
+  return res.status(200).json({ ok: true, result: { letters: result.letters, clear: result.clear } });
 }
 
 // Starting a card replacement from the portal.
@@ -235,6 +278,7 @@ export default async function handler(req, res) {
     // the phone match (login) or a valid session token, closing the "just an email" exposure.
     if (req.method === 'POST' && req.body?.action === 'login') return handleLogin(req, res);
     if (req.body?.action === 'session' || req.query?.action === 'session') return handleSession(req, res);
+    if (req.method === 'POST' && req.body?.action === 'save-strengths') return handleSaveStrengths(req, res);
     if (req.method === 'POST' && req.body?.action === 'start-card-update') return handleStartCardUpdate(req, res);
     if (req.method === 'POST' && req.body?.action === 'confirm-card-update') return handleConfirmCardUpdate(req, res);
     if (req.method === 'POST' && req.body?.action === 'cancel-booking') return handleCancelBooking(req, res);

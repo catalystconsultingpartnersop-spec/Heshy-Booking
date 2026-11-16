@@ -333,6 +333,7 @@
 <div class="wrap" id="app"></div>
 
 <script src="https://js.stripe.com/v3/"></script>
+<script src="/assessment.js"></script>
 <script>
 // Escapes HTML-special characters so user-supplied data (names, emails, notes, coupon text, etc.)
 // can never break out of its text context and execute as markup/script when interpolated into
@@ -413,6 +414,17 @@ let view = (() => {
   return 'client';
 })();
 let bookingStep = 1;
+
+// Strengths assessment. The questions and scoring come from /assessment.js, which is generated
+// from api/_lib/assessment.js so the page and the server never disagree.
+let strengthsAnswers = { items:{}, pairs:{}, extra:[] };
+let strengthsStage = 'intro';      // intro | items | pairs | extra | saving | done
+let strengthsIdx = 0;
+let strengthsPending = null;
+let strengthsResult = null;
+let strengthsError = '';
+let strengthsInviteToken = null;   // handed out on the confirmation screen
+let strengthsFrom = 'client';      // where Close returns to
 let selectedDuration = 60;
 let selectedStartTime = null;
 let selectedDay = null;
@@ -531,14 +543,15 @@ function intakeRegionHtml(){
       html += `<label>${q}</label><input type="text" data-intake="${i}" value="${esc(clientForm.intakeAnswers[i])}">`;
     });
     html += `</div>`;
+    // The Working Genius upload used to sit here. It's been replaced by Heshy's own strengths
+    // assessment, which is offered right after booking rather than inside the form — 43 questions
+    // in the middle of checkout would cost bookings.
     html += `
       <div class="wg-block" style="border:1.5px solid #C9A961;background:#FBF6EA;border-radius:8px;padding:16px;margin-top:16px;">
         <div class="section-title" style="display:flex;align-items:center;gap:8px;">
-          <span style="font-size:16px;">&#9733;</span> Six Types of Working Genius
+          <span style="font-size:16px;">&#9733;</span> Strengths assessment
         </div>
-        <p>${clientForm.wgPdfName ? 'Attached &mdash; thank you.' : "This helps me understand how you think before we even start &mdash; most clients find it's worth the few minutes. Not required, and you can always add it later."} ${clientForm.wgPdfName ? '' : '<a class="wg-link" href="https://www.workinggenius.com" target="_blank" rel="noopener">Take the assessment</a> ($25, paid directly to them), then upload your results PDF here if you have it.'}</p>
-        <input type="file" id="wg-file" accept="application/pdf">
-        <div class="file-name" id="wg-file-name">${clientForm.wgPdfName||''}</div>
+        <p>After you book, I'll ask you to spend ten minutes on a short assessment. It tells me how you're wired, so our session starts at the real conversation. It's included &mdash; there's no charge for it.</p>
       </div>
     `;
     return html;
@@ -907,10 +920,6 @@ async function tryAdminLogin(){
 async function confirmBooking(){
   if(!clientForm.name || !clientForm.email || !clientForm.phone || !cardComplete || submitting) return;
   if(isCurrentEmailBlocked()) return;
-  if(clientForm.isNew && !clientForm.wgPdfData){
-    const proceed = confirm("You haven't attached your Working Genius results yet. It's not required, but it helps a lot before your first session.\n\nContinue booking without it?");
-    if(!proceed) return;
-  }
   submitting = true;
   const btn = document.getElementById('confirmBtn');
   const backBtn = document.getElementById('backTo1');
@@ -940,7 +949,7 @@ async function confirmBooking(){
       body: JSON.stringify({
         date: selectedDay, time: selectedStartTime, durationMin: selectedDuration, type: selectedType,
         name: clientForm.name, email: clientForm.email, phone: clientForm.phone,
-        intakeAnswers: clientForm.intakeAnswers, wgPdfName: clientForm.wgPdfName, wgPdfData: clientForm.wgPdfData,
+        intakeAnswers: clientForm.intakeAnswers,
         setupToken: setupData.setupToken, couponCode: clientForm.couponCode
       })
     });
@@ -958,6 +967,7 @@ async function confirmBooking(){
       return;
     }
     if(bookingData.error){ throw new Error(bookingData.error); }
+    strengthsInviteToken = bookingData.strengthsToken || null;
     if(bookingData.meetLink) confirmedMeetLink = bookingData.meetLink;
     if(bookingData.location) confirmedLocation = bookingData.location;
     confirmedComped = !!bookingData.comped;
@@ -1260,12 +1270,200 @@ function render(){
   const app = document.getElementById('app');
   if(view==='admin' && !adminUnlocked){
     app.innerHTML = renderAdminGate();
+  } else if(view==='strengths'){
+    app.innerHTML = renderStrengths();
   } else if(view==='portal'){
     app.innerHTML = renderPortal();
   } else {
     app.innerHTML = view==='client' ? renderClient() : renderAdmin();
   }
   attachHandlers();
+}
+
+
+// --- Strengths assessment ---------------------------------------------------------------------
+// Logic and wording come from window.ASSESSMENT (/assessment.js), generated from the same source
+// the server scores with. Answers are sent raw; the server does the scoring.
+function strengthsAnswered(){
+  return Object.keys(strengthsAnswers.items).length
+       + Object.keys(strengthsAnswers.pairs).length
+       + strengthsAnswers.extra.length;
+}
+
+function openStrengths(from, inviteToken){
+  strengthsFrom = from || 'client';
+  strengthsInviteToken = inviteToken || null;
+  strengthsAnswers = { items:{}, pairs:{}, extra:[] };
+  strengthsStage = 'intro'; strengthsIdx = 0; strengthsPending = null;
+  strengthsResult = null; strengthsError = '';
+  view = 'strengths'; window.scrollTo(0,0); render();
+}
+
+function renderStrengths(){
+  const A = window.ASSESSMENT;
+  const pct = strengthsStage==='done' ? 100 : Math.round((strengthsAnswered()/43)*100);
+  let inner = '';
+
+  if(strengthsStage==='intro'){
+    inner = `
+      <h1>Before we meet, I'd like you to do this</h1>
+      <div class="wg-block" style="border:1.5px solid #C9A961;background:#FBF6EA;border-radius:8px;padding:16px 18px;margin-bottom:18px;">
+        <p style="margin:0 0 9px;">It takes about ten minutes, and it changes our session.</p>
+        <p style="margin:0 0 9px;">It tells me how you're actually wired &mdash; what energises you, what you're good at, and what quietly drains you. Without it, I spend the first part of our time working that out. With it, we start at the real conversation.</p>
+        <p style="margin:0;"><strong>This used to cost money.</strong> I built my own version so I can give it to you as part of working together, at no charge.</p>
+      </div>
+      <p style="color:var(--muted);">There's nothing to study for and no wrong answers. Answer how you actually feel, not how you think you should.</p>
+      <div class="btn-row" style="margin-top:22px;">
+        <button class="ghost" id="strengths-close">Not now</button>
+        <button class="primary" id="strengths-start">Start &mdash; about 10 minutes</button>
+      </div>`;
+  }
+
+  else if(strengthsStage==='items'){
+    const q = A.ITEMS[strengthsIdx];
+    const cur = strengthsAnswers.items[q.id];
+    inner = `
+      <div class="step-label">How much do you enjoy this? &middot; ${strengthsIdx+1} of 43</div>
+      <h1 style="margin-bottom:22px;">${esc(q.text)}</h1>
+      <div style="display:flex;flex-direction:column;gap:8px;">
+        ${A.SCALE.map(sc=>`<div class="type-btn ${cur===sc.v?'active':''}" data-sv="${sc.v}" style="text-align:left;padding:13px 15px;">${esc(sc.label)}</div>`).join('')}
+      </div>
+      <div class="btn-row" style="margin-top:20px;">
+        <button class="ghost" id="strengths-back" ${strengthsIdx===0?'style="visibility:hidden"':''}>Back</button>
+        <button class="ghost" id="strengths-close">Finish later</button>
+      </div>`;
+  }
+
+  else if(strengthsStage==='pairs'){
+    const p = A.PAIRS[strengthsIdx];
+    const cur = strengthsAnswers.pairs[p.id];
+    inner = `
+      <div class="step-label">Which sounds more like you? &middot; ${A.ITEMS.length+strengthsIdx+1} of 43</div>
+      <h1 style="margin-bottom:22px;">Pick the one you'd rather be doing.</h1>
+      <div style="display:flex;flex-direction:column;gap:8px;">
+        <div class="type-btn ${cur===p.a?'active':''}" data-pk="${p.a}" style="text-align:left;padding:13px 15px;">${esc(p.at)}</div>
+        <div class="type-btn ${cur===p.b?'active':''}" data-pk="${p.b}" style="text-align:left;padding:13px 15px;">${esc(p.bt)}</div>
+      </div>
+      <div class="btn-row" style="margin-top:20px;">
+        <button class="ghost" id="strengths-back">Back</button>
+        <button class="ghost" id="strengths-close">Finish later</button>
+      </div>`;
+  }
+
+  else if(strengthsStage==='extra'){
+    const e = strengthsPending;
+    inner = `
+      <div class="step-label">Last few &mdash; these settle the close calls &middot; ${strengthsAnswered()+1} of 43</div>
+      <h1 style="margin-bottom:22px;">Which sounds more like you?</h1>
+      <div style="display:flex;flex-direction:column;gap:8px;">
+        <div class="type-btn" data-ek="${e.a}" style="text-align:left;padding:13px 15px;">${esc(A.SNIPPETS[e.a][e.ai])}</div>
+        <div class="type-btn" data-ek="${e.b}" style="text-align:left;padding:13px 15px;">${esc(A.SNIPPETS[e.b][e.bi])}</div>
+      </div>`;
+  }
+
+  else if(strengthsStage==='saving'){
+    inner = `<h1>Scoring your answers&hellip;</h1><p style="color:var(--muted);">One moment.</p>`;
+  }
+
+  else {
+    const prof = A.profileOf(strengthsResult.letters);
+    const t = prof.type;
+    const row = k => `<div style="background:var(--paper);border:1px solid var(--line);border-left:3px solid ${k===prof.primary[0]||k===prof.primary[1]?'#8A6D2F':(k===prof.secondary[0]||k===prof.secondary[1]?'var(--line-strong)':'var(--line)')};border-radius:6px;padding:12px 14px;">
+        <div style="font-weight:600;font-size:15.5px;">${esc(A.TRAITS[k].label)}</div>
+        <div style="font-size:13.5px;color:var(--muted);margin-top:2px;">${esc(A.TRAITS[k].short)}</div></div>`;
+    const band = (title, ks) => `<div style="margin-bottom:22px;">
+        <div style="font-size:12px;letter-spacing:.1em;text-transform:uppercase;color:var(--muted);margin-bottom:9px;font-weight:600;">${title}</div>
+        <div style="display:flex;flex-direction:column;gap:8px;">${ks.map(row).join('')}</div></div>`;
+    inner = `
+      <div class="step-label">Your result</div>
+      ${t ? `<div style="border:1.5px solid #C9A961;background:#FBF6EA;border-radius:8px;padding:22px;margin-bottom:18px;">
+        <div style="font-family:'Source Serif 4',serif;font-size:26px;font-weight:500;color:#8A6D2F;margin-bottom:6px;">${esc(t.name)}</div>
+        <div>${esc(t.line)}</div></div>` : ''}
+      ${t ? `<p style="color:var(--muted);margin-bottom:26px;">You're wired for <strong style="color:var(--ink);">${esc(t.wiredFor[0])}</strong>, <strong style="color:var(--ink);">${esc(t.wiredFor[1])}</strong> and <strong style="color:var(--ink);">${esc(t.wiredFor[2])}</strong>.</p>` : ''}
+      ${band('Comes naturally', prof.primary)}
+      ${band('You can do well', prof.secondary)}
+      ${band('Wears you down', prof.draining)}
+      <div style="border-top:1px solid var(--line);padding-top:18px;color:var(--muted);font-size:14px;">
+        Thank you &mdash; this is genuinely useful to me. We'll go through it together in your session: what it means day to day, and where it's costing you.
+        <div style="font-family:'Source Serif 4',serif;letter-spacing:.24em;margin-top:8px;">${esc(prof.letters)}</div>
+        ${strengthsResult.clear ? '' : `<div style="margin-top:8px;">A couple of these were close, which is worth talking through.</div>`}
+      </div>
+      <div class="btn-row" style="margin-top:24px;"><span></span><button class="primary" id="strengths-close">Done</button></div>`;
+  }
+
+  return `
+    <div class="topbar"><div class="brand">Strengths assessment</div></div>
+    <div class="step-line" style="--pct:${pct}%;"></div>
+    ${strengthsError ? `<div class="card-error" style="margin-bottom:14px;">${esc(strengthsError)}</div>` : ''}
+    ${inner}`;
+}
+
+function attachStrengthsHandlers(){
+  const A = window.ASSESSMENT;
+  const close = document.getElementById('strengths-close');
+  if(close) close.onclick = ()=>{ view = strengthsFrom; window.scrollTo(0,0); render(); };
+
+  const start = document.getElementById('strengths-start');
+  if(start) start.onclick = ()=>{ strengthsStage='items'; strengthsIdx=0; window.scrollTo(0,0); render(); };
+
+  const back = document.getElementById('strengths-back');
+  if(back) back.onclick = ()=>{
+    if(strengthsStage==='items' && strengthsIdx>0){ strengthsIdx--; }
+    else if(strengthsStage==='pairs'){
+      if(strengthsIdx>0) strengthsIdx--;
+      else { strengthsStage='items'; strengthsIdx=A.ITEMS.length-1; }
+    }
+    window.scrollTo(0,0); render();
+  };
+
+  document.querySelectorAll('[data-sv]').forEach(el=>{ el.onclick = ()=>{
+    const q = A.ITEMS[strengthsIdx];
+    strengthsAnswers.items[q.id] = Number(el.getAttribute('data-sv'));
+    if(strengthsIdx < A.ITEMS.length-1){ strengthsIdx++; }
+    else { strengthsStage='pairs'; strengthsIdx=0; }
+    window.scrollTo(0,0); render();
+  };});
+
+  document.querySelectorAll('[data-pk]').forEach(el=>{ el.onclick = ()=>{
+    const p = A.PAIRS[strengthsIdx];
+    strengthsAnswers.pairs[p.id] = el.getAttribute('data-pk');
+    if(strengthsIdx < A.PAIRS.length-1){ strengthsIdx++; }
+    else { strengthsStage='extra'; strengthsPending = A.nextExtra(strengthsAnswers); }
+    window.scrollTo(0,0);
+    if(strengthsStage==='extra' && !strengthsPending) submitStrengths(); else render();
+  };});
+
+  document.querySelectorAll('[data-ek]').forEach(el=>{ el.onclick = ()=>{
+    const e = strengthsPending;
+    strengthsAnswers.extra.push({ a:e.a, ai:e.ai, b:e.b, bi:e.bi, pick: el.getAttribute('data-ek') });
+    strengthsPending = A.nextExtra(strengthsAnswers);
+    window.scrollTo(0,0);
+    if(strengthsPending) render(); else submitStrengths();
+  };});
+}
+
+async function submitStrengths(){
+  strengthsStage='saving'; strengthsError=''; render();
+  try{
+    const body = { action:'save-strengths', answers: strengthsAnswers };
+    if(strengthsInviteToken) body.strengthsToken = strengthsInviteToken;
+    if(portalToken) body.token = portalToken;
+    const r = await fetch('/api/portal-lookup', {
+      method:'POST', headers:{ 'Content-Type':'application/json' }, body: JSON.stringify(body)
+    });
+    const d = await r.json();
+    if(d.error){ throw new Error(d.error); }
+    strengthsResult = d.result;
+    strengthsStage='done';
+    if(portalToken) resumePortalSession();
+  }catch(err){
+    // Their answers aren't lost — show the result from the same scoring the server uses, and
+    // say plainly that it didn't save.
+    strengthsResult = window.ASSESSMENT.score(strengthsAnswers);
+    strengthsStage='done';
+    strengthsError = (err.message || 'We could not save your answers.') + ' Your result is below, but it has not been saved — please mention it to Heshy.';
+  }
+  window.scrollTo(0,0); render();
 }
 
 function renderAdminGate(){
@@ -1371,6 +1569,22 @@ function renderPortal(){
       ${b.clientSummary?`<div class="portal-summary-box"><div class="portal-summary-label">Session recap</div>${esc(b.clientSummary)}</div>`:''}
     </div>`;
   });
+  // Existing clients take the assessment from here. Those who already have a result see it,
+  // so the portal is also where they go back to look at it.
+  const prof = portalClient.strengths ? window.ASSESSMENT.profileOf(portalClient.strengths.letters) : null;
+  const strengthsSectionHtml = (prof && prof.complete) ? `
+    <div class="section-title" style="margin-top:32px;">Your strengths</div>
+    ${prof.type ? `<div class="note" style="margin-bottom:10px;"><strong>${esc(prof.type.name)}</strong> &mdash; ${esc(prof.type.line)}</div>` : ''}
+    <div class="note" style="margin-bottom:10px;">Comes naturally: <strong>${prof.primary.map(k=>esc(window.ASSESSMENT.TRAITS[k].label)).join(' &amp; ')}</strong></div>
+    <button class="ghost small" id="portal-retake-strengths">Take it again</button>
+  ` : `
+    <div class="section-title" style="margin-top:32px;">Strengths assessment</div>
+    <div class="wg-block" style="border:1.5px solid #C9A961;background:#FBF6EA;border-radius:8px;padding:16px 18px;">
+      <p style="margin:0 0 12px;">Ten minutes, and it changes our session &mdash; it tells me how you're wired so we start at the real conversation. Included, no charge.</p>
+      <button class="primary small" id="portal-start-strengths">Take the assessment</button>
+    </div>
+  `;
+
   const cardSectionHtml = portalClient.hasCard ? `
     <div class="section-title" style="margin-top:32px;">Payment method</div>
     ${!portalShowCardForm ? `
@@ -1393,6 +1607,7 @@ function renderPortal(){
     ${upHtml}
     <div class="section-title" style="margin-top:32px;">Past sessions</div>
     ${pastHtml}
+    ${strengthsSectionHtml}
     ${cardSectionHtml}
     <button class="ghost small" id="portal-logout-btn" style="margin-top:32px;">Log out</button>
   `;
@@ -1536,6 +1751,15 @@ function renderClient(){
         ${selectedType==='virtual'
           ? `<div class="join-block"><div class="section-title">Join link</div><a href="${confirmedMeetLink||'#'}" class="join-link">${confirmedMeetLink||'Link will be sent before the session'}</a></div>`
           : `<div class="join-block"><div class="section-title">Location</div><div class="location-text">${(confirmedLocation||'Address will be sent before the session').replace(/\n/g,'<br>')}</div></div>`}
+        ${strengthsInviteToken ? `
+        <div class="wg-block" style="border:1.5px solid #C9A961;background:#FBF6EA;border-radius:8px;padding:18px;margin-top:24px;text-align:left;">
+          <div class="section-title" style="display:flex;align-items:center;gap:8px;">
+            <span style="font-size:16px;">&#9733;</span> One more thing, and it matters to me
+          </div>
+          <p style="margin:0 0 14px;">Ten minutes now and our session starts at the real conversation instead of me working out how you're wired. It's included &mdash; no charge.</p>
+          <button class="primary" id="confirm-start-strengths">Take the assessment</button>
+          <div style="font-size:12.5px;color:var(--muted);margin-top:10px;">Or do it later &mdash; the link is in your confirmation email.</div>
+        </div>` : ''}
       </div>
     `;
   }
@@ -2063,7 +2287,7 @@ function renderAdmin(){
       clientsHtml += `
         <div class="client-row" data-view-client-profile="${c.id}">
           <div>
-            <div class="main">${esc(c.name)}${c.wgLetters ? ` <span class="wg-badge" title="Working Genius">${c.wgLetters.toUpperCase()}</span>` : (c.wgPdfData ? ' <span class="wg-badge" title="Working Genius PDF on file">WG</span>' : '')}</div>
+            <div class="main">${esc(c.name)}${c.wgLetters ? ` <span class="wg-badge" title="Strengths result">${c.wgLetters.toUpperCase()}</span>` : (c.wgPdfData ? ' <span class="wg-badge" title="Older Working Genius PDF on file">PDF</span>' : '')}</div>
             <div class="sub">${esc(c.email)} &middot; ${sessionCount} session${sessionCount!==1?'s':''}${lastDate ? ' &middot; last met ' + fmtDate(lastDate) : ''}</div>
           </div>
           ${c.blocked ? `<span class="tag blocked">blocked</span>` : ''}
@@ -2141,7 +2365,7 @@ function renderAdmin(){
                   <button class="ghost small" data-cancel-edit-contact="1">Cancel</button>
                 </div>
               ` : `
-                <div style="font-size:26px;font-weight:600;font-family:Georgia,serif;">${esc(c.name)}${wgLetters ? ` <span class="wg-badge-big" title="Working Genius">${wgLetters}</span>` : ''}</div>
+                <div style="font-size:26px;font-weight:600;font-family:Georgia,serif;">${esc(c.name)}${wgLetters ? ` <span class="wg-badge-big" title="Strengths result">${wgLetters}</span>` : ''}</div>
                 <div class="sub" style="margin-top:4px;">${esc(c.email)}${c.phone ? ' &middot; <strong>' + esc(c.phone) + '</strong>' : ''} &middot; <a href="#" data-edit-client-contact="1" style="color:var(--ink);">edit</a></div>
               `}
             </div>
@@ -2158,18 +2382,32 @@ function renderAdmin(){
         </div>
 
         <div class="admin-block">
-          <h2 class="sect">Working Genius</h2>
+          <h2 class="sect">Strengths</h2>
+          ${(()=>{
+            const A = window.ASSESSMENT;
+            const pr = A.profileOf(wgLetters);
+            if(!pr.complete) return `<div class="empty" style="margin-bottom:12px;">No result yet. They can take it from their portal, or you can enter the letters below.</div>`;
+            const taken = c.strengths && c.strengths.takenAt
+              ? `Taken ${new Date(c.strengths.takenAt).toLocaleDateString('en-US',{month:'short',day:'numeric',year:'numeric'})}`
+              : 'Entered by hand';
+            const names = ks => ks.map(k=>esc(A.TRAITS[k].label)).join(' &amp; ');
+            return `
+              ${pr.type ? `<div class="note" style="margin-bottom:10px;"><strong>${esc(pr.type.name)}</strong> &mdash; ${esc(pr.type.line)}</div>` : ''}
+              <div style="display:flex;flex-direction:column;gap:6px;margin-bottom:12px;font-size:13.5px;">
+                <div><span style="color:var(--muted);">Comes naturally</span> &middot; <strong>${names(pr.primary)}</strong></div>
+                <div><span style="color:var(--muted);">Can do well</span> &middot; ${names(pr.secondary)}</div>
+                <div><span style="color:var(--muted);">Wears them down</span> &middot; ${names(pr.draining)}</div>
+              </div>
+              <div class="note" style="margin-bottom:12px;">${taken}${c.strengths && c.strengths.clear===false ? ' &middot; some results were close' : ''}</div>`;
+          })()}
           <label style="font-weight:600;">Letters</label>
-          <div class="note" style="margin-bottom:8px;">Type them directly once you know their results, e.g. <strong>WDTIEG</strong>.</div>
+          <div class="note" style="margin-bottom:8px;">Set automatically when they take the assessment. You can also type them in, e.g. <strong>WDTIEG</strong>.</div>
           <input type="text" id="client-wg-letters-${c.id}" data-client-wg-letters="${c.id}" value="${wgLetters}" placeholder="e.g. WDTIEG" style="max-width:220px;text-transform:uppercase;letter-spacing:0.08em;font-weight:600;">
           <div id="client-wg-letters-saved-${c.id}" style="font-size:12px;color:var(--muted);margin-top:4px;"></div>
 
-          <label style="font-weight:600;margin-top:18px;display:block;">PDF report</label>
-          ${c.wgPdfData
-            ? `<div style="margin-bottom:8px;"><a class="wg-link" href="${c.wgPdfData}" download="${esc(c.wgPdfName)||'working-genius.pdf'}"><strong>${esc(c.wgPdfName)||'Download PDF'}</strong></a></div>`
-            : `<div class="empty" style="margin-bottom:8px;">Not on file.</div>`}
-          <input type="file" id="client-wg-file-${c.id}" data-client-wg-file="${c.id}" accept="application/pdf">
-          <div id="client-wg-file-saved-${c.id}" style="font-size:12px;color:var(--muted);margin-top:4px;"></div>
+          ${c.wgPdfData ? `
+          <label style="font-weight:600;margin-top:18px;display:block;">Older Working Genius report</label>
+          <div style="margin-bottom:8px;"><a class="wg-link" href="${c.wgPdfData}" download="${esc(c.wgPdfName)||'working-genius.pdf'}"><strong>${esc(c.wgPdfName)||'Download PDF'}</strong></a></div>` : ''}
         </div>
 
 
@@ -2392,6 +2630,9 @@ async function savePortalCard(){
 }
 
 function attachHandlers(){
+  if(view==='strengths'){ attachStrengthsHandlers(); return; }
+  const startStrengths = document.getElementById('confirm-start-strengths');
+  if(startStrengths) startStrengths.onclick = ()=> openStrengths('client', strengthsInviteToken);
   const $ = id => document.getElementById(id);
   const backBtn = $('backToClientBtn'); if(backBtn) backBtn.onclick = backToClient;
   const adminLogoutBtn = $('adminLogoutBtn');
@@ -2427,6 +2668,10 @@ function attachHandlers(){
   const brandHomeLink = $('brand-home-link'); if(brandHomeLink) brandHomeLink.onclick = backToClient;
   document.querySelectorAll('[data-go-portal]').forEach(el=>{ el.onclick = (e)=>{ e.preventDefault(); goToPortal(); }; });
   const portalLogoutBtn = $('portal-logout-btn'); if(portalLogoutBtn) portalLogoutBtn.onclick = portalLogout;
+  const portalStartStrengths = $('portal-start-strengths');
+  if(portalStartStrengths) portalStartStrengths.onclick = ()=> openStrengths('portal', null);
+  const portalRetakeStrengths = $('portal-retake-strengths');
+  if(portalRetakeStrengths) portalRetakeStrengths.onclick = ()=> openStrengths('portal', null);
   const portalUpdateCardBtn = $('portal-update-card-btn'); if(portalUpdateCardBtn) portalUpdateCardBtn.onclick = ()=>{ portalShowCardForm = true; portalCardError=''; render(); };
   const portalCancelCardBtn = $('portal-cancel-card-btn'); if(portalCancelCardBtn) portalCancelCardBtn.onclick = ()=>{ portalShowCardForm = false; portalCardError=''; render(); };
   document.querySelectorAll('[data-start-cancel]').forEach(el=>{ el.onclick = ()=>{ portalCancellingId = el.getAttribute('data-start-cancel'); portalCancelError=''; render(); }; });

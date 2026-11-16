@@ -1,3 +1,5 @@
+import { profileOf } from './assessment.js';
+
 const FROM = 'Heshy <bookings@catalystconsultingnyc.com>';
 const REPLY_TO = 'heshy@catalystconsultingnyc.com';
 
@@ -174,13 +176,15 @@ export function newBookingAlertEmail(booking, settings, client) {
        </div>`
     : '';
   const wgLetters = ((client && client.wgLetters) || '').toUpperCase();
-  // Three distinct states, so the alert always says something definite about Working Genius
+  // Three distinct states, so the alert always says something definite about the assessment
   // rather than staying silent when nothing is on file.
-  const wgText = wgLetters
-    ? `Working Genius: <strong style="color:#111111;letter-spacing:0.08em;">${esc(wgLetters)}</strong>`
+  const profile = wgLetters ? profileOf(wgLetters) : null;
+  const wgText = (profile && profile.complete)
+    ? `Strengths: <strong style="color:#111111;letter-spacing:0.08em;">${esc(wgLetters)}</strong>`
+        + (profile.type ? ` &mdash; ${esc(profile.type.name)}` : '')
     : wgPdfName
-      ? `Working Genius PDF uploaded: ${esc(wgPdfName)} &mdash; results not entered yet (open the client to add them)`
-      : `No Working Genius assessment on file for this client yet.`;
+      ? `Older Working Genius PDF on file: ${esc(wgPdfName)} &mdash; no strengths result entered yet (open the client to add them)`
+      : `No strengths assessment on file for this client yet.`;
   const wgBlock = `<div style="margin-top:14px;font-family:Arial,sans-serif;font-size:13px;color:#6E6E6E;">${wgText}</div>`;
   const baseUrl = process.env.SITE_URL || 'https://heshy-booking.vercel.app';
   const profileBlock = (client && client.id)

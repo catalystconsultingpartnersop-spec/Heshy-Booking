@@ -34,3 +34,17 @@ export function verifyAgentKey(req) {
 export function randomToken() {
   return randomBytes(32).toString('base64url');
 }
+
+// A single-purpose, expiring link token. Used so a client can be handed something narrow — "you
+// may fill in the strengths assessment for this one client record" — without a login and without
+// anything else that a session token would carry.
+export async function issueScopedToken(scope, value, ttlSeconds) {
+  const token = randomToken();
+  await kv.set(scope + ':' + token, value, { ex: ttlSeconds });
+  return token;
+}
+
+export async function redeemScopedToken(scope, token) {
+  if (!token || typeof token !== 'string') return null;
+  return (await kv.get(scope + ':' + token)) ?? null;
+}

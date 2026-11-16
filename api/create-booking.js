@@ -5,6 +5,7 @@ import { APP_TIMEZONE, busyRangesForDate, etDayBounds } from './_lib/time.js';
 import { isRangeAvailable } from './_lib/availability.js';
 import { logError } from './_lib/errorlog.js';
 import { redeemSetupToken } from './_lib/stripecustomer.js';
+import { issueScopedToken } from './_lib/auth.js';
 
 async function getGoogleAccessToken() {
   const refreshToken = await kv.get('google-refresh-token');
@@ -309,7 +310,16 @@ export default async function handler(req, res) {
       await sendEmail({ to: 'heshy@catalystconsultingnyc.com', subject: alert.subject, html: alert.html });
     } catch (e) { /* email is best-effort */ }
 
-    res.status(200).json({ ok: true, bookingId: booking.id, meetLink: type === 'virtual' ? booking.meetLink : undefined, location: type === 'in-person' ? resolvedAddress : undefined, comped, couponCode: booking.couponCode, couponDiscount: booking.couponDiscount });
+    // A narrow, expiring token that names only this client record, so the confirmation screen
+    // can offer the strengths assessment without asking them to sign in first. Best-effort: if
+    // it can't be issued, the booking still succeeded and they can do it from their portal.
+    let strengthsToken = null;
+    if (!client.strengths && !client.wgLetters) {
+      try { strengthsToken = await issueScopedToken('strengths-invite', client.id, 60 * 60 * 24 * 14); }
+      catch (e) { /* the booking is what matters */ }
+    }
+
+    res.status(200).json({ ok: true, bookingId: booking.id, strengthsToken, meetLink: type === 'virtual' ? booking.meetLink : undefined, location: type === 'in-person' ? resolvedAddress : undefined, comped, couponCode: booking.couponCode, couponDiscount: booking.couponDiscount });
   } catch (err) {
     console.error('Server error:', err);
     await logError('create-booking', err, { method: req.method, action: req.body?.action || req.query?.action });
