@@ -329,12 +329,18 @@ export default async function handler(req, res) {
     }
     if (failure) return res.status(failure.status).json(failure.body);
 
+    // The booking is saved either way, but the page used to say "a confirmation is on its way"
+    // whether or not one went anywhere. Report what actually happened.
+    let confirmationSent = false;
     try {
       const confirmation = bookingConfirmationEmail(booking, settingsSnapshot);
-      await sendEmail({ to: booking.clientEmail, subject: confirmation.subject, html: confirmation.html });
+      confirmationSent = await sendEmail({ to: booking.clientEmail, subject: confirmation.subject, html: confirmation.html });
       const alert = newBookingAlertEmail(booking, settingsSnapshot, client);
       await sendEmail({ to: 'heshy@catalystconsultingnyc.com', subject: alert.subject, html: alert.html });
-    } catch (e) { /* email is best-effort */ }
+    } catch (e) { /* the booking stands regardless */ }
+    if (!confirmationSent) {
+      await logError('create-booking', new Error('Confirmation email did not send'), { bookingId: booking.id });
+    }
 
     // A narrow, expiring token that names only this client record, so the confirmation screen
     // can offer the strengths assessment without asking them to sign in first. Best-effort: if
@@ -345,7 +351,8 @@ export default async function handler(req, res) {
       catch (e) { /* the booking is what matters */ }
     }
 
-    res.status(200).json({ ok: true, bookingId: booking.id, strengthsToken, meetLink: type === 'virtual' ? booking.meetLink : undefined, location: type === 'in-person' ? resolvedAddress : undefined, comped, couponCode: booking.couponCode, couponDiscount: booking.couponDiscount });
+    res.status(200).json({ ok: true, bookingId: booking.id, strengthsToken, confirmationSent,
+      calendarAttached: !!calendarEventId, meetLink: type === 'virtual' ? booking.meetLink : undefined, location: type === 'in-person' ? resolvedAddress : undefined, comped, couponCode: booking.couponCode, couponDiscount: booking.couponDiscount });
   } catch (err) {
     console.error('Server error:', err);
     await logError('create-booking', err, { method: req.method, action: req.body?.action || req.query?.action });

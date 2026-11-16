@@ -3,7 +3,16 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Heshy</title>
+<title>Book a Clarity Session | Catalyst Consulting NYC</title>
+<meta name="description" content="Book a clarity session with Heshy Perlstein — online or in person, in New York. Pick a time that works and you're booked in under a minute.">
+<meta name="robots" content="index, follow">
+<link rel="canonical" href="https://book.catalystconsultingnyc.com/">
+<meta property="og:type" content="website">
+<meta property="og:title" content="Book a Clarity Session with Heshy">
+<meta property="og:description" content="Online or in person, in New York. Pick a time that works and you're booked in under a minute.">
+<meta property="og:url" content="https://book.catalystconsultingnyc.com/">
+<meta name="twitter:card" content="summary">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%23111111'/%3E%3Ctext x='16' y='22' font-family='Georgia,serif' font-size='17' fill='%23FBF6EA' text-anchor='middle'%3EH%3C/text%3E%3C/svg%3E">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=Source+Serif+4:wght@400;500;600&family=Inter:wght@400;500;600&display=swap" rel="stylesheet">
 <style>
@@ -48,6 +57,10 @@
     cursor:pointer;font-size:14px;font-weight:500;background:var(--paper);
   }
   .type-btn:hover{border-color:var(--ink);}
+  /* Format, duration, day and slot are clickable divs. They are given button semantics and
+     keyboard focus in script; this is the focus ring that makes that usable. */
+  [role="button"]:focus-visible{outline:2px solid var(--ink);outline-offset:2px;}
+  a:focus-visible, button:focus-visible, input:focus-visible, select:focus-visible{outline:2px solid var(--ink);outline-offset:2px;}
   .type-btn.active{background:var(--ink);color:#fff;border-color:var(--ink);}
 
   .qci-card{
@@ -425,6 +438,7 @@ let strengthsResult = null;
 let strengthsError = '';
 let strengthsInviteToken = null;   // handed out on the confirmation screen
 let strengthsFrom = 'client';      // where Close returns to
+let confirmationSent = true;       // did the confirmation email actually go out?
 let selectedDuration = 60;
 let selectedStartTime = null;
 let selectedDay = null;
@@ -676,6 +690,32 @@ function fmtDate(d){
   const dt = new Date(d+'T00:00:00');
   return dt.toLocaleDateString('en-US',{weekday:'short', month:'short', day:'numeric'});
 }
+// Every time on this site is New York time. A client in another timezone had no way to know
+// that, so an 11:00 session could be read as 11:00 wherever they happened to be.
+const VIEWER_IN_ET = (()=>{
+  try{ return Intl.DateTimeFormat().resolvedOptions().timeZone === 'America/New_York'; }
+  catch(e){ return false; }
+})();
+function etSuffix(){ return VIEWER_IN_ET ? '' : ' ET'; }
+
+// Same add-to-calendar link the confirmation email uses, so the confirmation screen can offer
+// it too rather than leaving the client with nothing to do but remember.
+function calendarAddLink(date, time, durationMin, type, joinOrPlace){
+  try{
+    const start = etToUtcC(date, time);
+    const end = new Date(start.getTime() + (durationMin||60)*60000);
+    const z = d => d.toISOString().replace(/[-:]/g,'').replace(/\.\d{3}/,'');
+    const params = new URLSearchParams({
+      action:'TEMPLATE',
+      text:'Clarity session with Heshy',
+      dates: z(start) + '/' + z(end),
+      details: type==='virtual' ? ('Join: ' + (joinOrPlace||'link to follow')) : 'In person',
+      location: type==='in-person' ? (joinOrPlace||'') : ''
+    });
+    return 'https://calendar.google.com/calendar/render?' + params.toString();
+  }catch(e){ return ''; }
+}
+
 function fmtTime(t){
   const [h,m] = (t||'').split(':').map(Number);
   if(isNaN(h) || isNaN(m)) return t ? '(invalid time: ' + t + ')' : '(no time set)';
@@ -969,6 +1009,7 @@ async function confirmBooking(){
     }
     if(bookingData.error){ throw new Error(bookingData.error); }
     strengthsInviteToken = bookingData.strengthsToken || null;
+    confirmationSent = bookingData.confirmationSent !== false;
     if(bookingData.meetLink) confirmedMeetLink = bookingData.meetLink;
     if(bookingData.location) confirmedLocation = bookingData.location;
     confirmedComped = !!bookingData.comped;
@@ -1282,6 +1323,7 @@ function render(){
     app.innerHTML = view==='client' ? renderClient() : renderAdmin();
   }
   attachHandlers();
+  makeControlsFocusable();
 }
 
 
@@ -1549,7 +1591,7 @@ function renderPortal(){
   upcoming.forEach(b=>{
     const isCancelling = portalCancellingId === b.id;
     upHtml += `<div class="portal-session">
-      <div class="top"><span>${fmtDate(b.date)}, ${fmtTime(b.time)}</span><span>${b.type==='virtual'?'Video call':'In person'}</span></div>
+      <div class="top"><span>${fmtDate(b.date)}, ${fmtTime(b.time)}${etSuffix()}</span><span>${b.type==='virtual'?'Video call':'In person'}</span></div>
       ${isCancelling ? `
         <div class="note" style="margin-top:8px;">Cancel this session? This can't be undone.</div>
         <div style="display:flex;gap:8px;margin-top:8px;">
@@ -1701,7 +1743,7 @@ function renderClient(){
     const isQuickCheckin = selectedDuration === 15;
     inner += `
       <div class="fact">
-        <div class="fact-row"><span>Time</span><span>${fmtDate(selectedDay)}, ${fmtTime(selectedStartTime)}</span></div>
+        <div class="fact-row"><span>Time</span><span>${fmtDate(selectedDay)}, ${fmtTime(selectedStartTime)}${etSuffix()}</span></div>
         <div class="fact-row"><span>Length</span><span>${selectedDuration} min</span></div>
         <div class="fact-row"><span>Format</span><span>${isQuickCheckin ? 'Phone call' : (selectedType==='virtual'?'Video call':'In person')}</span></div>
         <div class="fact-row"><span>Rate</span><span>$${state.settings.hourlyRate||500}/hour</span></div>
@@ -1748,9 +1790,11 @@ function renderClient(){
       <div class="confirm">
         <div class="confirm-mark">&#10003;</div>
         <h1>Booked.</h1>
-        <p>A confirmation is on its way to your email.</p>
+        <p>${confirmationSent === false
+             ? 'Your session is booked. We couldn\'t send the confirmation email just now &mdash; your booking is safe, and the details are below.'
+             : 'A confirmation is on its way to your email.'}</p>
         <div class="fact">
-          <div class="fact-row"><span>Time</span><span>${fmtDate(selectedDay)}, ${fmtTime(selectedStartTime)}</span></div>
+          <div class="fact-row"><span>Time</span><span>${fmtDate(selectedDay)}, ${fmtTime(selectedStartTime)}${etSuffix()}</span></div>
           <div class="fact-row"><span>Length</span><span>${selectedDuration} min</span></div>
           <div class="fact-row"><span>Format</span><span>${selectedDuration===15 ? 'Phone call' : (selectedType==='virtual'?'Video call':'In person')}</span></div>
           <div class="fact-row"><span>Rate</span><span>${confirmedComped ? 'Complimentary — no charge' : confirmedCouponDiscount ? `$${state.settings.hourlyRate||500}/hour (${confirmedCouponDiscount.type==='percent' ? confirmedCouponDiscount.value+'% off applied' : money(confirmedCouponDiscount.value)+' off applied'})` : `$${state.settings.hourlyRate||500}/hour`}</span></div>
@@ -1760,6 +1804,14 @@ function renderClient(){
         ${selectedType==='virtual'
           ? `<div class="join-block"><div class="section-title">Join link</div><a href="${confirmedMeetLink||'#'}" class="join-link">${confirmedMeetLink||'Link will be sent before the session'}</a></div>`
           : `<div class="join-block"><div class="section-title">Location</div><div class="location-text">${(confirmedLocation||'Address will be sent before the session').replace(/\n/g,'<br>')}</div></div>`}
+        <div style="margin-top:22px;font-size:13.5px;display:flex;gap:14px;flex-wrap:wrap;justify-content:center;">
+          ${(()=>{ const l = calendarAddLink(selectedDay, selectedStartTime, selectedDuration, selectedType, confirmedMeetLink||confirmedLocation);
+             return l ? `<a href="${l}" target="_blank" rel="noopener" style="color:var(--ink);">Add to calendar</a>` : ''; })()}
+          <a href="#portal" id="confirm-portal-link" style="color:var(--ink);">View or cancel this session</a>
+        </div>
+        <div style="margin-top:12px;font-size:12.5px;color:var(--muted);">
+          Need to move it? Cancel in your portal and book again, or just email Heshy.
+        </div>
         ${strengthsInviteToken ? `
         <div class="wg-block" style="border:1.5px solid #C9A961;background:#FBF6EA;border-radius:8px;padding:18px;margin-top:24px;text-align:left;">
           <div class="section-title" style="display:flex;align-items:center;gap:8px;">
@@ -2678,6 +2730,27 @@ async function savePortalCard(){
     portalCardError = 'Something went wrong. Please try again.';
     portalCardSaving = false; render();
   }
+}
+
+// The booking controls are divs. Without this they cannot be reached by keyboard at all, so
+// anyone not using a mouse simply cannot book.
+function makeControlsFocusable(){
+  // The real class names used by the booking flow: format/duration buttons, calendar days
+  // (only the ones that can actually be picked), time slots, and the Quick Check-in card.
+  const selectors = '.type-btn, .cal-cell-sm[data-day], .time-cell[data-start-time], .qci-card';
+  document.querySelectorAll(selectors).forEach(el=>{
+    if(el.getAttribute('role') === 'button') return;
+    el.setAttribute('role','button');
+    el.setAttribute('tabindex','0');
+    const selected = el.classList.contains('active') || el.classList.contains('selected');
+    el.setAttribute('aria-pressed', selected ? 'true' : 'false');
+    el.addEventListener('keydown', ev=>{
+      if(ev.key === 'Enter' || ev.key === ' ' || ev.key === 'Spacebar'){
+        ev.preventDefault();
+        el.click();
+      }
+    });
+  });
 }
 
 function attachHandlers(){
