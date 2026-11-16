@@ -391,3 +391,24 @@ export function clientCancelledAlertEmail(booking) {
     `)
   };
 }
+
+/** The six-digit code that signs a client in to their portal. */
+export function portalCodeEmail(client, code) {
+  const firstName = (client.name || '').split(' ')[0];
+  return {
+    subject: `${code} is your sign-in code`,
+    html: wrap(`
+      <div style="font-size:22px;font-family:Georgia,serif;margin-bottom:8px;">Your sign-in code</div>
+      <div style="font-size:14px;font-family:Arial,sans-serif;color:#6E6E6E;margin-bottom:22px;">
+        Hi ${esc(firstName) || 'there'} &mdash; enter this to see your sessions.
+      </div>
+      <div style="font-family:Georgia,serif;font-size:36px;letter-spacing:0.18em;font-weight:600;
+                  color:#111111;padding:16px 0;text-align:center;background:#FBF6EA;
+                  border:1px solid #C9A961;border-radius:6px;">${esc(code)}</div>
+      <div style="margin-top:20px;font-family:Arial,sans-serif;font-size:13px;color:#6E6E6E;line-height:1.6;">
+        It works once and expires in ten minutes.<br>
+        If you didn't ask for it, you can ignore this &mdash; nobody can get in without the code.
+      </div>
+    `)
+  };
+}

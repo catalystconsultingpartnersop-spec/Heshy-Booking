@@ -1,7 +1,9 @@
 import { kv } from '@vercel/kv';
+import { randomInt, timingSafeEqual } from 'crypto';
 import { randomToken, redeemScopedToken } from './_lib/auth.js';
+import { limited } from './_lib/limits.js';
 import { score, validAnswers, profileOf } from './_lib/assessment.js';
-import { sendEmail, cancellationEmail, clientCancelledAlertEmail } from './_lib/email.js';
+import { sendEmail, cancellationEmail, clientCancelledAlertEmail, portalCodeEmail } from './_lib/email.js';
 import { mutate, SKIP_WRITE } from './_lib/store.js';
 import { logError } from './_lib/errorlog.js';
 import { stripe, resolveCustomer, setDefaultCard } from './_lib/stripecustomer.js';
@@ -77,33 +79,91 @@ function clientSummary(client, bookings, settings) {
            strengths: profile.complete ? { letters: profile.letters } : null };
 }
 
-async function handleLogin(req, res) {
-  const email = (req.body?.email || '').toLowerCase().trim();
-  const phone = normalizePhone(req.body?.phone);
-  if (!email || !phone) return res.status(400).json({ error: 'Email and phone are both required.' });
+// Signing in to the portal.
+//
+// It used to be email plus phone number. Both are findable — a phone number is on signatures,
+// websites, shared contacts and data brokers — so anyone holding them could read a client's
+// session history and cancel their appointments. A per-email attempt limit slowed guessing but
+// did nothing for a client whose details were already known.
+//
+// Now the email only decides where a code is sent. Possession of that inbox is what proves who
+// they are, which is the same standard the confirmation emails already rely on.
 
-  // Basic brute-force protection: block further attempts against this email for a while
-  // after a handful of wrong tries, rather than allowing unlimited guesses at a phone number.
-  const failKey = 'portal-fail:' + email;
-  const fails = (await kv.get(failKey)) || 0;
-  if (fails >= 6) {
-    return res.status(429).json({ error: 'Too many attempts. Please try again in a bit, or contact Heshy directly.' });
+const CODE_TTL_SECONDS = 60 * 10;   // ten minutes
+const CODE_MAX_ATTEMPTS = 5;
+
+function sixDigitCode() {
+  // Uniform across 000000-999999, from the operating system's random source. Math.random would
+  // be predictable, and a modulo of a small random range would skew the distribution.
+  return String(randomInt(0, 1000000)).padStart(6, '0');
+}
+
+async function handleRequestCode(req, res) {
+  const email = (req.body?.email || '').toLowerCase().trim();
+  if (!email) return res.status(400).json({ error: 'Please enter your email address.' });
+
+  // Rate-limited per caller and per address, so this can't be used to mail-bomb someone or to
+  // work out who is a client.
+  if (await limited(req, res, 'portal-code', 10, 3600)) return;
+  const perEmail = 'portal-code-sent:' + email;
+  const sentCount = Number(await kv.get(perEmail)) || 0;
+  if (sentCount >= 5) {
+    return res.status(200).json({ ok: true });   // same answer either way
   }
+  await kv.set(perEmail, sentCount + 1, { ex: 900 });
 
   const data = await kv.get('app-data');
-  const client = (data?.clients || []).find(c => c.email.toLowerCase() === email);
-  const match = client && normalizePhone(client.phone) === phone && phone.length >= 7;
+  const client = (data?.clients || []).find(c => (c.email || '').toLowerCase().trim() === email);
 
-  if (!match) {
-    await kv.set(failKey, fails + 1, { ex: 900 }); // resets after 15 minutes
-    return res.status(200).json({ found: false });
+  // A code is only ever sent to a real client, but the response never reveals whether one
+  // exists. Saying "no such client" would turn this into a way to test email addresses.
+  if (client && !client.blocked) {
+    const code = sixDigitCode();
+    await kv.set('portal-code:' + email, { code, clientId: client.id, attempts: 0 }, { ex: CODE_TTL_SECONDS });
+    try {
+      const mail = portalCodeEmail(client, code);
+      await sendEmail({ to: client.email, subject: mail.subject, html: mail.html });
+    } catch (e) {
+      await logError('portal-request-code', e, { email });
+    }
   }
-  await kv.del(failKey);
+  return res.status(200).json({ ok: true });
+}
+
+async function handleVerifyCode(req, res) {
+  const email = (req.body?.email || '').toLowerCase().trim();
+  const code = String(req.body?.code || '').replace(/\D/g, '');
+  if (!email || !code) return res.status(400).json({ error: 'Please enter the code from your email.' });
+
+  const key = 'portal-code:' + email;
+  const record = await kv.get(key);
+  if (!record) return res.status(400).json({ error: 'That code has expired. Please ask for a new one.' });
+
+  if ((record.attempts || 0) >= CODE_MAX_ATTEMPTS) {
+    await kv.del(key);
+    return res.status(429).json({ error: 'Too many tries. Please ask for a new code.' });
+  }
+
+  // Constant-time, so the comparison itself gives nothing away.
+  const a = Buffer.from(String(record.code));
+  const b = Buffer.from(code);
+  const ok = a.length === b.length && timingSafeEqual(a, b);
+  if (!ok) {
+    await kv.set(key, { ...record, attempts: (record.attempts || 0) + 1 }, { ex: CODE_TTL_SECONDS });
+    return res.status(400).json({ error: "That code doesn't match. Please check and try again." });
+  }
+
+  // One use only.
+  await kv.del(key);
+  await kv.del('portal-code-sent:' + email);
+
+  const data = await kv.get('app-data');
+  const client = (data?.clients || []).find(c => c.id === record.clientId);
+  if (!client || client.blocked) return res.status(400).json({ error: 'We could not find your details.' });
 
   const token = randomToken();
-  // Was 60 days. A portal session shows a client's history and can cancel their sessions, and
-  // it lives in browser storage on whatever device they used — often a shared one. 14 days is
-  // long enough that nobody is forever signing in, short enough that an old copy stops working.
+  // A portal session shows a client's history and can cancel their sessions, and it lives in
+  // browser storage on whatever device they used — often a shared one.
   await kv.set('portal-session:' + token, client.id, { ex: PORTAL_SESSION_SECONDS });
 
   const summary = clientSummary(client, data.bookings || [], data.settings);
@@ -123,14 +183,6 @@ async function handleSession(req, res) {
   res.status(200).json(clientSummary(client, data.bookings || [], data.settings));
 }
 
-// Saving a completed strengths assessment.
-//
-// Two ways in, because two different people arrive here: a client logged into the portal, and a
-// client who has just booked and is being asked on the confirmation screen (they hold a narrow,
-// expiring token that names only their own client record).
-//
-// The browser sends raw answers, never a result. The server scores them itself, so what ends up
-// on a client record is always what their answers actually say.
 async function handleSaveStrengths(req, res) {
   const { token, strengthsToken, answers } = req.body || {};
 
@@ -308,7 +360,8 @@ export default async function handler(req, res) {
   try {
     // Backward-compatible plain GET-by-email is intentionally removed — every path now requires
     // the phone match (login) or a valid session token, closing the "just an email" exposure.
-    if (req.method === 'POST' && req.body?.action === 'login') return handleLogin(req, res);
+    if (req.method === 'POST' && req.body?.action === 'request-code') return handleRequestCode(req, res);
+    if (req.method === 'POST' && req.body?.action === 'verify-code') return handleVerifyCode(req, res);
     if (req.method === 'POST' && req.body?.action === 'logout') {
       // Logging out used to clear the browser's copy only; the server token stayed valid for
       // the rest of its life, so a copied link or a shared device still worked.

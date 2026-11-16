@@ -515,7 +515,10 @@ let confirmedCouponCode = '';
 let confirmedCouponDiscount = null;
 let submitting = false;
 let portalEmail = '';
-let portalPhone = '';
+let portalPhone = '';          // no longer used to sign in; kept for display
+let portalCodeSent = false;    // have we emailed them a code yet?
+let portalCode = '';
+let portalBusy = false;
 let portalClient = null;
 let portalError = '';
 let portalToken = (typeof localStorage !== 'undefined' && localStorage.getItem('heshyPortalToken')) || '';
@@ -1567,24 +1570,46 @@ function renderAdminGate(){
   `;
 }
 
-async function checkPortal(){
-  if(!portalPhone.trim()){ portalError = 'Enter your phone number too — needed to keep your info private.'; render(); return; }
+async function requestPortalCode(){
+  const email = (portalEmail||'').trim();
+  if(!email){ portalError = 'Enter your email address.'; render(); return; }
+  portalBusy = true; portalError = ''; render();
   try{
     const r = await fetch('/api/portal-lookup', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ action: 'login', email: portalEmail, phone: portalPhone })
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ action: 'request-code', email })
     });
     const data = await r.json();
-    if(data.error){ portalError = data.error; portalClient = null; render(); return; }
-    if(!data.found){ portalError = "We couldn't find a match for that email and phone number."; portalClient = null; render(); return; }
-    portalError = ''; portalClient = data;
+    if(data.error){ portalError = data.error; portalBusy = false; render(); return; }
+    // The same answer whether or not that address belongs to a client — otherwise this page
+    // becomes a way to test whether someone is a client of Heshy's.
+    portalCodeSent = true; portalCode = ''; portalBusy = false; portalError = '';
+    render();
+    const el = document.getElementById('portal-code'); if(el) el.focus();
+  }catch(e){
+    portalError = 'Something went wrong. Try again.'; portalBusy = false; render();
+  }
+}
+
+async function verifyPortalCode(){
+  const code = (portalCode||'').trim();
+  if(code.length < 6){ portalError = 'Enter the six-digit code from your email.'; render(); return; }
+  portalBusy = true; portalError = ''; render();
+  try{
+    const r = await fetch('/api/portal-lookup', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ action: 'verify-code', email: (portalEmail||'').trim(), code })
+    });
+    const data = await r.json();
+    if(data.error){ portalError = data.error; portalBusy = false; render(); return; }
+    portalError = ''; portalClient = data; portalBusy = false; portalCodeSent = false; portalCode = '';
     if(data.token){ portalToken = data.token; try{ localStorage.setItem('heshyPortalToken', data.token); }catch(e){} }
     render();
   }catch(e){
-    portalError = "Something went wrong. Try again."; render();
+    portalError = 'Something went wrong. Try again.'; portalBusy = false; render();
   }
 }
+
 async function resumePortalSession(){
   if(!portalToken) return;
   try{
@@ -1602,6 +1627,7 @@ function portalLogout(){
       body: JSON.stringify({ action:'logout', token: dying }) }).catch(()=>{});
   }
   portalToken = ''; portalClient = null; portalEmail=''; portalPhone='';
+  portalCodeSent = false; portalCode=''; portalBusy=false;
   portalCancellingId = null; portalCancelError = ''; portalCancelBusy = false;
   try{ localStorage.removeItem('heshyPortalToken'); }catch(e){}
   render();
@@ -1624,13 +1650,23 @@ function renderPortal(){
       <div class="topbar"><div class="brand" id="brand-home-link" style="cursor:pointer;">Clarity Session w/ Heshy</div></div>
       <div class="portal-box">
         <h1>My sessions</h1>
-        <div class="note" style="margin-bottom:14px;">Enter both your email and phone number to keep your information private.</div>
-        <label>Email</label>
-        <input type="email" id="portal-email" value="${portalEmail}">
-        <label style="margin-top:12px;">Phone</label>
-        <input type="tel" id="portal-phone" value="${portalPhone}">
-        <div class="card-error">${portalError}</div>
-        <button class="primary" id="portal-go-btn" style="margin-top:14px;">View my sessions</button>
+        ${!portalCodeSent ? `
+          <div class="note" style="margin-bottom:14px;">Enter your email and we'll send you a code.</div>
+          <label>Email</label>
+          <input type="email" id="portal-email" value="${portalEmail}" autocomplete="email">
+          <div class="card-error">${portalError}</div>
+          <button class="primary" id="portal-code-btn" style="margin-top:14px;" ${portalBusy?'disabled':''}>${portalBusy?'Sending…':'Email me a code'}</button>
+        ` : `
+          <div class="note" style="margin-bottom:14px;">If <strong>${esc(portalEmail)}</strong> is on file, a six-digit code is on its way. It works once and expires in ten minutes.</div>
+          <label>Code</label>
+          <input type="text" id="portal-code" value="${esc(portalCode)}" inputmode="numeric" autocomplete="one-time-code" maxlength="6"
+                 style="letter-spacing:0.3em;font-size:19px;text-align:center;max-width:200px;">
+          <div class="card-error">${portalError}</div>
+          <div style="display:flex;gap:10px;align-items:center;margin-top:14px;">
+            <button class="primary" id="portal-verify-btn" ${portalBusy?'disabled':''}>${portalBusy?'Checking…':'View my sessions'}</button>
+            <button class="manage-link" id="portal-restart-btn">Use a different email</button>
+          </div>
+        `}
       </div>
     `;
   }
@@ -2879,16 +2915,24 @@ function attachHandlers(){
   const loginBtn = $('admin-login-btn'); if(loginBtn) loginBtn.onclick = tryAdminLogin;
   const passInput = $('admin-pass');
   if(passInput) passInput.onkeydown = e=>{ if(e.key==='Enter') tryAdminLogin(); };
-  const portalGoBtn = $('portal-go-btn'); if(portalGoBtn) portalGoBtn.onclick = checkPortal;
+  const portalCodeBtn = $('portal-code-btn'); if(portalCodeBtn) portalCodeBtn.onclick = requestPortalCode;
+  const portalVerifyBtn = $('portal-verify-btn'); if(portalVerifyBtn) portalVerifyBtn.onclick = verifyPortalCode;
+  const portalRestartBtn = $('portal-restart-btn');
+  if(portalRestartBtn) portalRestartBtn.onclick = ()=>{ portalCodeSent = false; portalCode=''; portalError=''; render(); };
   const portalEmailInput = $('portal-email');
   if(portalEmailInput){
     portalEmailInput.oninput = e=> portalEmail = e.target.value;
-    portalEmailInput.onkeydown = e=>{ if(e.key==='Enter') checkPortal(); };
+    portalEmailInput.onkeydown = e=>{ if(e.key==='Enter') requestPortalCode(); };
   }
-  const portalPhoneInput = $('portal-phone');
-  if(portalPhoneInput){
-    portalPhoneInput.oninput = e=> portalPhone = e.target.value;
-    portalPhoneInput.onkeydown = e=>{ if(e.key==='Enter') checkPortal(); };
+  const portalCodeInput = $('portal-code');
+  if(portalCodeInput){
+    portalCodeInput.oninput = e=>{
+      portalCode = e.target.value.replace(/\D/g,'').slice(0,6);
+      e.target.value = portalCode;
+      // Six digits is the whole code, so there's nothing to press.
+      if(portalCode.length === 6) verifyPortalCode();
+    };
+    portalCodeInput.onkeydown = e=>{ if(e.key==='Enter') verifyPortalCode(); };
   }
   const portalBookAgainBtn = $('portal-book-again'); if(portalBookAgainBtn) portalBookAgainBtn.onclick = portalBookAgain;
   const brandHomeLink = $('brand-home-link'); if(brandHomeLink) brandHomeLink.onclick = backToClient;
