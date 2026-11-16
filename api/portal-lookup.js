@@ -1,6 +1,7 @@
 import { kv } from '@vercel/kv';
 import Stripe from 'stripe';
 import { randomToken } from './_lib/auth.js';
+import { logError } from './_lib/errorlog.js';
 
 // Converts an Eastern-time wall-clock date+time into the true UTC instant (DST-aware).
 // Vercel servers run UTC; naive parsing skews every time comparison by 4-5 hours.
@@ -130,6 +131,7 @@ async function handleConfirmCardUpdate(req, res) {
     res.status(200).json({ ok: true });
   } catch (err) {
     console.error('Server error:', err);
+    await logError('portal-lookup', err, { method: req.method, action: req.body?.action || req.query?.action });
     res.status(500).json({ error: 'Something went wrong. Please try again.' });
   }
 }
@@ -186,6 +188,7 @@ export default async function handler(req, res) {
     res.status(400).json({ error: 'Unknown or missing action.' });
   } catch (err) {
     console.error('Server error:', err);
+    await logError('portal-lookup', err, { method: req.method, action: req.body?.action || req.query?.action });
     res.status(500).json({ error: 'Something went wrong. Please try again.' });
   }
 }

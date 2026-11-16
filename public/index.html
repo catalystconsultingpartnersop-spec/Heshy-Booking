@@ -490,6 +490,7 @@ async function submitPortalCancel(bookingId){
   }
 }
 let expandedClientId = null;
+let errorEntries = null; // null = not loaded yet
 let viewingClientId = null;
 let editingClientContact = false;
 let clientSearch = '';
@@ -2234,6 +2235,34 @@ function renderAdmin(){
         ${newCoupon.discountType!=='free' ? `<div style="margin-top:10px;max-width:220px;"><label>${newCoupon.discountType==='percent'?'Percent off (e.g. 50)':'Dollar amount off (e.g. 250)'}</label><input type="text" id="coupon-value" value="${newCoupon.discountValue}"></div>` : ''}
         <div style="margin-top:14px;"><button class="ghost small" id="addCouponBtn">Add coupon</button></div>
       </div>
+
+      <div class="admin-block">
+        <h2>Problem log</h2>
+        <div class="note" style="margin-bottom:10px;">Anything that failed on the server &mdash; a booking that didn't save, a charge that didn't go through, an email that didn't send. If a client ever says something went wrong, look here first.</div>
+        ${errorEntries === null
+          ? `<button class="ghost small" id="loadErrorsBtn">Show problem log</button>`
+          : errorEntries.length === 0
+            ? `<div class="empty">Nothing has failed. Good sign.</div>
+               <div style="margin-top:10px;"><button class="ghost small" id="loadErrorsBtn">Refresh</button></div>`
+            : `<div style="font-size:13px;">
+                 ${errorEntries.map(e=>{
+                   const when = new Date(e.at).toLocaleString('en-US',{month:'short',day:'numeric',hour:'numeric',minute:'2-digit'});
+                   const ctx = Object.entries(e.context||{}).map(([k,v])=>`${esc(k)}: ${esc(v)}`).join(' &middot; ');
+                   return `<div style="padding:9px 0;border-bottom:1px solid var(--line);">
+                     <div style="display:flex;justify-content:space-between;gap:12px;">
+                       <span><strong>${esc(e.where)}</strong> &mdash; ${esc(e.message)}</span>
+                       <span class="sub" style="white-space:nowrap;">${when}</span>
+                     </div>
+                     ${ctx?`<div class="sub" style="margin-top:3px;">${ctx}</div>`:''}
+                     ${e.code?`<div class="sub" style="margin-top:3px;">code: ${esc(e.code)}</div>`:''}
+                   </div>`;
+                 }).join('')}
+               </div>
+               <div style="margin-top:12px;display:flex;gap:8px;">
+                 <button class="ghost small" id="loadErrorsBtn">Refresh</button>
+                 <button class="ghost small" id="clearErrorsBtn">Clear</button>
+               </div>`}
+      </div>
     `;
   }
 
@@ -2474,7 +2503,30 @@ function attachHandlers(){
     if(couponMaxEl) couponMaxEl.oninput = e=> newCoupon.maxUses = e.target.value;
     document.querySelectorAll('[data-coupon-discount-type]').forEach(el=>{ el.onclick = ()=>{ newCoupon.discountType = el.getAttribute('data-coupon-discount-type'); render(); }; });
     const couponValueEl = $('coupon-value'); if(couponValueEl) couponValueEl.oninput = e=> newCoupon.discountValue = e.target.value;
-    const addCouponBtn = $('addCouponBtn'); if(addCouponBtn) addCouponBtn.onclick = addCoupon;
+    const loadErrorsBtn = $('loadErrorsBtn');
+  if(loadErrorsBtn) loadErrorsBtn.onclick = async ()=>{
+    loadErrorsBtn.disabled = true; loadErrorsBtn.textContent = 'Loading\u2026';
+    try{
+      const r = await fetch('/api/admin-data?action=error-log', { headers:{ 'X-Admin-Token': adminToken } });
+      const d = await r.json();
+      errorEntries = d.entries || [];
+    }catch(e){ errorEntries = []; }
+    render();
+  };
+  const clearErrorsBtn = $('clearErrorsBtn');
+  if(clearErrorsBtn) clearErrorsBtn.onclick = async ()=>{
+    if(!confirm('Clear the problem log?')) return;
+    try{
+      await fetch('/api/admin-data', {
+        method:'POST',
+        headers:{ 'Content-Type':'application/json', 'X-Admin-Token': adminToken },
+        body: JSON.stringify({ action:'clear-error-log' })
+      });
+      errorEntries = [];
+    }catch(e){}
+    render();
+  };
+  const addCouponBtn = $('addCouponBtn'); if(addCouponBtn) addCouponBtn.onclick = addCoupon;
     document.querySelectorAll('[data-remove-coupon]').forEach(el=>{ el.onclick = ()=>removeCoupon(el.getAttribute('data-remove-coupon')); });
 
     document.querySelectorAll('[data-mark-complete]').forEach(el=>{ el.onclick = ()=>markComplete(el.getAttribute('data-mark-complete')); });

@@ -1,4 +1,5 @@
 import Stripe from 'stripe';
+import { logError } from './_lib/errorlog.js';
 
 const stripe = new Stripe(process.env.STRIPE_SECRET_KEY);
 
@@ -28,6 +29,7 @@ export default async function handler(req, res) {
     });
   } catch (err) {
     console.error('Server error:', err);
+    await logError('create-setup-intent', err, { method: req.method, action: req.body?.action || req.query?.action });
     res.status(500).json({ error: 'Something went wrong. Please try again.' });
   }
 }

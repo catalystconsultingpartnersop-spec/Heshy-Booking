@@ -1,4 +1,5 @@
 import { kv } from '@vercel/kv';
+import { logError } from './_lib/errorlog.js';
 
 // Tells the booking page whether to show the first-time intake questions.
 //
@@ -34,6 +35,7 @@ export default async function handler(req, res) {
     res.status(200).json({ exists: !!client });
   } catch (err) {
     console.error('Server error:', err);
+    await logError('check-client', err, { method: req.method, action: req.body?.action || req.query?.action });
     res.status(500).json({ error: 'Something went wrong. Please try again.' });
   }
 }

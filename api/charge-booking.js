@@ -2,6 +2,7 @@ import Stripe from 'stripe';
 import { kv } from '@vercel/kv';
 import { verifyAdminToken } from './_lib/auth.js';
 import { sendEmail, receiptEmail } from './_lib/email.js';
+import { logError } from './_lib/errorlog.js';
 
 const stripe = new Stripe(process.env.STRIPE_SECRET_KEY);
 
@@ -78,6 +79,7 @@ export default async function handler(req, res) {
     res.status(200).json({ ok: true, amount: amountCents / 100 });
   } catch (err) {
     console.error('Charge error:', err);
+    await logError('charge-booking', err, { bookingId: req.body?.bookingId, amount: req.body?.amount });
     // Surface Stripe's card-decline reason (safe, user-facing) but nothing internal.
     if (err && err.type === 'StripeCardError') {
       return res.status(402).json({ error: 'The card was declined.' });

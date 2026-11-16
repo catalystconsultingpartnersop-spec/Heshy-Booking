@@ -1,4 +1,5 @@
 import { kv } from '@vercel/kv';
+import { logError } from './_lib/errorlog.js';
 
 async function getAccessToken() {
   const refreshToken = await kv.get('google-refresh-token');
@@ -47,6 +48,7 @@ export default async function handler(req, res) {
     res.status(200).json({ connected: true, busy });
   } catch (err) {
     console.error('Server error:', err);
+    await logError('free-busy', err, { method: req.method, action: req.body?.action || req.query?.action });
     res.status(500).json({ error: 'Something went wrong. Please try again.' });
   }
 }

@@ -3,6 +3,7 @@ import { put } from '@vercel/blob';
 import { sendEmail, bookingConfirmationEmail, newBookingAlertEmail } from './_lib/email.js';
 import { APP_TIMEZONE, busyRangesForDate, etDayBounds } from './_lib/time.js';
 import { isRangeAvailable } from './_lib/availability.js';
+import { logError } from './_lib/errorlog.js';
 
 async function getGoogleAccessToken() {
   const refreshToken = await kv.get('google-refresh-token');
@@ -287,6 +288,7 @@ export default async function handler(req, res) {
     res.status(200).json({ ok: true, bookingId: booking.id, meetLink: type === 'virtual' ? booking.meetLink : undefined, location: type === 'in-person' ? resolvedAddress : undefined, comped, couponCode: booking.couponCode, couponDiscount: booking.couponDiscount });
   } catch (err) {
     console.error('Server error:', err);
+    await logError('create-booking', err, { method: req.method, action: req.body?.action || req.query?.action });
     res.status(500).json({ error: 'Something went wrong. Please try again.' });
   }
 }

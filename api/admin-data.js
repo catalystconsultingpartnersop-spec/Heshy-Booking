@@ -3,6 +3,7 @@ import { put } from '@vercel/blob';
 import { verifyAdminToken, randomToken } from './_lib/auth.js';
 import { sendEmail, reminderEmail, dailyDigestEmail, rescheduledEmail } from './_lib/email.js';
 import { checkSlot } from './_lib/availability.js';
+import { logError, readErrors, clearErrors } from './_lib/errorlog.js';
 
 const ADMIN_SESSION_SECONDS = 60 * 60 * 12; // 12 hours
 
@@ -189,6 +190,7 @@ If a section has nothing to report, write "None." under it. Stay factual and con
     res.status(200).json({ ok: true, summary: booking.summary });
   } catch (err) {
     console.error('Server error:', err);
+    await logError('admin-data', err, { method: req.method, action: req.body?.action || req.query?.action });
     res.status(500).json({ error: 'Something went wrong. Please try again.' });
   }
 }
@@ -533,6 +535,13 @@ export default async function handler(req, res) {
 
     if (!(await verifyAdminToken(req))) return res.status(401).json({ error: 'Unauthorized' });
 
+    if (req.body?.action === 'error-log' || req.query?.action === 'error-log') {
+      return res.status(200).json({ entries: await readErrors(60) });
+    }
+    if (req.method === 'POST' && req.body?.action === 'clear-error-log') {
+      await clearErrors();
+      return res.status(200).json({ ok: true });
+    }
     if (req.method === 'POST' && req.body && req.body.action === 'cancel-booking') {
       return handleCancelBooking(req, res);
     }
@@ -563,6 +572,7 @@ export default async function handler(req, res) {
     res.status(405).json({ error: 'Method not allowed' });
   } catch (err) {
     console.error('Server error:', err);
+    await logError('admin-data', err, { method: req.method, action: req.body?.action || req.query?.action });
     res.status(500).json({ error: 'Something went wrong. Please try again.' });
   }
 }

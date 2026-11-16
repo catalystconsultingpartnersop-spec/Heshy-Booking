@@ -1,4 +1,5 @@
 import { kv } from '@vercel/kv';
+import { logError } from './_lib/errorlog.js';
 
 export default async function handler(req, res) {
   try {
@@ -34,6 +35,7 @@ export default async function handler(req, res) {
     res.end();
   } catch (err) {
     console.error('Server error:', err);
+    await logError('google-callback', err, { method: req.method, action: req.body?.action || req.query?.action });
     res.status(500).send('Something went wrong. Please try again.');
   }
 }
