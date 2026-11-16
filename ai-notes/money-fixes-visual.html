@@ -1,0 +1,246 @@
+<title>Billing Fixes Before and After</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<style>
+/* Layout: one change per row — what it does now on the left, what it will do on the right. */
+:root{
+  --bg:#f6f5f2; --surface:#fffefc; --fg:#1b1a18; --muted:#6c6963; --line:#e2dfd8;
+  --bad:#a8392a; --bad-bg:#fbeeeb; --bad-line:#eccfc8;
+  --good:#2f6b4a; --good-bg:#ecf4ef; --good-line:#c9e0d2;
+  --ink:#2b2a27;
+  --fh:'Space Grotesk',ui-sans-serif,system-ui,sans-serif;
+  --fb:'Inter',ui-sans-serif,system-ui,-apple-system,sans-serif;
+}
+@media (prefers-color-scheme:dark){:root:not([data-theme="light"]){
+  --bg:#161719; --surface:#1e2023; --fg:#ebe9e5; --muted:#9a968e; --line:#313438;
+  --bad:#e68a79; --bad-bg:#2c201e; --bad-line:#4a2f2a;
+  --good:#7cbd96; --good-bg:#1b2823; --good-line:#2f4a3b;
+  --ink:#ebe9e5; color-scheme:dark;}}
+:root[data-theme="dark"]{
+  --bg:#161719; --surface:#1e2023; --fg:#ebe9e5; --muted:#9a968e; --line:#313438;
+  --bad:#e68a79; --bad-bg:#2c201e; --bad-line:#4a2f2a;
+  --good:#7cbd96; --good-bg:#1b2823; --good-line:#2f4a3b;
+  --ink:#ebe9e5; color-scheme:dark;}
+
+*{box-sizing:border-box}
+body{background:var(--bg);color:var(--fg);font-family:var(--fb);font-size:15px;line-height:1.5;margin:0;
+  padding-left:max(16px,env(safe-area-inset-left,0px));
+  padding-right:max(16px,env(safe-area-inset-right,0px));
+  padding-block:30px 70px}
+.wrap{max-width:860px;margin:0 auto}
+h1{font-family:var(--fh);font-size:27px;margin:0 0 4px;letter-spacing:-.02em}
+.sub{color:var(--muted);font-size:13.5px;margin:0 0 30px}
+
+.fix{margin-bottom:34px}
+.fix h2{font-family:var(--fh);font-size:17px;margin:0 0 12px;display:flex;gap:9px;align-items:baseline}
+.fix h2 i{font-style:normal;color:var(--muted);font-size:13px;font-variant-numeric:tabular-nums}
+
+.pair{display:grid;grid-template-columns:1fr 1fr;gap:12px}
+@media (max-width:620px){.pair{grid-template-columns:1fr}}
+.side{border:1px solid var(--line);border-radius:9px;padding:14px;min-width:0}
+.side.now{background:var(--bad-bg);border-color:var(--bad-line)}
+.side.next{background:var(--good-bg);border-color:var(--good-line)}
+.tag{font-family:var(--fh);font-size:10.5px;letter-spacing:.11em;text-transform:uppercase;font-weight:600;margin:0 0 10px}
+.now .tag{color:var(--bad)} .next .tag{color:var(--good)}
+.cap{font-size:13px;color:var(--muted);margin:10px 0 0}
+.cap b{color:var(--fg);font-weight:600}
+
+/* little mock of the real Manage controls */
+.ui{background:var(--surface);border:1px solid var(--line);border-radius:7px;padding:11px}
+.ui .lbl{font-size:10.5px;letter-spacing:.07em;text-transform:uppercase;color:var(--muted);margin-bottom:4px}
+.ui .box{border:1px solid var(--line);border-radius:5px;padding:7px 9px;font-size:15px;
+  font-variant-numeric:tabular-nums;background:var(--bg);color:var(--ink)}
+.ui .box.dim{color:var(--muted)}
+.ui .btn{display:inline-block;margin-top:9px;border-radius:5px;padding:7px 13px;font-size:13px;font-weight:600}
+.btn.solid{background:var(--ink);color:var(--bg)}
+.btn.green{background:var(--good);color:#fff}
+.btn.off{background:var(--line);color:var(--muted)}
+.ui .err{font-size:12.5px;color:var(--bad);margin-top:8px}
+.ui .ok{font-size:12.5px;color:var(--good);margin-top:8px}
+.row2{display:flex;gap:9px}.row2>div{flex:1;min-width:0}
+
+.amt{font-family:var(--fh);font-size:30px;font-variant-numeric:tabular-nums;letter-spacing:-.02em;line-height:1.1}
+.now .amt{color:var(--bad)} .next .amt{color:var(--good)}
+.strike{text-decoration:line-through;opacity:.55}
+
+/* stripe customer diagram */
+.diag{display:flex;flex-direction:column;gap:7px;align-items:center;padding:4px 0}
+.person{font-size:12.5px;color:var(--muted)}
+.fan{display:flex;gap:6px;flex-wrap:wrap;justify-content:center}
+.cust{border:1px solid var(--line);background:var(--surface);border-radius:6px;
+  padding:6px 8px;font-size:11px;text-align:center;min-width:62px}
+.cust span{display:block;color:var(--muted);font-size:10px;margin-top:2px}
+.now .cust{border-color:var(--bad-line)} .next .cust{border-color:var(--good-line)}
+.arrows{color:var(--muted);font-size:13px;letter-spacing:.3em}
+
+.foot{border:1px solid var(--line);background:var(--surface);border-radius:9px;padding:15px 17px;margin-top:8px}
+.foot h3{font-family:var(--fh);font-size:12px;letter-spacing:.1em;text-transform:uppercase;color:var(--muted);margin:0 0 8px}
+.foot p{margin:0 0 7px;font-size:13.5px}
+.foot p:last-child{margin-bottom:0}
+.chk{display:flex;gap:8px;align-items:baseline}
+.chk b{color:var(--good)}
+</style>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600&family=Space+Grotesk:wght@500;600&display=swap">
+
+<div class="wrap">
+  <h1>What this deploy changes</h1>
+  <p class="sub">Six billing fixes. Left is today. Right is after.</p>
+
+  <!-- 1 -->
+  <div class="fix">
+    <h2>Fixed-amount coupons <i>has never worked</i></h2>
+    <div class="pair">
+      <div class="side now"><p class="tag">Today</p>
+        <div class="ui">
+          <div class="lbl">Coupon &middot; $250 off</div>
+          <div class="amt">$500</div>
+        </div>
+        <p class="cap">The discount is <b>ignored</b>. Client pays full price.</p>
+      </div>
+      <div class="side next"><p class="tag">After</p>
+        <div class="ui">
+          <div class="lbl">Coupon &middot; $250 off</div>
+          <div class="amt"><span class="strike">$500</span> &rarr; $250</div>
+        </div>
+        <p class="cap">The discount applies.</p>
+      </div>
+    </div>
+  </div>
+
+  <!-- 2 -->
+  <div class="fix">
+    <h2>A session that runs long</h2>
+    <div class="pair">
+      <div class="side now"><p class="tag">Today</p>
+        <div class="ui">
+          <div class="lbl">Booked 60 min &middot; ran 90 min</div>
+          <div class="amt">$500</div>
+        </div>
+        <p class="cap">Bills the <b>booked</b> hour. You lose the half hour.</p>
+      </div>
+      <div class="side next"><p class="tag">After</p>
+        <div class="ui">
+          <div class="lbl">Booked 60 min &middot; ran 90 min</div>
+          <div class="amt">$750</div>
+        </div>
+        <p class="cap">Bills what it actually ran.</p>
+      </div>
+    </div>
+  </div>
+
+  <!-- 3 -->
+  <div class="fix">
+    <h2>A free session</h2>
+    <div class="pair">
+      <div class="side now"><p class="tag">Today</p>
+        <div class="ui">
+          <div class="row2">
+            <div><div class="lbl">Hours</div><div class="box">1</div></div>
+            <div><div class="lbl">Amount</div><div class="box">500.00</div></div>
+          </div>
+          <div class="btn solid">Charge and send receipt</div>
+        </div>
+        <p class="cap">One wrong click <b>bills a comped client $500</b>.</p>
+      </div>
+      <div class="side next"><p class="tag">After</p>
+        <div class="ui">
+          <div class="lbl">Complimentary &middot; TEVLO</div>
+          <div class="row2">
+            <div><div class="lbl">Hours</div><div class="box">1</div></div>
+            <div><div class="lbl">Amount</div><div class="box dim">0.00</div></div>
+          </div>
+          <div class="btn green">Complete at no charge</div>
+        </div>
+        <p class="cap">No amount box. No way to charge it.</p>
+      </div>
+    </div>
+  </div>
+
+  <!-- 4 -->
+  <div class="fix">
+    <h2>Client replacing their card</h2>
+    <div class="pair">
+      <div class="side now"><p class="tag">Today</p>
+        <div class="ui">
+          <div class="lbl">Card number</div>
+          <div class="box dim">&bull;&bull;&bull;&bull; &bull;&bull;&bull;&bull; &bull;&bull;&bull;&bull; &bull;&bull;&bull;&bull;</div>
+          <div class="btn off">Save new card</div>
+          <div class="err">Name and email are required</div>
+        </div>
+        <p class="cap">Fails <b>every time</b>. They have to call you.</p>
+      </div>
+      <div class="side next"><p class="tag">After</p>
+        <div class="ui">
+          <div class="lbl">Card number</div>
+          <div class="box">4242 4242 4242 4242</div>
+          <div class="btn green">Save new card</div>
+          <div class="ok">Saved &middot; used for upcoming sessions</div>
+        </div>
+        <p class="cap">Works, and becomes their default.</p>
+      </div>
+    </div>
+  </div>
+
+  <!-- 5 -->
+  <div class="fix">
+    <h2>One client's cards in Stripe</h2>
+    <div class="pair">
+      <div class="side now"><p class="tag">Today</p>
+        <div class="ui">
+          <div class="diag">
+            <div class="person">Rivka books 4 times</div>
+            <div class="arrows">&darr; &darr; &darr; &darr;</div>
+            <div class="fan">
+              <div class="cust">Customer<span>card A</span></div>
+              <div class="cust">Customer<span>card B</span></div>
+              <div class="cust">Customer<span>card C</span></div>
+              <div class="cust">Customer<span>card D</span></div>
+            </div>
+          </div>
+        </div>
+        <p class="cap">Four records. Sessions charge <b>different cards</b>.</p>
+      </div>
+      <div class="side next"><p class="tag">After</p>
+        <div class="ui">
+          <div class="diag">
+            <div class="person">Rivka books 4 times</div>
+            <div class="arrows">&darr;</div>
+            <div class="fan">
+              <div class="cust">Customer<span>her card</span></div>
+            </div>
+          </div>
+        </div>
+        <p class="cap">One record. One card. Updating it means something.</p>
+      </div>
+    </div>
+  </div>
+
+  <!-- 6 -->
+  <div class="fix">
+    <h2>A coupon that runs out mid-booking</h2>
+    <div class="pair">
+      <div class="side now"><p class="tag">Today</p>
+        <div class="ui">
+          <div class="lbl">Booking confirmed</div>
+          <div class="amt">$500</div>
+          <div class="err">Client believes they got 50% off</div>
+        </div>
+        <p class="cap">Booked <b>silently at full price</b>. They find out on the bill.</p>
+      </div>
+      <div class="side next"><p class="tag">After</p>
+        <div class="ui">
+          <div class="lbl">Not booked</div>
+          <div class="box dim" style="font-size:13px;line-height:1.4;">That code has reached its usage limit. Your card has not been charged.</div>
+          <div class="btn green">Book session</div>
+        </div>
+        <p class="cap">Stops. They choose.</p>
+      </div>
+    </div>
+  </div>
+
+  <div class="foot">
+    <h3>Before it ships</h3>
+    <p class="chk"><b>&#10003;</b> <span>15,520 automated checks pass</span></p>
+    <p class="chk"><b>&#10003;</b> <span>Manage's figure and the charged figure matched across 1,680 combinations</span></p>
+    <p class="chk"><b>&#10003;</b> <span>Nothing in booking, calendar or reminders touched</span></p>
+  </div>
+</div>
