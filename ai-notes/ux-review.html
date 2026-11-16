@@ -1,0 +1,271 @@
+<title>Booking Flow Review</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<style>
+/* Layout: one finding per block — what a client sees now, beside what I'd change it to. */
+:root{
+  --bg:#f6f5f2; --surface:#fffefc; --ink:#1b1a18; --muted:#6c6963; --line:#e2dfd8;
+  --bad:#a8392a; --bad-bg:#fbeeeb; --bad-line:#eccfc8;
+  --good:#2f6b4a; --good-bg:#ecf4ef; --good-line:#c9e0d2;
+  --gold:#8A6D2F; --gold-soft:#FBF6EA; --gold-line:#C9A961;
+  --fh:'Space Grotesk',ui-sans-serif,system-ui,sans-serif;
+  --fb:'Inter',ui-sans-serif,system-ui,-apple-system,sans-serif;
+}
+@media (prefers-color-scheme:dark){:root:not([data-theme="light"]){
+  --bg:#161719; --surface:#1e2023; --ink:#ebe9e5; --muted:#9a968e; --line:#313438;
+  --bad:#e68a79; --bad-bg:#2c201e; --bad-line:#4a2f2a;
+  --good:#7cbd96; --good-bg:#1b2823; --good-line:#2f4a3b;
+  --gold:#d6a85c; --gold-soft:#272117; --gold-line:#4d401f;
+  color-scheme:dark;}}
+:root[data-theme="dark"]{
+  --bg:#161719; --surface:#1e2023; --ink:#ebe9e5; --muted:#9a968e; --line:#313438;
+  --bad:#e68a79; --bad-bg:#2c201e; --bad-line:#4a2f2a;
+  --good:#7cbd96; --good-bg:#1b2823; --good-line:#2f4a3b;
+  --gold:#d6a85c; --gold-soft:#272117; --gold-line:#4d401f;
+  color-scheme:dark;}
+
+*{box-sizing:border-box}
+body{background:var(--bg);color:var(--ink);font-family:var(--fb);font-size:15px;line-height:1.55;margin:0;
+  padding-left:max(16px,env(safe-area-inset-left,0px));
+  padding-right:max(16px,env(safe-area-inset-right,0px));
+  padding-block:30px 70px}
+.wrap{max-width:900px;margin:0 auto}
+h1{font-family:var(--fh);font-size:27px;margin:0 0 4px;letter-spacing:-.02em}
+.sub{color:var(--muted);font-size:13.5px;margin:0 0 30px}
+
+.find{margin-bottom:36px}
+.find h2{font-family:var(--fh);font-size:17px;margin:0 0 4px;display:flex;gap:9px;align-items:baseline}
+.find h2 i{font-style:normal;color:var(--muted);font-size:13px;font-variant-numeric:tabular-nums}
+.sev{display:inline-block;font-size:10px;letter-spacing:.09em;text-transform:uppercase;font-weight:600;
+  border-radius:3px;padding:2px 6px;vertical-align:middle;margin-left:4px}
+.sev.a{background:var(--bad-bg);color:var(--bad);border:1px solid var(--bad-line)}
+.sev.b{background:var(--gold-soft);color:var(--gold);border:1px solid var(--gold-line)}
+.why{color:var(--muted);font-size:13.5px;margin:0 0 13px;max-width:62ch}
+
+.pair{display:grid;grid-template-columns:1fr 1fr;gap:12px}
+@media (max-width:660px){.pair{grid-template-columns:1fr}}
+.side{border:1px solid var(--line);border-radius:9px;padding:14px;min-width:0}
+.side.now{background:var(--bad-bg);border-color:var(--bad-line)}
+.side.next{background:var(--good-bg);border-color:var(--good-line)}
+.tag{font-family:var(--fh);font-size:10.5px;letter-spacing:.11em;text-transform:uppercase;font-weight:600;margin:0 0 10px}
+.now .tag{color:var(--bad)} .next .tag{color:var(--good)}
+
+/* mock of the real booking UI */
+.ui{background:var(--surface);border:1px solid var(--line);border-radius:7px;padding:12px}
+.cal{display:grid;grid-template-columns:repeat(7,1fr);gap:4px;margin-bottom:9px}
+.cal div{border:1px solid var(--line);border-radius:4px;text-align:center;padding:6px 2px;font-size:11px;
+  font-variant-numeric:tabular-nums;background:var(--bg)}
+.cal div.on{background:var(--ink);color:var(--bg);border-color:var(--ink)}
+.cal div small{display:block;font-size:8.5px;opacity:.75}
+.more{display:inline-block;border:1px solid var(--line);border-radius:5px;padding:5px 10px;font-size:11.5px;
+  background:var(--bg);color:var(--muted)}
+.slot{border:1px solid var(--line);border-radius:5px;padding:8px 11px;background:var(--bg);
+  display:inline-block;font-size:13px;text-align:center;min-width:92px}
+.slot b{display:block;font-size:14px}
+.slot span{font-size:10.5px;color:var(--muted)}
+.daylabel{font-size:11px;letter-spacing:.08em;text-transform:uppercase;color:var(--muted);
+  font-weight:600;margin:2px 0 7px}
+.rowline{display:flex;justify-content:space-between;font-size:13px;padding:5px 0;border-bottom:1px solid var(--line)}
+.rowline:last-child{border-bottom:none}
+.rowline b{font-weight:600}
+.big{font-family:var(--fh);font-size:21px;font-variant-numeric:tabular-nums}
+.cap{font-size:13px;color:var(--muted);margin:10px 0 0}
+.cap b{color:var(--ink);font-weight:600}
+.lenrow{display:flex;gap:6px}
+.lenrow div{flex:1;border:1px solid var(--line);border-radius:5px;padding:8px 4px;text-align:center;
+  font-size:11.5px;background:var(--bg);min-width:0}
+.lenrow div.on{background:var(--ink);color:var(--bg);border-color:var(--ink)}
+.lenrow div small{display:block;font-size:10px;opacity:.8;margin-top:1px}
+
+.verdict{border:1px solid var(--line);background:var(--surface);border-radius:9px;padding:16px 18px;margin-bottom:30px}
+.verdict p{margin:0;font-size:14px}
+.verdict p + p{margin-top:9px}
+.foot{border:1px solid var(--line);background:var(--surface);border-radius:9px;padding:15px 17px;margin-top:10px}
+.foot h3{font-family:var(--fh);font-size:12px;letter-spacing:.1em;text-transform:uppercase;color:var(--muted);margin:0 0 9px}
+.foot p{margin:0 0 7px;font-size:13.5px}
+.foot p:last-child{margin-bottom:0}
+</style>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600&family=Space+Grotesk:wght@500;600&display=swap">
+
+<div class="wrap">
+  <h1>Booking flow, from a client's side</h1>
+  <p class="sub">Walked end to end on desktop and phone, using your real availability and settings.</p>
+
+  <div class="verdict">
+    <p><strong>It's good.</strong> Clean, calm, fast, no clutter. On a phone nothing overflows and nothing is cramped. A client who knows who you are can book in about twenty seconds.</p>
+    <p>Seven things I'd change. Two are small bugs, three are about money and clarity, two are judgement calls for you.</p>
+  </div>
+
+  <!-- 1 -->
+  <div class="find">
+    <h2>The time you're meant to pick is in the wrong place <span class="sev a">Bug</span></h2>
+    <p class="why">After choosing a day, the available time appears <em>below</em> the "Show more dates" button. The one thing you must do next sits under a secondary action, looking like a leftover. There's also nothing saying which day those times belong to.</p>
+    <div class="pair">
+      <div class="side now"><p class="tag">Today</p>
+        <div class="ui">
+          <div class="cal">
+            <div>16</div><div class="on">17<small>1 open</small></div><div>18<small>1 open</small></div>
+            <div>19<small>2 open</small></div><div>20<small>1 open</small></div><div>21</div><div>22<small>1 open</small></div>
+          </div>
+          <span class="more">Show more dates</span>
+          <div style="margin-top:8px;"><span class="slot"><b>1:00 PM</b><span>60 min</span></span></div>
+        </div>
+        <p class="cap">The time hides <b>under</b> a secondary button.</p>
+      </div>
+      <div class="side next"><p class="tag">Suggested</p>
+        <div class="ui">
+          <div class="cal">
+            <div>16</div><div class="on">17<small>1 open</small></div><div>18<small>1 open</small></div>
+            <div>19<small>2 open</small></div><div>20<small>1 open</small></div><div>21</div><div>22<small>1 open</small></div>
+          </div>
+          <div class="daylabel">Tuesday, Nov 17</div>
+          <div><span class="slot"><b>1:00 PM</b><span>60 min</span></span></div>
+          <div style="margin-top:10px;"><span class="more">Show more dates</span></div>
+        </div>
+        <p class="cap">Times straight under the calendar, <b>labelled with the day</b>.</p>
+      </div>
+    </div>
+  </div>
+
+  <!-- 2 -->
+  <div class="find">
+    <h2>Times don't say Eastern where it matters <span class="sev a">Bug</span></h2>
+    <p class="why">I added the timezone label to the summary rows, but not to the time buttons &mdash; which is exactly where an out-of-town client is choosing. Someone in Chicago picks "1:00 PM" believing it's their 1:00.</p>
+    <div class="pair">
+      <div class="side now"><p class="tag">Today, seen from Chicago</p>
+        <div class="ui"><span class="slot"><b>1:00 PM</b><span>60 min</span></span></div>
+        <p class="cap">Reads as <b>their</b> 1:00. It's noon for them.</p>
+      </div>
+      <div class="side next"><p class="tag">Suggested</p>
+        <div class="ui"><span class="slot" style="min-width:104px;"><b>1:00 PM ET</b><span>60 min</span></span></div>
+        <p class="cap">A New York client never sees "ET" &mdash; only people outside it do.</p>
+      </div>
+    </div>
+  </div>
+
+  <!-- 3 -->
+  <div class="find">
+    <h2>No price until step 2, and never a total <span class="sev a">Money</span></h2>
+    <p class="why">Step 1 offers 45, 60 and 120 minutes with no cost shown at all. Step 2 says "$500/hour" and leaves the client to multiply. Discovering that the extended session is $1,000 by doing arithmetic on a payment page is the moment people abandon.</p>
+    <div class="pair">
+      <div class="side now"><p class="tag">Today</p>
+        <div class="ui">
+          <div class="lenrow"><div>45 min</div><div class="on">60 min<small>standard</small></div><div>120 min<small>extended</small></div></div>
+          <div style="margin-top:10px;" class="rowline"><span>Rate</span><b>$500/hour</b></div>
+          <div class="rowline"><span>Charged</span><b style="font-size:12px;">After, for at least 60 min</b></div>
+        </div>
+        <p class="cap">The client works out the real number themselves.</p>
+      </div>
+      <div class="side next"><p class="tag">Suggested</p>
+        <div class="ui">
+          <div class="lenrow"><div>45 min<small>$375</small></div><div class="on">60 min<small>$500</small></div><div>120 min<small>$1,000</small></div></div>
+          <div style="margin-top:10px;" class="rowline"><span>This session</span><span class="big">$500</span></div>
+          <div class="rowline"><span>Charged</span><b style="font-size:12px;">After, for at least 60 min</b></div>
+        </div>
+        <p class="cap">No surprises, and no arithmetic.</p>
+      </div>
+    </div>
+  </div>
+
+  <!-- 4 -->
+  <div class="find">
+    <h2>Nothing tells a new client what this is <span class="sev b">Judgement</span></h2>
+    <p class="why">The page goes from your name straight to Online / In person. For someone sent by a friend who said "talk to Heshy", there's nothing that says what a clarity session is or what happens in one. Fine for a warm referral who already knows. Costly for anyone less sure.</p>
+    <div class="pair">
+      <div class="side now"><p class="tag">Today</p>
+        <div class="ui">
+          <div style="font-family:Georgia,serif;font-size:19px;">Book a session</div>
+          <div style="margin-top:9px;" class="lenrow"><div class="on">Online</div><div>In person</div></div>
+        </div>
+        <p class="cap">Straight to the controls.</p>
+      </div>
+      <div class="side next"><p class="tag">Suggested</p>
+        <div class="ui">
+          <div style="font-family:Georgia,serif;font-size:19px;">Book a session</div>
+          <div style="font-size:12.5px;color:var(--muted);margin:7px 0 10px;">An hour to think out loud with someone who asks the right questions. Most people come in with a knot and leave with a next step.</div>
+          <div class="lenrow"><div class="on">Online</div><div>In person</div></div>
+        </div>
+        <p class="cap">One line. Your words, not mine &mdash; that's a placeholder.</p>
+      </div>
+    </div>
+  </div>
+
+  <!-- 5 -->
+  <div class="find">
+    <h2>Quick Check-in takes prime space from everyone <span class="sev b">Judgement</span></h2>
+    <p class="why">It sits between session length and the calendar, in a gold box, for every visitor &mdash; including first-timers who aren't eligible for it. It's the most visually prominent thing on the page after the title.</p>
+    <div class="pair">
+      <div class="side now"><p class="tag">Today, first-time visitor</p>
+        <div class="ui">
+          <div style="font-size:10.5px;letter-spacing:.09em;color:var(--muted);text-align:center;margin-bottom:6px;">FOR RETURNING CLIENTS</div>
+          <div style="border:1px solid var(--gold-line);background:var(--gold-soft);border-radius:6px;padding:11px 13px;">
+            <div style="font-weight:600;color:var(--gold);">Quick Check-in</div>
+            <div style="font-size:11.5px;color:var(--gold);">15-min phone call &middot; for clients who've worked with Heshy before</div>
+          </div>
+        </div>
+        <p class="cap">Shown to people who <b>can't use it</b>.</p>
+      </div>
+      <div class="side next"><p class="tag">Suggested</p>
+        <div class="ui">
+          <div style="font-size:12.5px;color:var(--muted);">
+            Worked with Heshy before?
+            <a href="#" style="color:var(--ink);">Book a 15-min check-in instead</a>
+          </div>
+        </div>
+        <p class="cap">A quiet line. It expands into the full card when tapped.</p>
+      </div>
+    </div>
+  </div>
+
+  <!-- 6 -->
+  <div class="find">
+    <h2>Today is greyed out with no explanation <span class="sev b">Small</span></h2>
+    <p class="why">The current date shows faded with no availability count. A client sees today has nothing and may assume you're fully booked, when it's really your 12-hour notice period.</p>
+    <div class="pair">
+      <div class="side now"><p class="tag">Today</p>
+        <div class="ui"><div class="cal" style="grid-template-columns:repeat(4,1fr);"><div style="opacity:.45;">16</div><div class="on">17<small>1 open</small></div><div>18<small>1 open</small></div><div>19<small>2 open</small></div></div></div>
+        <p class="cap">Looks like you're <b>booked solid</b>.</p>
+      </div>
+      <div class="side next"><p class="tag">Suggested</p>
+        <div class="ui">
+          <div class="cal" style="grid-template-columns:repeat(4,1fr);"><div style="opacity:.45;">16</div><div class="on">17<small>1 open</small></div><div>18<small>1 open</small></div><div>19<small>2 open</small></div></div>
+          <div style="font-size:11.5px;color:var(--muted);margin-top:6px;">Sessions need at least 12 hours' notice.</div>
+        </div>
+        <p class="cap">One line removes the wrong conclusion.</p>
+      </div>
+    </div>
+  </div>
+
+  <!-- 7 -->
+  <div class="find">
+    <h2>The form grows as you fill it in <span class="sev b">Small</span></h2>
+    <p class="why">Your two intake questions and the assessment note only appear once an email is typed and recognised as new. It works, but the page visibly gets longer the further you get, which reads as "this is taking a while".</p>
+    <div class="pair">
+      <div class="side now"><p class="tag">Today</p>
+        <div class="ui">
+          <div class="rowline"><span>Name</span><span style="color:var(--muted);">&mdash;</span></div>
+          <div class="rowline"><span>Email</span><span style="color:var(--muted);">&mdash;</span></div>
+          <div class="rowline"><span>Phone</span><span style="color:var(--muted);">&mdash;</span></div>
+          <div style="font-size:11.5px;color:var(--muted);margin-top:8px;">&hellip;then two more questions appear</div>
+        </div>
+        <p class="cap">Length is a surprise.</p>
+      </div>
+      <div class="side next"><p class="tag">Suggested</p>
+        <div class="ui">
+          <div style="font-size:11px;letter-spacing:.08em;color:var(--muted);margin-bottom:6px;">A FEW DETAILS &middot; 2 MIN</div>
+          <div class="rowline"><span>Name</span><span style="color:var(--muted);">&mdash;</span></div>
+          <div class="rowline"><span>Email</span><span style="color:var(--muted);">&mdash;</span></div>
+          <div class="rowline"><span>Phone</span><span style="color:var(--muted);">&mdash;</span></div>
+          <div style="font-size:11.5px;color:var(--muted);margin-top:8px;">First time? Two quick questions follow.</div>
+        </div>
+        <p class="cap">Say up front that it's short, and that more is coming.</p>
+      </div>
+    </div>
+  </div>
+
+  <div class="foot">
+    <h3>What I checked</h3>
+    <p>Desktop at 900px and iPhone 13, with your real availability, rate and intake questions.</p>
+    <p>No layout breaks, no horizontal scrolling on phone, no script errors anywhere in the flow.</p>
+    <p>Keyboard-only booking works: calendar &rarr; time &rarr; step 2 without a mouse.</p>
+  </div>
+</div>
