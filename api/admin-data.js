@@ -328,16 +328,25 @@ async function handleCleanupLargePdfs(req, res) {
   const target = (data.clients || []).find(c => c.wgPdfData && c.wgPdfData.startsWith('data:'));
   if (!target) return res.status(200).json({ ok: true, migrated: null, remaining: 0 });
   let status;
+  let migrated = false;
   try {
     const base64 = target.wgPdfData.split(',')[1];
     const buffer = Buffer.from(base64, 'base64');
     const safeName = (target.wgPdfName || 'working-genius.pdf').replace(/[^a-zA-Z0-9._-]/g, '_');
     const blob = await put('wg-pdfs/' + Date.now() + '-' + safeName, buffer, { access: 'public', contentType: 'application/pdf' });
+    if (!blob || !blob.url) throw new Error('Storage did not return a url for the uploaded file.');
     target.wgPdfData = blob.url;
+    migrated = true;
     status = 'migrated to Blob storage';
   } catch (e) {
-    target.wgPdfData = '';
-    status = 'could not migrate, PDF removed (re-upload manually): ' + e.message;
+    // This used to clear the original and save anyway, so a momentary storage failure
+    // permanently destroyed the only copy of a client's report. The original is now kept
+    // exactly as it was and the move simply reported as not done.
+    status = 'could not move it this time, so the original has been left untouched: ' + e.message;
+  }
+  if (!migrated) {
+    const remainingNow = (data.clients || []).filter(c => c.wgPdfData && c.wgPdfData.startsWith('data:')).length;
+    return res.status(200).json({ ok: false, migrated: { client: target.name, status }, remaining: remainingNow });
   }
   await mutate(fresh => {
     const c = (fresh.clients || []).find(x => x.id === target.id);

@@ -5,6 +5,7 @@ import { APP_TIMEZONE, busyRangesForDate, etDayBounds } from './_lib/time.js';
 import { isRangeAvailable } from './_lib/availability.js';
 import { logError } from './_lib/errorlog.js';
 import { redeemSetupToken } from './_lib/stripecustomer.js';
+import { randomUUID } from 'crypto';
 import { issueScopedToken } from './_lib/auth.js';
 import { mutate, SKIP_WRITE } from './_lib/store.js';
 import { limited, checkBookingFields, checkDataUrl, MAX_PDF_BYTES } from './_lib/limits.js';
@@ -60,7 +61,11 @@ function resolveAddress(data, date) {
 }
 
 function uid() {
-  return Math.random().toString(36).slice(2, 10);
+  // Was an 8-character Math.random() value. At a few thousand records a collision is unlikely
+  // but not negligible, and two records sharing an id is the kind of fault that looks like
+  // data loss. randomUUID is from the operating system's random source and cannot collide in
+  // any practical sense.
+  return randomUUID();
 }
 
 // Compute date/time after adding minutes, using UTC arithmetic purely as scratch

@@ -542,7 +542,17 @@ let selectedDashboardDate = null;
 let dashboardStatFilter = null;
 function selectAdminType(t){ adminType = t; selectedScheduleDate = null; render(); }
 
-function uid(){ return Math.random().toString(36).slice(2,10); }
+// Ids for rules, one-off dates and coupons. Was an 8-character Math.random() value, which can
+// collide; two records sharing an id looks exactly like one of them having vanished.
+function uid(){
+  try{ if(crypto && crypto.randomUUID) return crypto.randomUUID(); }catch(e){}
+  // Older browsers: still 128 bits of real randomness, just assembled by hand.
+  try{
+    const b = new Uint8Array(16); crypto.getRandomValues(b);
+    return Array.from(b, x=>x.toString(16).padStart(2,'0')).join('');
+  }catch(e){}
+  return 'id-' + Date.now().toString(36) + '-' + Math.random().toString(36).slice(2,10);
+}
 function intakeRegionHtml(){
   const checked = clientForm.checkedEmail === clientForm.email && clientForm.email;
   const isBlocked = !!(checked && clientForm.blocked);
@@ -1552,6 +1562,12 @@ async function resumePortalSession(){
   }catch(e){ /* if this fails, they just see the normal login form */ }
 }
 function portalLogout(){
+  // Tell the server to end the session too, not just forget it here.
+  const dying = portalToken;
+  if(dying){
+    fetch('/api/portal-lookup', { method:'POST', headers:{ 'Content-Type':'application/json' },
+      body: JSON.stringify({ action:'logout', token: dying }) }).catch(()=>{});
+  }
   portalToken = ''; portalClient = null; portalEmail=''; portalPhone='';
   portalCancellingId = null; portalCancelError = ''; portalCancelBusy = false;
   try{ localStorage.removeItem('heshyPortalToken'); }catch(e){}

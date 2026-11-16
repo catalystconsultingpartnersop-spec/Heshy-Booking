@@ -5,6 +5,8 @@ import { mutate, SKIP_WRITE } from './_lib/store.js';
 import { logError } from './_lib/errorlog.js';
 import { stripe, resolveCustomer, setDefaultCard } from './_lib/stripecustomer.js';
 
+const PORTAL_SESSION_SECONDS = 60 * 60 * 24 * 14; // 14 days
+
 // Converts an Eastern-time wall-clock date+time into the true UTC instant (DST-aware).
 // Vercel servers run UTC; naive parsing skews every time comparison by 4-5 hours.
 function etToUtc(date, time) {
@@ -98,7 +100,10 @@ async function handleLogin(req, res) {
   await kv.del(failKey);
 
   const token = randomToken();
-  await kv.set('portal-session:' + token, client.id, { ex: 60 * 60 * 24 * 60 }); // 60 days
+  // Was 60 days. A portal session shows a client's history and can cancel their sessions, and
+  // it lives in browser storage on whatever device they used — often a shared one. 14 days is
+  // long enough that nobody is forever signing in, short enough that an old copy stops working.
+  await kv.set('portal-session:' + token, client.id, { ex: PORTAL_SESSION_SECONDS });
 
   const summary = clientSummary(client, data.bookings || [], data.settings);
   res.status(200).json({ ...summary, token });
@@ -289,6 +294,13 @@ export default async function handler(req, res) {
     // Backward-compatible plain GET-by-email is intentionally removed — every path now requires
     // the phone match (login) or a valid session token, closing the "just an email" exposure.
     if (req.method === 'POST' && req.body?.action === 'login') return handleLogin(req, res);
+    if (req.method === 'POST' && req.body?.action === 'logout') {
+      // Logging out used to clear the browser's copy only; the server token stayed valid for
+      // the rest of its life, so a copied link or a shared device still worked.
+      const t = req.body.token;
+      if (t) await kv.del('portal-session:' + t);
+      return res.status(200).json({ ok: true });
+    }
     if (req.body?.action === 'session' || req.query?.action === 'session') return handleSession(req, res);
     if (req.method === 'POST' && req.body?.action === 'save-strengths') return handleSaveStrengths(req, res);
     if (req.method === 'POST' && req.body?.action === 'start-card-update') return handleStartCardUpdate(req, res);
