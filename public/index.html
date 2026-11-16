@@ -103,6 +103,24 @@
   .day-cell .dcount{font-size:10.5px;color:var(--muted);margin-top:2px;}
   .day-cell.active .dcount{color:#BEBEBE;}
   .time-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:8px;}
+  .qci-line{
+    margin:20px 0 22px;font-size:13px;color:var(--muted);
+  }
+  .qci-link{
+    font:inherit;font-size:13px;background:none;border:none;padding:0;cursor:pointer;
+    color:var(--ink);text-decoration:underline;text-underline-offset:3px;
+  }
+  .qci-link:hover{color:#8A6D2F;}
+  .slot-day-label{
+    font-size:11.5px;letter-spacing:.09em;text-transform:uppercase;color:var(--muted);
+    font-weight:600;margin:16px 0 8px;
+  }
+  /* Deliberately quiet: it's a clarification, not part of the time. */
+  .time-cell .tz{
+    font-size:9.5px;letter-spacing:.06em;color:var(--muted);margin-left:3px;
+    vertical-align:baseline;font-weight:500;
+  }
+  .time-cell.selected .tz{color:inherit;opacity:.65;}
   .time-cell{
     border:1px solid var(--line-strong);border-radius:6px;padding:12px 10px;cursor:pointer;text-align:center;
   }
@@ -256,6 +274,14 @@
   }
   .slot-list-wrap{margin-top:24px;border-top:1px solid var(--line);}
   .slot-day-row{padding:12px 0;border-bottom:1px solid var(--line);}
+  .qci-line{
+    margin:20px 0 22px;font-size:13px;color:var(--muted);
+  }
+  .qci-link{
+    font:inherit;font-size:13px;background:none;border:none;padding:0;cursor:pointer;
+    color:var(--ink);text-decoration:underline;text-underline-offset:3px;
+  }
+  .qci-link:hover{color:#8A6D2F;}
   .slot-day-label{font-size:12.5px;font-weight:600;color:var(--muted);margin-bottom:8px;}
   .slot-chip-row{display:flex;flex-wrap:wrap;gap:6px;}
   .slot-chip{
@@ -438,6 +464,7 @@ let strengthsResult = null;
 let strengthsError = '';
 let strengthsInviteToken = null;   // handed out on the confirmation screen
 let strengthsFrom = 'client';      // where Close returns to
+let qciExpanded = false;           // Quick Check-in starts as a quiet line, not a card
 let confirmationSent = true;       // did the confirmation email actually go out?
 let selectedDuration = 60;
 let selectedStartTime = null;
@@ -914,6 +941,7 @@ function resolveLocation(ds, type){
 
 function selectDay(d){ selectedDay = d; selectedStartTime = null; render(); }
 function selectType(t){
+  if(t !== 'virtual') qciExpanded = false;
   selectedType = t;
   // Quick Check-in is a phone call, so it can't survive a switch to In person. Without this the
   // 15-minute selection stayed active and offered a combination that isn't actually available.
@@ -1700,19 +1728,27 @@ function renderClient(){
       inner += `<div style="margin-top:10px;margin-bottom:24px;font-size:12.5px;color:var(--muted);font-style:italic;">Need more than ${longestOffered} min? Book the ${longestOffered}-min session &mdash; we'll sort out the rest together once we're talking.</div>`;
     }
     if(selectedType==='virtual'){
-      inner += `<div class="divider-label">For returning clients</div>`;
-      inner += `<div class="qci-card ${selectedDuration===15?'active':''}" data-duration="15">
-        <div class="qci-top">
-          <div class="qci-row">
-            <div class="qci-radio"></div>
-            <div>
-              <div class="qci-title">Quick Check-in</div>
-              <div class="qci-sub">15-min phone call &middot; for clients who've worked with Heshy before</div>
+      // This used to sit here as a full gold card for every visitor, including first-timers who
+      // aren't eligible for it — the most prominent thing on the page after the title. It's now
+      // a quiet line that opens into the card when someone says it applies to them.
+      const qciOpen = qciExpanded || selectedDuration===15;
+      if(!qciOpen){
+        inner += `<div class="qci-line">Worked with Heshy before? <button class="qci-link" id="qciShow">Book a 15-min check-in instead</button></div>`;
+      } else {
+        inner += `<div class="divider-label">For returning clients</div>`;
+        inner += `<div class="qci-card ${selectedDuration===15?'active':''}" data-duration="15">
+          <div class="qci-top">
+            <div class="qci-row">
+              <div class="qci-radio"></div>
+              <div>
+                <div class="qci-title">Quick Check-in</div>
+                <div class="qci-sub">15-min phone call &middot; for clients who've worked with Heshy before</div>
+              </div>
             </div>
+            <div class="qci-badge">15 min</div>
           </div>
-          <div class="qci-badge">15 min</div>
-        </div>
-      </div>`;
+        </div>`;
+      }
     }
     // Find the next ~56 days that have at least one valid start time for the chosen type+duration.
     const candidateDates = [];
@@ -1742,15 +1778,20 @@ function renderClient(){
         }
       }
       const dayTimes = (candidateDates.find(c=>c.date===selectedDay) || {times:[]}).times;
+      if(selectedDay && dayTimes.length){
+        // Say which day these times belong to. There was nothing connecting them to the calendar.
+        inner += `<div class="slot-day-label">${fmtDate(selectedDay)}</div>`;
+      }
       inner += `<div class="time-grid">`;
       dayTimes.forEach(t=>{
         const sel = selectedStartTime===t ? 'selected' : '';
         inner += `<div class="time-cell ${sel}" data-start-time="${t}">
-          <div class="time">${fmtTime(t)}</div>
+          <div class="time">${fmtTime(t)}${VIEWER_IN_ET ? '' : '<span class="tz">ET</span>'}</div>
           <div class="format">${selectedDuration} min</div>
         </div>`;
       });
       inner += `</div>`;
+      inner += renderCalendarNav();
       inner += `<div class="btn-row"><button class="primary" id="toStep2" ${selectedStartTime?'':'disabled'}>Continue</button></div>`;
     }
   } else if(bookingStep===2){
@@ -1770,6 +1811,11 @@ function renderClient(){
       ${isQuickCheckin ? `<div class="qci-notice">You don't need to call in &mdash; Heshy will call you directly at ${fmtTime(selectedStartTime)}. If he can't reach you, he'll try again about a minute later. If there's still no answer and the session hasn't been cancelled ahead of time, it will still be billed for the ${selectedDuration} minutes reserved.</div>` : ''}
       <div class="form-section">
         <div class="section-title">Contact</div>
+        <div class="note" style="margin-top:-4px;margin-bottom:12px;">
+          ${clientForm.isNew === false
+            ? 'Welcome back &mdash; just confirm these and you\'re done.'
+            : 'Three details and your card. If this is your first session, two short questions follow.'}
+        </div>
         <label>Name <span class="required-mark">*</span></label>
         <input type="text" id="f-name" value="${esc(clientForm.name)}">
         <label>Email <span class="required-mark">*</span></label>
@@ -1919,12 +1965,20 @@ function renderClientCalendar(candidateDates){
     </div>`;
   }
 
+  // Grid only. "Show more dates" used to be appended here, which put it between the calendar
+  // and the times — so the one thing a client needs to do next sat below a secondary button.
+  // The caller places renderCalendarNav() after the times instead.
   return `
     <div class="cal-grid-sm">
       ${['S','M','T','W','T','F','S'].map(d=>`<div class="cal-dow-sm">${d}</div>`).join('')}
       ${cells}
     </div>
-    <div style="display:flex;gap:14px;align-items:center;margin-top:10px;">
+  `;
+}
+
+function renderCalendarNav(){
+  return `
+    <div style="display:flex;gap:14px;align-items:center;margin-top:16px;">
       <button class="ghost small" id="clientCalShowMore">Show more dates</button>
       ${clientCalWeeksShown > 2 ? `<button class="ghost small" id="clientCalShowFewer">Show fewer dates</button>` : ''}
     </div>
@@ -2771,6 +2825,8 @@ function makeControlsFocusable(){
 
 function attachHandlers(){
   if(view==='strengths'){ attachStrengthsHandlers(); return; }
+  const qciShow = document.getElementById('qciShow');
+  if(qciShow) qciShow.onclick = ()=>{ qciExpanded = true; render(); };
   const startStrengths = document.getElementById('confirm-start-strengths');
   if(startStrengths) startStrengths.onclick = ()=> openStrengths('client', strengthsInviteToken);
   const $ = id => document.getElementById(id);

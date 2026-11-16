@@ -62,5 +62,29 @@ for (const cls of ['type-btn', 'cal-cell-sm', 'time-cell', 'qci-card']) {
   check(`"${cls}" is a class the page actually renders`, new RegExp(`class="[^"]*${cls}`).test(html));
 }
 
+// --- the booking-flow review fixes -------------------------------------------------------------
+// 1. The chosen day's times must come before "Show more dates", with the day named.
+const stepOne = html.slice(html.indexOf('renderClientCalendar(candidateDates)'), html.indexOf('id="toStep2"'));
+check('times are rendered before the show-more nav',
+      stepOne.indexOf('time-grid') < stepOne.indexOf('renderCalendarNav()'));
+check('the calendar no longer carries the nav itself',
+      !/cal-grid-sm[\s\S]{0,300}?Show more dates/.test(html));
+check('the times are labelled with the day', /slot-day-label/.test(html) && /fmtDate\(selectedDay\)/.test(html));
+
+// 2. The ET mark belongs on the time buttons, and only for people outside Eastern.
+check('time buttons carry an ET mark', /VIEWER_IN_ET \? '' : '<span class="tz">ET<\/span>'/.test(html));
+check('...styled small and quiet', /\.time-cell \.tz\{[\s\S]{0,120}font-size:9\.5px/.test(html));
+
+// 5. Quick Check-in starts collapsed.
+check('Quick Check-in starts as a line, not a card', /qciExpanded = false/.test(html));
+check('...with a link that opens it', /id="qciShow"/.test(html));
+check('...which is still shown expanded once chosen', /qciExpanded \|\| selectedDuration===15/.test(html));
+check('...and collapses again when switching away from online', /if\(t !== 'virtual'\) qciExpanded = false/.test(html));
+
+// 7. The details form says how long it is.
+check('the details form sets expectations', /two short questions follow/.test(html));
+check('...and greets returning clients differently', /Welcome back/.test(html));
+
 console.log(`\n${pass} passed, ${fail} failed`);
 if (fail) { console.log('\nFAILURES:\n' + failures.map(f => '  ' + f).join('\n')); process.exit(1); }
+
