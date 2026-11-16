@@ -5,6 +5,8 @@ import { sendEmail, reminderEmail, dailyDigestEmail, rescheduledEmail, strengths
 import { checkSlot } from './_lib/availability.js';
 import { logError, readErrors, clearErrors, logAgentAccess, readAgentLog } from './_lib/errorlog.js';
 import { buildSummary, buildDetail } from './_lib/diagnostics.js';
+import { mutate, SKIP_WRITE } from './_lib/store.js';
+import { validateAppData } from './_lib/schema.js';
 
 const ADMIN_SESSION_SECONDS = 60 * 60 * 12; // 12 hours
 
@@ -144,7 +146,12 @@ async function handleFinalizeRecording(req, res) {
     booking.actualMinutes = Math.max(booking.actualMinutes || 0, segmentsSum);
 
     if (!transcript) {
-      await kv.set('app-data', data);
+      await mutate(fresh => {
+        const b = (fresh.bookings || []).find(x => x.id === booking.id);
+        if (!b) return SKIP_WRITE;
+        b.recordingSegments = booking.recordingSegments;
+        b.actualMinutes = booking.actualMinutes;
+      });
       await kv.del(key);
       return res.status(200).json({ ok: true, summary: booking.summary || '', note: 'No speech was detected in this segment, but the time was still logged.' });
     }
@@ -186,7 +193,14 @@ If a section has nothing to report, write "None." under it. Stay factual and con
     const clientVersion = await generateClientFacingSummary(booking.summary);
     if (clientVersion) booking.clientSummary = clientVersion;
 
-    await kv.set('app-data', data);
+    await mutate(fresh => {
+      const b = (fresh.bookings || []).find(x => x.id === booking.id);
+      if (!b) return SKIP_WRITE;
+      b.recordingSegments = booking.recordingSegments;
+      b.actualMinutes = booking.actualMinutes;
+      b.summary = booking.summary;
+      if (clientVersion) b.clientSummary = booking.clientSummary;
+    });
     await kv.del(key);
     res.status(200).json({ ok: true, summary: booking.summary });
   } catch (err) {
@@ -267,7 +281,17 @@ async function handleDailyDigestAndReminders(req, res) {
       reminderFailures.push({ bookingId: booking.id, client: booking.clientName });
     }
   }
-  if (remindersSent > 0) await kv.set('app-data', data);
+  if (remindersSent > 0) {
+    const sentIds = (data.bookings || []).filter(b => b.reminderSent && b.reminderSentAt).map(b => ({ id: b.id, at: b.reminderSentAt }));
+    await mutate(fresh => {
+      let touched = 0;
+      for (const { id, at } of sentIds) {
+        const b = (fresh.bookings || []).find(x => x.id === id);
+        if (b && !b.reminderSent) { b.reminderSent = true; b.reminderSentAt = at; touched++; }
+      }
+      if (!touched) return SKIP_WRITE;
+    });
+  }
 
   if (reminderFailures.length) {
     console.error('Reminders that did not send:', JSON.stringify(reminderFailures));
@@ -309,7 +333,11 @@ async function handleCleanupLargePdfs(req, res) {
     target.wgPdfData = '';
     status = 'could not migrate, PDF removed (re-upload manually): ' + e.message;
   }
-  await kv.set('app-data', data);
+  await mutate(fresh => {
+    const c = (fresh.clients || []).find(x => x.id === target.id);
+    if (!c) return SKIP_WRITE;
+    c.wgPdfData = target.wgPdfData;
+  });
   const remaining = (data.clients || []).filter(c => c.wgPdfData && c.wgPdfData.startsWith('data:')).length;
   res.status(200).json({ ok: true, migrated: { client: target.name, status }, remaining });
 }
@@ -369,8 +397,11 @@ async function handleCancelBooking(req, res) {
   // after charging never loses that record. The Calendar event deletion above is what actually
   // frees the time; excluding cancelled bookings from availability checks (elsewhere) frees the
   // app's own slot too.
-  booking.cancelled = true;
-  await kv.set('app-data', data);
+  await mutate(fresh => {
+    const b = (fresh.bookings || []).find(x => x.id === booking.id);
+    if (!b) return SKIP_WRITE;
+    b.cancelled = true;
+  });
   res.status(200).json({ ok: true, warning: calendarWarning });
 }
 
@@ -476,7 +507,17 @@ async function handleRescheduleBooking(req, res) {
   delete booking.reminderSentAt;
   delete booking.reminderSent;
 
-  await kv.set('app-data', data);
+  await mutate(fresh => {
+    const b = (fresh.bookings || []).find(x => x.id === booking.id);
+    if (!b) return SKIP_WRITE;
+    Object.assign(b, {
+      date: booking.date, time: booking.time, durationMin: booking.durationMin,
+      type: booking.type, location: booking.location,
+      calendarEventId: booking.calendarEventId, meetLink: booking.meetLink
+    });
+    delete b.reminderSentAt;
+    delete b.reminderSent;
+  });
 
   // Tell the client. Previously nothing was sent at all, so a moved session was only
   // communicated if Heshy happened to email them himself.
@@ -497,6 +538,7 @@ async function handleRescheduleBooking(req, res) {
 }
 
 export default async function handler(req, res) {
+  let validationError = null;
   try {
     // Vercel Cron hits this on a schedule with a bearer token it generates from CRON_SECRET —
     // it can't send our normal admin session token, so this gets its own check, checked first.
@@ -584,8 +626,13 @@ export default async function handler(req, res) {
           await logError('send-strengths-invite', new Error('sendEmail reported failure'), { clientId });
           return res.status(502).json({ error: "The email didn't go out. Check the Problem log in Settings." });
         }
-        client.strengthsInviteSentAt = Date.now();
-        await kv.set('app-data', data);
+        const sentAtValue = Date.now();
+        await mutate(fresh => {
+          const c = (fresh.clients || []).find(x => x.id === clientId);
+          if (!c) return SKIP_WRITE;
+          c.strengthsInviteSentAt = sentAtValue;
+        });
+        client.strengthsInviteSentAt = sentAtValue;
         return res.status(200).json({ ok: true, sentAt: client.strengthsInviteSentAt, to: client.email });
       } catch (err) {
         await logError('send-strengths-invite', err, { clientId });
@@ -627,8 +674,29 @@ export default async function handler(req, res) {
       return res.status(200).json(data);
     }
     if (req.method === 'POST') {
-      await kv.set('app-data', req.body);
-      return res.status(200).json({ ok: true });
+      // This used to write req.body straight over the entire business record, unchecked. Now it
+      // is validated first, and saved under the lock against a fresh read — so a Manage tab left
+      // open while a client books can no longer erase that booking, and a malformed save is
+      // refused with a reason instead of flattening everything.
+      const incoming = req.body;
+      try {
+        const saved = await mutate(current => {
+          const check = validateAppData({ ...incoming, __hadClients: (current.clients || []).length });
+          if (!check.ok) { validationError = check.error; return SKIP_WRITE; }
+          const next = check.data;
+          // Keep the version line moving forward from whatever is actually stored.
+          next.version = current.version || 0;
+          Object.keys(current).forEach(k => { if (!(k in next)) next[k] = current[k]; });
+          Object.keys(next).forEach(k => { current[k] = next[k]; });
+          Object.keys(current).forEach(k => { if (!(k in next)) delete current[k]; });
+          return true;
+        }, { fallback: defaultState() });
+        if (validationError) return res.status(400).json({ error: validationError });
+        return res.status(200).json({ ok: true, saved: saved === true });
+      } catch (err) {
+        if (err.code === 'LOCK_TIMEOUT') return res.status(503).json({ error: err.message });
+        throw err;
+      }
     }
     res.status(405).json({ error: 'Method not allowed' });
   } catch (err) {

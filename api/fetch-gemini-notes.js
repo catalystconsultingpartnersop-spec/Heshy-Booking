@@ -1,4 +1,5 @@
 import { kv } from '@vercel/kv';
+import { mutate, SKIP_WRITE } from './_lib/store.js';
 import { verifyAdminToken } from './_lib/auth.js';
 import { logError } from './_lib/errorlog.js';
 
@@ -161,7 +162,13 @@ export default async function handler(req, res) {
       notesNote = 'No calendar event linked, so notes could not be fetched — duration was still checked.';
     }
 
-    await kv.set('app-data', data);
+    await mutate(fresh => {
+      const b = (fresh.bookings || []).find(x => x.id === booking.id);
+      if (!b) return SKIP_WRITE;
+      if (booking.summary != null) b.summary = booking.summary;
+      if (booking.clientSummary != null) b.clientSummary = booking.clientSummary;
+      if (booking.actualMinutes != null) b.actualMinutes = booking.actualMinutes;
+    });
     res.status(200).json({
       ok: true,
       foundDuration: !!meetMinutes,

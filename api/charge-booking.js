@@ -1,4 +1,5 @@
 import { kv } from '@vercel/kv';
+import { mutate, SKIP_WRITE } from './_lib/store.js';
 import { verifyAdminToken } from './_lib/auth.js';
 import { sendEmail, receiptEmail } from './_lib/email.js';
 import { logError } from './_lib/errorlog.js';
@@ -34,10 +35,11 @@ export default async function handler(req, res) {
     // A complimentary session never touches a card. It used to show normal charge controls, so
     // one wrong click billed a free session in full.
     if (quote.comped) {
-      booking.status = 'charged';
-      booking.amount = 0;
-      booking.actualMinutes = mins;
-      await kv.set('app-data', data);
+      await mutate(fresh => {
+        const b = (fresh.bookings || []).find(x => x.id === bookingId);
+        if (!b) return SKIP_WRITE;
+        b.status = 'charged'; b.amount = 0; b.actualMinutes = mins;
+      });
       return res.status(200).json({ ok: true, amount: 0, comped: true });
     }
 
@@ -80,13 +82,23 @@ export default async function handler(req, res) {
       idempotencyKey: `charge-${booking.id}-${amountCents}-${paymentMethodId}`
     });
 
+    // The charge has already gone through at Stripe, so this must record it. Written under the
+    // lock against a fresh read, so a booking saved elsewhere in the meantime isn't erased by
+    // writing back the copy this request loaded a few seconds ago.
     booking.status = 'charged';
     booking.amount = amountCents / 100;
     booking.actualMinutes = mins;
     booking.stripePaymentIntentId = paymentIntent.id;
     if (overridden) booking.amountOverridden = true;
-
-    await kv.set('app-data', data);
+    await mutate(fresh => {
+      const b = (fresh.bookings || []).find(x => x.id === bookingId);
+      if (!b) return SKIP_WRITE;
+      b.status = 'charged';
+      b.amount = amountCents / 100;
+      b.actualMinutes = mins;
+      b.stripePaymentIntentId = paymentIntent.id;
+      if (overridden) b.amountOverridden = true;
+    });
 
     try {
       const receipt = receiptEmail(booking);

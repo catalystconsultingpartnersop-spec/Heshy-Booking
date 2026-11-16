@@ -6,6 +6,7 @@ import { isRangeAvailable } from './_lib/availability.js';
 import { logError } from './_lib/errorlog.js';
 import { redeemSetupToken } from './_lib/stripecustomer.js';
 import { issueScopedToken } from './_lib/auth.js';
+import { mutate, SKIP_WRITE } from './_lib/store.js';
 
 async function getGoogleAccessToken() {
   const refreshToken = await kv.get('google-refresh-token');
@@ -224,89 +225,103 @@ export default async function handler(req, res) {
       }
     } catch (e) { /* calendar sync is best-effort */ }
 
-    // Re-fetch the freshest possible data right before committing — everything above this point
-    // (Calendar checks, event creation) can take several seconds, during which something else
-    // could have changed the shared data. Re-reading here shrinks that risk window down to just
-    // this final read-then-write, instead of the whole request's duration.
-    const freshData = (await kv.get('app-data')) || data;
-    if (!freshData.clients) freshData.clients = [];
-    if (!freshData.bookings) freshData.bookings = [];
+    // Everything from here to the save runs under a lock, reading the record fresh inside it.
+    // Before, this was a plain read-modify-write: a client booking at the same moment Heshy saved
+    // in Manage could erase his changes, or his save could erase the booking, with no warning.
+    let failure = null, booking = null, client = null, comped = false, couponDiscount = null;
+    let settingsSnapshot = {};
+    try {
+      await mutate(async (freshData) => {
+      // Re-fetch the freshest possible data right before committing — everything above this point
+      // (Calendar checks, event creation) can take several seconds, during which something else
+      // could have changed the shared data. Re-reading here shrinks that risk window down to just
+      // this final read-then-write, instead of the whole request's duration.
+      if (!freshData.clients) freshData.clients = [];
+      if (!freshData.bookings) freshData.bookings = [];
 
-    if (!isRangeAvailable(freshData, date, time, Number(durationMin), type, null, calendarBusyRanges)) {
-      return res.status(400).json({ error: 'That time was just booked or is no longer available. Please pick another time.' });
-    }
-
-    let client = freshData.clients.find(c => c.email.toLowerCase() === email.toLowerCase());
-    if (client && client.blocked) {
-      return res.status(403).json({ error: 'Unable to book at this time.' });
-    }
-    if (!client) {
-      client = {
-        id: uid(), name, email, phone,
-        intakeAnswers: intakeAnswers || [], wgPdfName: wgPdfName || '', wgPdfData: storedWgPdfData,
-        blocked: false, createdAt: Date.now(), stripeCustomerId
-      };
-      freshData.clients.push(client);
-    }
-    // Keep name/phone current for a returning client too — otherwise a stale or mistaken value
-    // from an earlier booking stays stuck forever, even though every later booking has the
-    // correct info right there. Email stays as the matching key and is never silently changed.
-    client.name = name;
-    client.phone = phone;
-    // This used to split one person across several Stripe customers, because create-setup-intent
-    // made a brand-new customer for every booking and this line pointed the client at the newest
-    // one. The fix is upstream: resolveCustomer() reuses the customer they already have. So the
-    // id carried by the token is already theirs, and assigning it here keeps the client record
-    // and the booking in agreement — including when their old customer was deleted in Stripe and
-    // had to be replaced, which would otherwise leave a dead id on the record forever.
-    client.stripeCustomerId = stripeCustomerId;
-
-    let comped = false;
-    let appliedCoupon = null;
-    let couponDiscount = null;
-    if (couponCode) {
-      const couponResult = validateCoupon(freshData, couponCode, email);
-      if (!couponResult.valid) {
-        // A code that was accepted while they were typing can be used up or removed by the time
-        // they finish. This used to book them at full price without a word, so they'd believe a
-        // discount applied and only find out when the bill arrived. Now the booking stops and
-        // they decide: remove the code, or go ahead at full price.
-        return res.status(409).json({
-          error: couponResult.reason || "That code is no longer valid.",
-          couponRejected: true,
-          couponCode: String(couponCode).trim().toUpperCase()
-        });
+      if (!isRangeAvailable(freshData, date, time, Number(durationMin), type, null, calendarBusyRanges)) {
+        failure = { status: 400, body: { error: 'That time was just booked or is no longer available. Please pick another time.' } };
+          return SKIP_WRITE;
       }
-      appliedCoupon = couponResult.coupon;
-      comped = appliedCoupon.discountType === 'free' || !appliedCoupon.discountType; // treat legacy coupons (no discountType set) as free, matching prior behavior
-      couponDiscount = comped ? null : { type: appliedCoupon.discountType, value: appliedCoupon.discountValue };
-    }
 
-    const booking = {
-      id: bookingId, slotId: null, date, time,
-      durationMin: Number(durationMin), type,
-      clientId: client.id, clientName: name, clientEmail: email, clientPhone: phone,
-      stripeCustomerId, status: 'scheduled', comped, couponCode: appliedCoupon ? appliedCoupon.code : '', couponDiscount,
-      meetLink, location: resolvedAddress, summary: '', clientSummary: '', actualMinutes: null, amount: null, createdAt: Date.now()
-    };
-    if (calendarEventId) booking.calendarEventId = calendarEventId;
-    freshData.bookings.push(booking);
-    if (appliedCoupon) {
-      appliedCoupon.usedCount = (appliedCoupon.usedCount || 0) + 1;
-      if (!Array.isArray(appliedCoupon.usedByEmails)) appliedCoupon.usedByEmails = [];
-      appliedCoupon.usedByEmails.push(String(email).trim().toLowerCase());
-      // Permanent referral tag on the client themselves — stays even after this one discounted
-      // booking, so later full-price bookings from the same client are still traceable back to
-      // whoever referred them. First coupon they ever use wins; never overwritten afterward.
-      if (!client.referralSource) client.referralSource = appliedCoupon.code;
-    }
+      client = freshData.clients.find(c => c.email.toLowerCase() === email.toLowerCase());
+      if (client && client.blocked) {
+        failure = { status: 403, body: { error: 'Unable to book at this time.' } };
+          return SKIP_WRITE;
+      }
+      if (!client) {
+        client = {
+          id: uid(), name, email, phone,
+          intakeAnswers: intakeAnswers || [], wgPdfName: wgPdfName || '', wgPdfData: storedWgPdfData,
+          blocked: false, createdAt: Date.now(), stripeCustomerId
+        };
+        freshData.clients.push(client);
+      }
+      // Keep name/phone current for a returning client too — otherwise a stale or mistaken value
+      // from an earlier booking stays stuck forever, even though every later booking has the
+      // correct info right there. Email stays as the matching key and is never silently changed.
+      client.name = name;
+      client.phone = phone;
+      // This used to split one person across several Stripe customers, because create-setup-intent
+      // made a brand-new customer for every booking and this line pointed the client at the newest
+      // one. The fix is upstream: resolveCustomer() reuses the customer they already have. So the
+      // id carried by the token is already theirs, and assigning it here keeps the client record
+      // and the booking in agreement — including when their old customer was deleted in Stripe and
+      // had to be replaced, which would otherwise leave a dead id on the record forever.
+      client.stripeCustomerId = stripeCustomerId;
 
-    await kv.set('app-data', freshData);
+      let appliedCoupon = null;
+      if (couponCode) {
+        const couponResult = validateCoupon(freshData, couponCode, email);
+        if (!couponResult.valid) {
+          // A code that was accepted while they were typing can be used up or removed by the time
+          // they finish. This used to book them at full price without a word, so they'd believe a
+          // discount applied and only find out when the bill arrived. Now the booking stops and
+          // they decide: remove the code, or go ahead at full price.
+          failure = { status: 409, body: {
+            error: couponResult.reason || "That code is no longer valid.",
+            couponRejected: true,
+            couponCode: String(couponCode).trim().toUpperCase()
+          } };
+          return SKIP_WRITE;
+        }
+        appliedCoupon = couponResult.coupon;
+        comped = appliedCoupon.discountType === 'free' || !appliedCoupon.discountType; // treat legacy coupons (no discountType set) as free, matching prior behavior
+        couponDiscount = comped ? null : { type: appliedCoupon.discountType, value: appliedCoupon.discountValue };
+      }
+
+      booking = {
+        id: bookingId, slotId: null, date, time,
+        durationMin: Number(durationMin), type,
+        clientId: client.id, clientName: name, clientEmail: email, clientPhone: phone,
+        stripeCustomerId, status: 'scheduled', comped, couponCode: appliedCoupon ? appliedCoupon.code : '', couponDiscount,
+        meetLink, location: resolvedAddress, summary: '', clientSummary: '', actualMinutes: null, amount: null, createdAt: Date.now()
+      };
+      if (calendarEventId) booking.calendarEventId = calendarEventId;
+      freshData.bookings.push(booking);
+      if (appliedCoupon) {
+        appliedCoupon.usedCount = (appliedCoupon.usedCount || 0) + 1;
+        if (!Array.isArray(appliedCoupon.usedByEmails)) appliedCoupon.usedByEmails = [];
+        appliedCoupon.usedByEmails.push(String(email).trim().toLowerCase());
+        // Permanent referral tag on the client themselves — stays even after this one discounted
+        // booking, so later full-price bookings from the same client are still traceable back to
+        // whoever referred them. First coupon they ever use wins; never overwritten afterward.
+        if (!client.referralSource) client.referralSource = appliedCoupon.code;
+      }
+
+      settingsSnapshot = freshData.settings || {};
+
+      }, { fallback: data });
+    } catch (err) {
+      if (err.code === 'LOCK_TIMEOUT') return res.status(503).json({ error: err.message });
+      throw err;
+    }
+    if (failure) return res.status(failure.status).json(failure.body);
 
     try {
-      const confirmation = bookingConfirmationEmail(booking, freshData.settings || {});
+      const confirmation = bookingConfirmationEmail(booking, settingsSnapshot);
       await sendEmail({ to: booking.clientEmail, subject: confirmation.subject, html: confirmation.html });
-      const alert = newBookingAlertEmail(booking, freshData.settings || {}, client);
+      const alert = newBookingAlertEmail(booking, settingsSnapshot, client);
       await sendEmail({ to: 'heshy@catalystconsultingnyc.com', subject: alert.subject, html: alert.html });
     } catch (e) { /* email is best-effort */ }
 

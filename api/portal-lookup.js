@@ -1,6 +1,7 @@
 import { kv } from '@vercel/kv';
 import { randomToken, redeemScopedToken } from './_lib/auth.js';
 import { score, validAnswers, profileOf } from './_lib/assessment.js';
+import { mutate, SKIP_WRITE } from './_lib/store.js';
 import { logError } from './_lib/errorlog.js';
 import { stripe, resolveCustomer, setDefaultCard } from './_lib/stripecustomer.js';
 
@@ -134,23 +135,24 @@ async function handleSaveStrengths(req, res) {
 
   if (!validAnswers(answers)) return res.status(400).json({ error: 'Those answers look incomplete. Please finish the assessment and try again.' });
 
-  const data = await kv.get('app-data');
-  const client = (data?.clients || []).find(c => c.id === clientId);
-  if (!client) return res.status(404).json({ error: 'We could not find your details.' });
-
   const result = score(answers);
-  client.strengths = {
-    v: result.v,
-    letters: result.letters,
-    scores: result.scores,
-    clear: result.clear,
-    takenAt: Date.now(),
-    source: 'assessment'
-  };
-  // The old Working Genius letters field is what Manage has always read. Keep it in step so
-  // nothing that displays it has to care which of the two produced the result.
-  client.wgLetters = result.letters;
-  await kv.set('app-data', data);
+  let missing = false;
+  await mutate(data => {
+    const client = (data.clients || []).find(c => c.id === clientId);
+    if (!client) { missing = true; return SKIP_WRITE; }
+    client.strengths = {
+      v: result.v,
+      letters: result.letters,
+      scores: result.scores,
+      clear: result.clear,
+      takenAt: Date.now(),
+      source: 'assessment'
+    };
+    // The old Working Genius letters field is what Manage has always read. Keep it in step so
+    // nothing that displays it has to care which of the two produced the result.
+    client.wgLetters = result.letters;
+  });
+  if (missing) return res.status(404).json({ error: 'We could not find your details.' });
 
   return res.status(200).json({ ok: true, result: { letters: result.letters, clear: result.clear } });
 }
@@ -176,8 +178,11 @@ async function handleStartCardUpdate(req, res) {
   try {
     const { customer } = await resolveCustomer(data, { name: client.name, email: client.email, phone: client.phone });
     if (client.stripeCustomerId !== customer.id) {
-      client.stripeCustomerId = customer.id;
-      await kv.set('app-data', data);
+      await mutate(fresh => {
+        const c = (fresh.clients || []).find(x => x.id === clientId);
+        if (!c) return SKIP_WRITE;
+        c.stripeCustomerId = customer.id;
+      });
     }
     const setupIntent = await stripe.setupIntents.create({
       customer: customer.id,
@@ -215,13 +220,17 @@ async function handleConfirmCardUpdate(req, res) {
     // Make the new card apply to sessions they haven't been billed for yet. Older bookings can
     // still point at a separate Stripe customer from the days when each booking made its own,
     // and those would otherwise keep charging the card attached to that old customer.
-    let moved = 0;
-    for (const b of (data.bookings || [])) {
-      if (b.clientId !== client.id) continue;
-      if (b.status === 'charged' || b.cancelled) continue;
-      if (b.stripeCustomerId !== client.stripeCustomerId) { b.stripeCustomerId = client.stripeCustomerId; moved++; }
-    }
-    if (moved) await kv.set('app-data', data);
+    await mutate(fresh => {
+      const c = (fresh.clients || []).find(x => x.id === clientId);
+      if (!c) return SKIP_WRITE;
+      let moved = 0;
+      for (const b of (fresh.bookings || [])) {
+        if (b.clientId !== c.id) continue;
+        if (b.status === 'charged' || b.cancelled) continue;
+        if (b.stripeCustomerId !== c.stripeCustomerId) { b.stripeCustomerId = c.stripeCustomerId; moved++; }
+      }
+      if (!moved) return SKIP_WRITE;
+    });
 
     res.status(200).json({ ok: true });
   } catch (err) {
@@ -267,8 +276,11 @@ async function handleCancelBooking(req, res) {
     } catch (e) { /* best-effort — the booking is still marked cancelled below either way */ }
   }
 
-  booking.cancelled = true;
-  await kv.set('app-data', data);
+  await mutate(fresh => {
+    const b = (fresh.bookings || []).find(x => x.id === booking.id);
+    if (!b) return SKIP_WRITE;
+    b.cancelled = true;
+  });
   res.status(200).json({ ok: true });
 }
 
