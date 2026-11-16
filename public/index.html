@@ -1104,6 +1104,9 @@ function pickSupportedMimeType(){
 }
 
 async function startRecording(bookingId, type){
+  // Recording someone without telling them is the kind of thing that is easy to do by accident
+  // and hard to undo. This is the prompt that makes it deliberate.
+  if(!confirm('Has the client been told this session is being recorded, and agreed?\n\nThey can say no \u2014 the session goes ahead either way.')) return;
   try{
     if(!window.MediaRecorder){
       recordingError[bookingId] = 'This browser doesn\u2019t support recording.';
@@ -1729,6 +1732,11 @@ function renderClient(){
         <label>Card</label>
         <div id="card-element" class="stripe-el"></div>
         <div id="card-error" class="card-error"></div>
+      </div>
+      <div style="font-size:12.5px;color:var(--muted);margin-top:18px;line-height:1.6;">
+        Sessions are sometimes recorded so Heshy can focus on the conversation and send you a written recap &mdash;
+        he'll always tell you first, and you can say no.
+        <a href="/privacy.html" target="_blank" rel="noopener" style="color:var(--ink);">How your information is handled</a>.
       </div>
       <div class="btn-row">
         <button class="ghost" id="backTo1" ${submitting?'disabled':''}>Back</button>

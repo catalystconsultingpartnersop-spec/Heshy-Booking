@@ -153,6 +153,11 @@ export function bookingConfirmationEmail(booking, settings) {
         &middot;
         <a href="${(process.env.SITE_URL || 'https://heshy-booking.vercel.app')}/#portal" style="color:#111111;text-decoration:underline;">View my sessions</a>
       </div>
+      <div style="margin-top:22px;padding-top:16px;border-top:1px solid #E6E6E6;font-family:Arial,sans-serif;font-size:12.5px;color:#6E6E6E;line-height:1.6;">
+        Sessions are sometimes recorded so Heshy can focus on the conversation and send you a written recap.
+        He'll always tell you first, and you can say no.
+        <a href="${(process.env.SITE_URL || 'https://heshy-booking.vercel.app')}/privacy.html" style="color:#111111;">How your information is handled</a>.
+      </div>
     `)
   };
 }
