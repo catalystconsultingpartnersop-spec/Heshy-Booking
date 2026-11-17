@@ -83,5 +83,42 @@ reset();
 await applyEvent(ev('charge.refunded', { payment_intent: 'pi_1', amount: 0, amount_refunded: 0 }));
 check('a zero-amount refund does not wrongly mark it refunded', appData.bookings[0].status === 'charged');
 
+// --- the webhook registers itself on the daily run ------------------------------------------
+// Nobody should have to remember to press a button for refunds to reach the records.
+{
+  const adminHandler = (await import('../api/admin-data.js')).default;
+  const stripeMod = await import('../api/_lib/stripecustomer.js');
+  const store = new Map();
+  let created = null;
+  kv.get = async k => (k === 'app-data'
+    ? { clients: [], bookings: [], settings: {}, availability: { virtual: [], 'in-person': [] } }
+    : (store.get(k) ?? null));
+  kv.set = async (k, v) => { store.set(k, v); return 'OK'; };
+  kv.del = async k => { store.delete(k); return 1; };
+  kv.lpush = async () => 1; kv.ltrim = async () => 'OK'; kv.lrange = async () => [];
+  stripeMod.stripe.webhookEndpoints = {
+    list: async () => ({ data: [] }),
+    create: async (opts) => { created = opts; return { id: 'we_new', secret: 'whsec_generated' }; },
+    del: async () => ({})
+  };
+  globalThis.fetch = async () => ({ ok: true, status: 200, text: async () => '', json: async () => ({}) });
+  process.env.CRON_SECRET = 'cs';
+
+  const r = { status(c){ this.statusCode = c; return this; }, json(b){ this.body = b; return this; } };
+  await adminHandler({ method: 'GET', query: { action: 'daily' },
+    headers: { authorization: 'Bearer cs' }, body: null }, r);
+
+  check('the daily run registers the webhook when it is missing', !!created, JSON.stringify(created));
+  check('...at the right address', /\/api\/stripe-webhook$/.test(created?.url || ''), created?.url);
+  check('...for the events we handle', (created?.enabled_events || []).includes('charge.refunded'));
+  check('...and stores the signing secret', store.get('stripe-webhook-secret') === 'whsec_generated');
+
+  // And must not replace it on every subsequent run.
+  created = null;
+  await adminHandler({ method: 'GET', query: { action: 'daily' },
+    headers: { authorization: 'Bearer cs' }, body: null }, r);
+  check('it is not re-registered once it exists', created === null);
+}
+
 console.log(`\n${pass} passed, ${fail} failed`);
 if (fail) { console.log('\nFAILURES:\n' + failures.map(f => '  ' + f).join('\n')); process.exit(1); }

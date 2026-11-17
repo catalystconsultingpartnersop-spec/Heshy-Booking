@@ -263,6 +263,29 @@ async function handleDailyDigestAndReminders(req, res) {
   try { await handleSecureFiles({ query: {}, body: {} }, { status: () => ({ json: () => {} }) }); }
   catch (e) { console.error('File securing pass failed:', e); }
 
+  // Register the Stripe webhook if it isn't yet, so refunds and disputes reach the records
+  // without anyone having to remember to press a button.
+  try {
+    if (!(await kv.get('stripe-webhook-secret'))) {
+      const hookUrl = (process.env.SITE_URL || 'https://heshy-booking.vercel.app') + '/api/stripe-webhook';
+      const existing = await stripe.webhookEndpoints.list({ limit: 100 });
+      for (const e of (existing.data || [])) {
+        if (e.url === hookUrl) await stripe.webhookEndpoints.del(e.id);
+      }
+      const created = await stripe.webhookEndpoints.create({
+        url: hookUrl,
+        enabled_events: STRIPE_EVENTS,
+        description: 'Heshy booking app — refunds, disputes and late payment failures'
+      });
+      if (created.secret) {
+        await kv.set('stripe-webhook-secret', created.secret);
+        await kv.set('stripe-webhook-id', created.id);
+      }
+    }
+  } catch (e) {
+    await logError('stripe-webhook-autosetup', e, {});
+  }
+
   const now = new Date();
   const todayDs = dateStrOf(now);
   const tomorrow = new Date(now); tomorrow.setDate(tomorrow.getDate() + 1);
