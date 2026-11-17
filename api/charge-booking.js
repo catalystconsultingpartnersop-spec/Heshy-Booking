@@ -1,7 +1,7 @@
 import { kv } from '@vercel/kv';
 import { mutate, SKIP_WRITE } from './_lib/store.js';
 import { verifyAdminToken } from './_lib/auth.js';
-import { sendEmail, receiptEmail } from './_lib/email.js';
+import { sendEmail, receiptEmail, chargeDeclinedEmail } from './_lib/email.js';
 import { logError } from './_lib/errorlog.js';
 import { stripe, defaultCardFor } from './_lib/stripecustomer.js';
 import { computeCharge } from './_lib/billing.js';
@@ -74,6 +74,53 @@ export function explainDecline(err) {
     next: "Ask the client to check with their bank, or to add a different card in the portal.",
     retryable: true
   };
+}
+
+/**
+ * Emails the client about a declined card, at most once per booking per reason.
+ *
+ * The cap matters: pressing Charge four times on a card the bank keeps refusing would otherwise
+ * send the client four identical "your card didn't go through" emails, which is worse than
+ * sending none. A *different* decline reason is genuinely new information, so that does send.
+ *
+ * Returns what actually happened, so Manage can say so rather than imply an email went out.
+ */
+async function notifyClientOfDecline(bookingId, d, err) {
+  try {
+    const data = await kv.get('app-data');
+    const booking = (data?.bookings || []).find(b => b.id === bookingId);
+    if (!booking || !booking.clientEmail) return 'no-email';
+
+    const seenKey = `decline-notified:${bookingId}:${d.code}`;
+    // SET NX: the first caller wins, so a double-click can't send two.
+    const first = await kv.set(seenKey, Date.now(), { nx: true, ex: 60 * 60 * 24 * 14 });
+    if (!first) return 'already-sent';
+
+    const amountCents = err?.payment_intent?.amount ?? err?.raw?.payment_intent?.amount ?? null;
+    const mail = chargeDeclinedEmail(
+      booking,
+      { ...d, amount: amountCents != null ? amountCents / 100 : (booking.amount || 0) },
+      data?.settings || {}
+    );
+    const sent = await sendEmail({ to: booking.clientEmail, subject: mail.subject, html: mail.html });
+    if (!sent) {
+      // The send failed, so let a retry try again rather than suppressing it for a fortnight.
+      await kv.del(seenKey);
+      return 'failed';
+    }
+    await mutate(fresh => {
+      const b = (fresh.bookings || []).find(x => x.id === bookingId);
+      if (!b) return SKIP_WRITE;
+      b.declineNotifiedAt = Date.now();
+      b.lastDeclineCode = d.code;
+    });
+    return 'sent';
+  } catch (e) {
+    // Never let the notification break the charge response — Heshy still needs to be told the
+    // card was declined, even if the client couldn't be.
+    console.error('Decline notification failed:', e);
+    return 'failed';
+  }
 }
 
 export default async function handler(req, res) {
@@ -190,7 +237,12 @@ export default async function handler(req, res) {
     // different fixes, and Stripe tells us which one it is.
     if (err && err.type === 'StripeCardError') {
       const d = explainDecline(err);
-      return res.status(402).json({ error: d.message, reason: d.code, next: d.next, retryable: d.retryable });
+      // Tell the client themselves, rather than leaving Heshy to write that message. He asked
+      // for this to be automatic; chasing payments is the part of the job he doesn't do.
+      const emailed = await notifyClientOfDecline(req.body?.bookingId, d, err);
+      return res.status(402).json({
+        error: d.message, reason: d.code, next: d.next, retryable: d.retryable, clientEmailed: emailed
+      });
     }
     res.status(500).json({ error: 'Something went wrong processing the charge. Please try again.' });
   }

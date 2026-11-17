@@ -264,6 +264,57 @@ export function receiptEmail(booking) {
   };
 }
 
+/**
+ * Sent to the client when their card is declined, so Heshy doesn't have to make that call or
+ * write that message himself.
+ *
+ * The tone matters more than usual here. A failed payment is embarrassing to receive, and most
+ * declines are the bank being cautious rather than anything the client did wrong — so this says
+ * what happened, says it's common, gives one clear action, and doesn't demand anything by a
+ * deadline. `decline` is what explainDecline() produced.
+ */
+export function chargeDeclinedEmail(booking, decline, settings = {}) {
+  const firstName = esc((booking.clientName || '').split(' ')[0]);
+  const baseUrl = process.env.SITE_URL || 'https://heshy-booking.vercel.app';
+  const amount = '$' + (Number(decline.amount) || 0).toFixed(2);
+  const mins = booking.actualMinutes || booking.durationMin || 60;
+
+  // What the client should do, in their own terms — not the internal decline code, and not the
+  // instruction Heshy sees. "Ask them to update their card" is useless advice to the them.
+  const ACTIONS = {
+    authentication_required: "Your bank would like you to approve this payment yourself. Re-entering your card below takes care of it &mdash; you'll be asked to confirm with your bank as part of that.",
+    insufficient_funds: "This is usually a timing thing. If you'd rather use a different card, you can swap it below.",
+    expired_card: "The card we have on file has expired. You can add a current one below.",
+    incorrect_cvc: "The security code didn't match. Re-entering the card below should sort it.",
+    card_velocity_exceeded: "The card has hit a limit on recent transactions. You can try again tomorrow, or add a different card below.",
+    lost_card: "Your bank has this card flagged. You can add a different one below.",
+    stolen_card: "Your bank has this card flagged. You can add a different one below.",
+    pickup_card: "Your bank has blocked this card. You can add a different one below.",
+    transaction_not_allowed: "This card doesn't allow this type of payment. You can add a different one below.",
+    currency_not_supported: "This card doesn't support payments in US dollars. You can add a different one below.",
+    do_not_honor: "Your bank declined it without giving a reason &mdash; this is common and usually means their fraud check was being cautious, not that anything is wrong with your account. A quick call to the number on the back of your card normally clears it. Or you can add a different card below."
+  };
+  const action = ACTIONS[decline.code]
+    || "You can add a different card below, or check with your bank if it keeps happening.";
+
+  return {
+    subject: 'A quick issue with your payment',
+    html: wrap(`
+      <div style="font-size:22px;font-family:Georgia,serif;margin-bottom:8px;">Your card didn't go through.</div>
+      <div style="font-size:14px;font-family:Arial,sans-serif;color:#6E6E6E;line-height:1.65;margin-bottom:20px;">
+        Hi ${firstName || 'there'} &mdash; I tried to charge ${amount} for our ${mins}-minute session on ${esc(booking.date)}, and it didn't go through.
+      </div>
+      <div style="font-family:Arial,sans-serif;font-size:14px;line-height:1.7;margin-bottom:20px;">${action}</div>
+      <div style="margin:24px 0;font-family:Arial,sans-serif;">
+        <a href="${baseUrl}/#portal" style="display:inline-block;padding:12px 22px;background:#111111;color:#ffffff;text-decoration:none;border-radius:6px;font-size:14px;">Update your card</a>
+      </div>
+      <div style="font-family:Arial,sans-serif;font-size:13.5px;color:#6E6E6E;line-height:1.7;">
+        Nothing has been taken from your account, and there's nothing urgent here &mdash; whenever you get to it is fine. Just reply to this email if you'd rather sort it another way.
+      </div>
+    `)
+  };
+}
+
 export function reminderEmail(booking, settings) {
   const dateStr = new Date(booking.date + 'T' + booking.time + ':00').toLocaleDateString('en-US', { weekday:'long', month:'short', day:'numeric' });
   const timeStr = new Date(booking.date + 'T' + booking.time + ':00').toLocaleTimeString('en-US', { hour:'numeric', minute:'2-digit' });

@@ -96,5 +96,53 @@ check('...with the next step and whether it is worth retrying', /next: d\.next, 
 check('a decline leaves the booking unbilled',
       server.indexOf("booking.status = 'charged'") < server.indexOf('} catch (err) {'));
 
+
+// --- the client is told, automatically ------------------------------------------------------------
+// Heshy asked for this explicitly: he doesn't chase payments, so the app has to do the telling.
+const { chargeDeclinedEmail } = await import('../api/_lib/email.js');
+const bk = { id:'b1', date:'2026-11-17', durationMin:60, actualMinutes:60, clientName:'Yoily Klein', clientEmail:'y@example.com' };
+
+const dnhMail = chargeDeclinedEmail(bk, { code:'do_not_honor', amount:500 }, {});
+check('the client email leads with what happened, not jargon', /didn't go through/i.test(dnhMail.html));
+check('...names the amount', /\$500\.00/.test(dnhMail.html));
+check('...and the session it was for', /60-minute session on 2026-11-17/.test(dnhMail.html));
+check('...greets them by first name', /Hi Yoily/.test(dnhMail.html));
+check('...never shows the internal decline code', !/do_not_honor/.test(dnhMail.html));
+// A failed payment is embarrassing to receive. The wording has to take the blame off them.
+check('...says a bank decline is common, not their fault', /common/i.test(dnhMail.html) && /not that anything is wrong/i.test(dnhMail.html));
+check('...tells them to call the number on the card', /number on the back/i.test(dnhMail.html));
+check('...and gives one clear action', /Update your card/.test(dnhMail.html));
+check('...linking to the portal', /#portal/.test(dnhMail.html));
+check('...reassures them nothing was taken', /Nothing has been taken/i.test(dnhMail.html));
+check('...and sets no deadline', /nothing urgent/i.test(dnhMail.html));
+check('the subject does not shame them', !/declined|failed|overdue/i.test(dnhMail.subject), dnhMail.subject);
+
+// Each reason gets its own advice, written for the client rather than for Heshy.
+const authMail = chargeDeclinedEmail(bk, { code:'authentication_required', amount:500 }, {});
+check('a 3-D Secure decline tells the client to confirm with their bank', /approve this payment yourself/i.test(authMail.html));
+const expMail = chargeDeclinedEmail(bk, { code:'expired_card', amount:500 }, {});
+check('an expired card says so in the client\'s terms', /has expired/i.test(expMail.html));
+check('...and differs from the generic wording', expMail.html !== dnhMail.html);
+const unknownMail = chargeDeclinedEmail(bk, { code:'something_unheard_of', amount:500 }, {});
+check('an unknown reason still gives the client something to do', /add a different card/i.test(unknownMail.html));
+
+check('a name with markup is escaped', !chargeDeclinedEmail({...bk, clientName:'<script>x</script>'}, { code:'do_not_honor', amount:1 }, {}).html.includes('<script>x'));
+check('a missing name still reads properly', /Hi there/.test(chargeDeclinedEmail({...bk, clientName:''}, { code:'do_not_honor', amount:1 }, {}).html));
+
+const srv = readFileSync(new URL('../api/charge-booking.js', import.meta.url), 'utf8');
+check('the client is emailed from the decline path', /notifyClientOfDecline/.test(srv));
+// Pressing Charge four times must not send four identical emails.
+check('...at most once per booking per reason', /nx: true/.test(srv) && /decline-notified:/.test(srv));
+check('...keyed by the reason, so a genuinely new problem still sends', /decline-notified:\$\{bookingId\}:\$\{d\.code\}/.test(srv));
+check('...and a failed send is allowed to be retried', /await kv\.del\(seenKey\)/.test(srv));
+check('a notification failure never swallows the decline itself', /Decline notification failed/.test(srv));
+check('Manage is told what actually happened to that email', /clientEmailed: emailed/.test(srv));
+check('...rather than assuming it went', /return 'no-email'/.test(srv) && /return 'failed'/.test(srv));
+
+const page = readFileSync(new URL('../public/index.html', import.meta.url), 'utf8');
+check('Manage says when the client has been told', /The client has been emailed about it/.test(page));
+check('...and says so plainly when they have not', /couldn't be told automatically/.test(page));
+check('...and does not claim a second email was sent', /already emailed about this/.test(page));
+
 console.log(`\n${pass} passed, ${fail} failed`);
 if (fail) { console.log('\nFAILURES:\n' + failures.map(f => '  ' + f).join('\n')); process.exit(1); }

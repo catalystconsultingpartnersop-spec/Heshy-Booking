@@ -434,6 +434,12 @@
   .charge-problem-title{font-size:10.5px;font-weight:600;letter-spacing:0.07em;text-transform:uppercase;color:#B3261E;margin-bottom:5px;}
   .charge-problem-msg{font-size:14px;font-weight:500;line-height:1.5;}
   .charge-problem-next{font-size:13px;color:var(--muted);line-height:1.6;margin-top:6px;}
+  .charge-problem-sent{font-size:13px;color:#2E5B27;line-height:1.6;margin-top:8px;}
+  /* Said where the timer's number would be, when there is no number because nobody ran it. */
+  .charge-hint{
+    margin-bottom:10px;padding:10px 13px;background:#FAF9F6;border-left:3px solid #C9A961;
+    border-radius:4px;font-size:13px;line-height:1.6;color:var(--muted);
+  }
 
   .portal-move{margin-top:10px;padding:14px;border:1px solid var(--line);border-radius:8px;background:var(--paper);}
   .portal-move-days{display:flex;gap:6px;overflow-x:auto;padding-bottom:6px;-webkit-overflow-scrolling:touch;}
@@ -743,6 +749,10 @@ let reschedulingId = null;
 // The last failed charge, shown on the booking it belongs to. A decline used to appear in an
 // alert box, which took the reason with it the moment it was dismissed.
 let chargeProblem = null;
+// Hours typed into the billing box, kept here so a re-render doesn't throw them away. Typing
+// "2" and then touching anything else used to reset the box to whatever the timer had recorded,
+// which for an in-person session was usually nonsense or nothing.
+let billedHoursDraft = {};
 let billingBasisChoice = {}; // bookingId -> 'actual' | 'minimum', overrides the global default per session
 let rescheduleType = {};
 let runningTimer = {};
@@ -1543,13 +1553,36 @@ function renderTimerOnly(id){
     el.textContent = String(Math.floor(s/60)).padStart(2,'0')+':'+String(s%60).padStart(2,'0');
   }
 }
+// Hours as a person would write them: "1.5", "1:30", "90m", or "2h15". Returns decimal hours,
+// or null if it isn't a number at all. An hour and a half is written both ways by the same
+// person on the same day, and guessing wrong on a bill is not a small mistake.
+function parseHours(raw){
+  const s = String(raw == null ? '' : raw).trim().toLowerCase();
+  if(!s) return null;
+  let m = s.match(/^(\d+)\s*:\s*([0-5]?\d)$/);                 // 1:30
+  if(m) return Number(m[1]) + Number(m[2])/60;
+  m = s.match(/^(\d+)\s*h\s*(\d+)?\s*m?$/);                    // 2h15, 2h
+  if(m) return Number(m[1]) + (m[2] ? Number(m[2])/60 : 0);
+  m = s.match(/^(\d+(?:\.\d+)?)\s*m(?:in)?$/);                 // 90m
+  if(m) return Number(m[1])/60;
+  m = s.match(/^(\d+(?:\.\d+)?)\s*h?$/);                       // 1.5, 1.5h
+  if(m) return Number(m[1]);
+  return null;
+}
+
 async function chargeAndReceipt(id){
   const btn = document.querySelector(`[data-charge="${id}"]`);
   const amountInput = document.querySelector(`[data-amount="${id}"]`);
   const hoursInput = document.querySelector(`[data-actual-hours="${id}"]`);
   const overrideAmount = amountInput ? parseFloat(amountInput.value) : null;
-  const overrideHours = hoursInput ? parseFloat(hoursInput.value) : null;
-  const overrideMinutes = (overrideHours!=null && !isNaN(overrideHours)) ? Math.round(overrideHours*60) : null;
+  const overrideHours = hoursInput ? parseHours(hoursInput.value) : null;
+  const overrideMinutes = (overrideHours!=null) ? Math.round(overrideHours*60) : null;
+  // A number that can't be read is not the same as no number: charging the default when Heshy
+  // meant to type a length would bill the wrong amount silently.
+  if(hoursInput && hoursInput.value.trim() && overrideHours==null){
+    chargeProblem = { id, message: `"${hoursInput.value.trim()}" isn't a length I can read.`, next: 'Try 1.5, or 1:30, or 90m.', retryable: true };
+    render(); return;
+  }
   // The label has to be put back on every exit path, not just the happy one. It used to be left
   // reading "Charging…" after a decline, so a button that was perfectly usable looked dead.
   const wasLabelled = btn ? btn.textContent : '';
@@ -1570,9 +1603,11 @@ async function chargeAndReceipt(id){
     if(data.error){
       // Shown on the booking itself and left there, rather than in an alert box that vanishes
       // the moment it's dismissed and takes the reason with it.
-      chargeProblem = { id, message: data.error, next: data.next || '', retryable: data.retryable !== false };
+      chargeProblem = { id, message: data.error, next: data.next || '', retryable: data.retryable !== false, emailed: data.clientEmailed };
       restore(); render(); return;
     }
+    // Only once it has actually been charged is the typed length no longer needed.
+    delete billedHoursDraft[id];
     await loadAdminState();
     render();
   }catch(e){
@@ -2656,6 +2691,10 @@ function renderAdmin(){
           <div style="margin-top:12px;"><button class="primary small" data-charge="${b.id}">Complete at no charge</button></div>
         </div>`;
       } else {
+      // Whether a length was ever actually recorded for this session, as opposed to the app
+      // falling back to the booked length. An in-person meeting almost never has one: nobody
+      // runs a stopwatch on their phone through a client meeting.
+      const timeRecorded = typeof b.actualMinutes === 'number' && b.actualMinutes > 0;
       const basis = billingBasisChoice[b.id] || state.settings.billingMode || 'actual';
       // Mirrors computeCharge() in api/_lib/billing.js. In minimum mode the booked length is a
       // floor, not the answer: a session that ran over bills what it actually ran, which is what
@@ -2673,27 +2712,44 @@ function renderAdmin(){
         defaultAmt = Math.max(0, Math.round((baseAmt-b.couponDiscount.value)*100)/100);
         discountNote = `<div class="note" style="margin-bottom:8px;">Coupon <strong>${esc(b.couponCode)}</strong>: ${money(b.couponDiscount.value)} off &mdash; ${money(baseAmt)} \u2192 ${money(defaultAmt)}</div>`;
       }
-      const amt = (b.amount!=null) ? b.amount : defaultAmt;
+      // A value typed into the hours box wins over anything derived, so typing survives the
+      // next render instead of snapping back.
+      const draft = billedHoursDraft[b.id];
+      const hoursShown = (draft !== undefined) ? draft : String(hours);
+      const draftNum = parseFloat(hoursShown);
+      const amtFromHours = !isNaN(draftNum) ? Math.round(draftNum*rate*100)/100 : null;
+      const amt = (draft !== undefined && amtFromHours != null)
+        ? amtFromHours
+        : ((b.amount!=null) ? b.amount : defaultAmt);
       const overMin = basis==='minimum' && actualMins > b.durationMin;
+      const minsShown = !isNaN(draftNum) ? Math.round(draftNum*60) : minsForBilling;
       action = `
         <div class="charge-row">
-          <div class="note" style="margin-bottom:8px;">Actual time tracked: <strong>${actualMins} min</strong> &middot; Booked for: <strong>${b.durationMin} min</strong></div>
+          ${timeRecorded
+            ? `<div class="note" style="margin-bottom:8px;">Time recorded: <strong>${b.actualMinutes} min</strong> &middot; Booked for: <strong>${b.durationMin} min</strong></div>`
+            : `<div class="charge-hint">No time was recorded for this session &mdash; the timer wasn't used. Type how long it ran below; it defaults to the ${b.durationMin} minutes booked.</div>`}
           ${discountNote}
+          ${timeRecorded ? `
           <label>Bill for</label>
           <div class="type-toggle" style="margin-bottom:12px;">
             <div class="type-btn ${basis==='actual'?'active':''}" data-billing-basis="${b.id}" data-basis-value="actual">Actual time (${actualMins} min)</div>
             <div class="type-btn ${basis==='minimum'?'active':''}" data-billing-basis="${b.id}" data-basis-value="minimum">At least booked (${minsForBilling} min)</div>
-          </div>
+          </div>` : ''}
           ${overMin?`<div class="note" style="margin-bottom:8px;">Ran ${actualMins - b.durationMin} min over the booked length, so it bills the ${actualMins} min actually worked.</div>`:''}
           <div class="row2">
-            <div><label>Hours to bill</label><input type="text" value="${hours}" data-actual-hours="${b.id}"></div>
+            <div><label>Hours to bill</label><input type="text" value="${esc(hoursShown)}" data-actual-hours="${b.id}" placeholder="e.g. 1.5 or 1:30"></div>
             <div><label>Amount to charge</label><input type="text" value="${amt.toFixed(2)}" data-amount="${b.id}"></div>
           </div>
+          <div class="note" style="margin-top:6px;">${isNaN(draftNum) ? 'Enter hours as 1.5 or 1:30.' : `Billing <strong>${minsShown} minutes</strong> at ${money(rate)}/hour.`}</div>
           ${chargeProblem && chargeProblem.id===b.id ? `
             <div class="charge-problem">
               <div class="charge-problem-title">Not charged</div>
               <div class="charge-problem-msg">${esc(chargeProblem.message)}</div>
               ${chargeProblem.next?`<div class="charge-problem-next">${esc(chargeProblem.next)}</div>`:''}
+              ${chargeProblem.emailed==='sent' ? `<div class="charge-problem-sent">The client has been emailed about it, with a link to update their card. You don't need to chase this.</div>`
+                : chargeProblem.emailed==='already-sent' ? `<div class="charge-problem-sent">The client was already emailed about this, so they haven't been emailed again.</div>`
+                : chargeProblem.emailed==='no-email' ? `<div class="charge-problem-next">No email address on file for this client, so they couldn't be told automatically.</div>`
+                : chargeProblem.emailed==='failed' ? `<div class="charge-problem-next">The client could not be emailed about it &mdash; you may want to tell them yourself.</div>` : ''}
               <div class="note" style="margin-top:8px;">Nothing was taken from the card, and this session is still unbilled.</div>
             </div>` : ''}
           <div style="margin-top:12px;"><button class="primary small" data-charge="${b.id}">${chargeProblem && chargeProblem.id===b.id ? (chargeProblem.retryable ? 'Try the card again' : 'Charge anyway') : 'Charge and send receipt'}</button></div>
@@ -3093,7 +3149,7 @@ function renderAdmin(){
         <div class="note" style="margin-bottom:8px;">Clients can cancel their own sessions from their portal, but only up to this many hours before &mdash; inside that window they're told to contact you directly.</div>
         <input type="text" id="set-cancel-hours" style="max-width:120px;" value="${(state.settings.clientCancelCutoffHours!=null)?state.settings.clientCancelCutoffHours:3}">
         <label>Default billing</label>
-        <div class="note" style="margin-bottom:8px;">Actual time tracked is always shown, regardless of this setting \u2014 this only controls what a new charge defaults to. You can always switch it for one session when charging.</div>
+        <div class="note" style="margin-bottom:8px;">Any recorded time is always shown, regardless of this setting \u2014 this only controls what a new charge defaults to. You can always type a different length, or switch the basis, when charging a particular session.</div>
         <div class="type-toggle" style="max-width:420px;">
           <div class="type-btn ${(state.settings.billingMode||'actual')==='actual'?'active':''}" id="billing-mode-actual">Actual time</div>
           <div class="type-btn ${state.settings.billingMode==='minimum'?'active':''}" id="billing-mode-minimum">Full booked length</div>
@@ -3734,9 +3790,12 @@ function attachHandlers(){
     document.querySelectorAll('[data-actual-hours]').forEach(el=>{
       el.oninput = ()=>{
         const id = el.getAttribute('data-actual-hours');
+        // Remembered so the next render keeps it. Without this, typing 2 and then clicking
+        // anything reset the box to whatever the timer had recorded.
+        billedHoursDraft[id] = el.value;
         const amtEl = document.querySelector(`[data-amount="${id}"]`);
-        const hours = parseFloat(el.value);
-        if(amtEl && !isNaN(hours)){
+        const hours = parseHours(el.value);
+        if(amtEl && hours!=null){
           amtEl.value = (Math.round(hours*(state.settings.hourlyRate||500)*100)/100).toFixed(2);
         }
       };
