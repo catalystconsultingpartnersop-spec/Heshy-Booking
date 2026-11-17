@@ -448,6 +448,13 @@
   }
   .pay-done-title{font-family:'Source Serif 4',Georgia,serif;font-size:23px;}
   .charge-problem-sent{font-size:13px;color:#2E5B27;line-height:1.6;margin-top:8px;}
+  /* Typing the length in, next to the timer that didn't run. */
+  .actual-entry{
+    margin:0 0 10px;padding:12px 14px;background:#FAF9F6;border:1px solid var(--line);
+    border-radius:6px;
+  }
+  .actual-entry label{display:block;font-size:12.5px;font-weight:600;margin-bottom:8px;}
+
   /* Said where the timer's number would be, when there is no number because nobody ran it. */
   .charge-hint{
     margin-bottom:10px;padding:10px 13px;background:#FAF9F6;border-left:3px solid #C9A961;
@@ -766,6 +773,9 @@ let chargeProblem = null;
 // "2" and then touching anything else used to reset the box to whatever the timer had recorded,
 // which for an in-person session was usually nonsense or nothing.
 let billedHoursDraft = {};
+// The session whose length is being typed in next to the timer, and anything wrong with it.
+let editingActualId = null;
+let actualEntryError = null;
 let billingBasisChoice = {}; // bookingId -> 'actual' | 'minimum', overrides the global default per session
 let rescheduleType = {};
 let runningTimer = {};
@@ -1581,6 +1591,47 @@ function parseHours(raw){
   m = s.match(/^(\d+(?:\.\d+)?)\s*h?$/);                       // 1.5, 1.5h
   if(m) return Number(m[1]);
   return null;
+}
+
+// Minutes written back the way a person would type them, so reopening the box shows what was
+// entered rather than a decimal to re-interpret.
+function minutesToHm(mins){
+  const m = Math.max(0, Math.round(Number(mins) || 0));
+  if(m % 60 === 0) return String(m / 60);
+  return Math.floor(m / 60) + ':' + String(m % 60).padStart(2, '0');
+}
+
+function toggleActualEntry(id){
+  editingActualId = (editingActualId === id) ? null : id;
+  actualEntryError = null;
+  render();
+}
+
+async function saveActualTime(id){
+  const el = document.querySelector(`[data-actual-input="${id}"]`);
+  if(!el) return;
+  const raw = el.value.trim();
+  const hours = parseHours(raw);
+  if(hours == null){
+    actualEntryError = { id, message: `"${raw}" isn't a length I can read. Try 1:30, 90m or 1.5.` };
+    render(); return;
+  }
+  const mins = Math.round(hours * 60);
+  if(mins <= 0){
+    actualEntryError = { id, message: 'That would be no time at all. Use Clear to remove it instead.' };
+    render(); return;
+  }
+  editingActualId = null; actualEntryError = null;
+  // The billing box derives from this, so a figure typed there earlier is now stale.
+  delete billedHoursDraft[id];
+  await updateBooking(id, { actualMinutes: mins });
+}
+
+async function clearActualTime(id){
+  editingActualId = null; actualEntryError = null;
+  delete billedHoursDraft[id];
+  // Back to nothing recorded, rather than zero — which the billing box reads as "not recorded".
+  await updateBooking(id, { actualMinutes: 0 });
 }
 
 async function chargeAndReceipt(id){
@@ -2655,13 +2706,29 @@ function renderAdmin(){
         ${segments.length>1 ? ` &middot; <strong>Total: ${totalSegMin} min</strong>` : ''}
       </div>
     ` : '';
+    // Typing the length in belongs here, next to the timer, because this is where the length
+    // lives. The timer is no use for a meeting held away from the laptop, and until now the only
+    // way to correct it was the billing box further down — which Heshy reasonably didn't expect
+    // to be editable.
+    const editingTime = editingActualId === b.id;
     const timerBlock = `
-      <div style="display:flex;align-items:center;gap:16px;margin-bottom:8px;">
+      <div style="display:flex;align-items:center;gap:12px;margin-bottom:8px;flex-wrap:wrap;">
         <span class="timer" id="timer-${b.id}">${String(Math.floor((timerDisplay[b.id]||0)/60)).padStart(2,'0')}:${String((timerDisplay[b.id]||0)%60).padStart(2,'0')}</span>
         ${running ? `<button class="ghost small" data-stop-timer="${b.id}">Stop</button>` : `<button class="${b.type==='in-person'?'primary':'ghost'} small" data-start-timer="${b.id}">Start</button>`}
+        ${running ? '' : `<button class="ghost small" data-edit-actual="${b.id}">${editingTime?'Cancel':'Enter manually'}</button>`}
         <span class="note" style="margin:0;">${b.type==='in-person' ? 'Tracks time & records using your mic' : 'Tracks time only'}</span>
         ${b.type==='in-person' && isRecording ? `<span class="rec-indicator" title="Recording"><span class="rec-dot"></span>REC</span>` : ''}
       </div>
+      ${editingTime ? `
+      <div class="actual-entry">
+        <label>How long did it actually run?</label>
+        <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
+          <input type="text" data-actual-input="${b.id}" value="${b.actualMinutes ? esc(minutesToHm(b.actualMinutes)) : ''}" placeholder="1:30, 90m or 1.5" style="max-width:150px;">
+          <button class="primary small" data-save-actual="${b.id}">Save</button>
+          ${b.actualMinutes ? `<button class="ghost small" data-clear-actual="${b.id}">Clear</button>` : ''}
+        </div>
+        ${actualEntryError && actualEntryError.id===b.id ? `<div class="card-error">${esc(actualEntryError.message)}</div>` : `<div class="note" style="margin-top:6px;">Hours and minutes, however you like to write it.</div>`}
+      </div>` : ''}
       ${segmentLogHtml}
       ${b.type==='in-person' && recordingStatus[b.id] ? `<div class="note" style="margin-bottom:8px;color:${recordingStatus[b.id]==='error'?'#A5433A':(recordingStatus[b.id]==='done'?'#2E5B27':'var(--muted)')};">${
         recordingStatus[b.id]==='recording' ? 'Recording…' :
@@ -2748,14 +2815,14 @@ function renderAdmin(){
           <label>Bill for</label>
           <div class="type-toggle" style="margin-bottom:12px;">
             <div class="type-btn ${basis==='actual'?'active':''}" data-billing-basis="${b.id}" data-basis-value="actual">Actual time (${actualMins} min)</div>
-            <div class="type-btn ${basis==='minimum'?'active':''}" data-billing-basis="${b.id}" data-basis-value="minimum">At least booked (${minsForBilling} min)</div>
+            <div class="type-btn ${basis==='minimum'?'active':''}" data-billing-basis="${b.id}" data-basis-value="minimum">At least booked (${Math.max(b.durationMin, actualMins)} min)</div>
           </div>` : ''}
           ${overMin?`<div class="note" style="margin-bottom:8px;">Ran ${actualMins - b.durationMin} min over the booked length, so it bills the ${actualMins} min actually worked.</div>`:''}
           <div class="row2">
             <div><label>Hours to bill</label><input type="text" value="${esc(hoursShown)}" data-actual-hours="${b.id}" placeholder="e.g. 1.5 or 1:30"></div>
             <div><label>Amount to charge</label><input type="text" value="${amt.toFixed(2)}" data-amount="${b.id}"></div>
           </div>
-          <div class="note" style="margin-top:6px;">${isNaN(draftNum) ? 'Enter hours as 1.5 or 1:30.' : `Billing <strong>${minsShown} minutes</strong> at ${money(rate)}/hour.`}</div>
+          <div class="note" style="margin-top:6px;">${isNaN(draftNum) ? 'Enter hours as 1.5 or 1:30.' : `Billing <strong>${minsShown} ${minsShown===1?'minute':'minutes'}</strong> at ${money(rate)}/hour.`}</div>
           ${chargeProblem && chargeProblem.id===b.id ? `
             <div class="charge-problem">
               <div class="charge-problem-title">Not charged</div>
@@ -3820,6 +3887,13 @@ function attachHandlers(){
           amtEl.value = (Math.round(hours*(state.settings.hourlyRate||500)*100)/100).toFixed(2);
         }
       };
+    });
+    document.querySelectorAll('[data-edit-actual]').forEach(el=>{ el.onclick = ()=>toggleActualEntry(el.getAttribute('data-edit-actual')); });
+    document.querySelectorAll('[data-save-actual]').forEach(el=>{ el.onclick = ()=>saveActualTime(el.getAttribute('data-save-actual')); });
+    document.querySelectorAll('[data-clear-actual]').forEach(el=>{ el.onclick = ()=>clearActualTime(el.getAttribute('data-clear-actual')); });
+    document.querySelectorAll('[data-actual-input]').forEach(el=>{
+      // Enter saves, so a length can be typed and committed without reaching for the mouse.
+      el.onkeydown = ev => { if(ev.key === 'Enter'){ ev.preventDefault(); saveActualTime(el.getAttribute('data-actual-input')); } };
     });
     document.querySelectorAll('[data-skip-charge]').forEach(el=>{ el.onclick = ()=>skipCharge(el.getAttribute('data-skip-charge')); });
     document.querySelectorAll('[data-billing-basis]').forEach(el=>{

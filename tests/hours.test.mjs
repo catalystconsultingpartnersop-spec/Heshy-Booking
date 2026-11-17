@@ -77,7 +77,43 @@ check('...and says so plainly when nothing was recorded', /No time was recorded 
 check('...rather than calling the booked length "tracked"', !/Actual time tracked/.test(html));
 // With no recorded time, "Actual time (1 min)" vs "At least booked" is a meaningless choice.
 check('the bill-for toggle is hidden when there is nothing to compare', /\$\{timeRecorded \? `\s*\n\s*<label>Bill for<\/label>/.test(html));
-check('the running total is confirmed back in minutes', /Billing <strong>\$\{minsShown\} minutes<\/strong>/.test(html));
+check('the running total is confirmed back in minutes', /Billing <strong>\$\{minsShown\} \$\{minsShown===1\?'minute':'minutes'\}<\/strong>/.test(html));
+// Each basis button has to show its own number. "At least booked" was showing the figure for
+// whichever basis happened to be selected, so a 1-minute reading made it read "(1 min)" when it
+// would actually bill the 60 booked.
+check('the "at least booked" option shows what it would bill, not the other option\'s figure',
+      /At least booked \(\$\{Math\.max\(b\.durationMin, actualMins\)\} min\)/.test(html));
+check('...while "actual time" shows the recorded figure', /Actual time \(\$\{actualMins\} min\)/.test(html));
+
+// --- typing the length in, next to the timer ---------------------------------------------------
+// Heshy's point: the length belongs where the timer is. The billing box further down was
+// editable, but he had no reason to expect that, and for a meeting held away from the laptop the
+// timer is useless.
+check('there is a way to enter the length by hand', /data-edit-actual="/.test(html));
+check('...labelled as such, next to Start', /Enter manually/.test(html));
+check('...offered only when the timer is not running', /\$\{running \? '' : `<button class="ghost small" data-edit-actual/.test(html));
+check('...asking in plain words', /How long did it actually run\?/.test(html));
+check('...and showing the formats it takes', /1:30, 90m or 1\.5/.test(html));
+check('the entry saves to the booking itself', /data-save-actual="/.test(html) && /saveActualTime/.test(html));
+check('...writing actual minutes', /updateBooking\(id, \{ actualMinutes: mins \}\)/.test(html));
+check('Enter saves it, without reaching for the mouse', /ev\.key === 'Enter'[\s\S]{0,120}saveActualTime/.test(html));
+check('an unreadable length is refused rather than guessed', /isn't a length I can read\. Try 1:30, 90m or 1\.5/.test(html));
+check('...and zero is refused too, with Clear offered instead', /no time at all. Use Clear to remove it/.test(html));
+check('a recorded length can be cleared back to nothing', /data-clear-actual="/.test(html));
+check('...by storing zero, which the billing box reads as "not recorded"', /clearActualTime[\s\S]{0,260}actualMinutes: 0/.test(html));
+check('a stale figure in the billing box is dropped when the length changes',
+      (html.match(/delete billedHoursDraft\[id\];/g) || []).length >= 3,
+      String((html.match(/delete billedHoursDraft\[id\];/g) || []).length));
+
+// Reopening the box should show what was typed, not a decimal to re-read.
+const src2 = html.slice(html.indexOf('function minutesToHm('));
+const mToHm = new Function(src2.slice(0, src2.indexOf('\n}\n') + 3) + '; return minutesToHm;')();
+check('90 minutes reads back as 1:30', mToHm(90) === '1:30', mToHm(90));
+check('60 minutes reads back as 1', mToHm(60) === '1', mToHm(60));
+check('135 minutes reads back as 2:15', mToHm(135) === '2:15', mToHm(135));
+check('45 minutes reads back as 0:45', mToHm(45) === '0:45', mToHm(45));
+check('what reads back can be read again', parseHours(mToHm(135)) === 2.25, String(parseHours(mToHm(135))));
+check('...for an exact number of hours too', parseHours(mToHm(120)) === 2);
 
 console.log(`\n${pass} passed, ${fail} failed`);
 if (fail) { console.log('\nFAILURES:\n' + failures.map(f => '  ' + f).join('\n')); process.exit(1); }
