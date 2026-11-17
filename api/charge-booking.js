@@ -121,6 +121,17 @@ async function notifyClientOfDecline(bookingId, d, err) {
       if (!b) return SKIP_WRITE;
       b.declineNotifiedAt = Date.now();
       b.lastDeclineCode = d.code;
+      // Resend's id for the message, so the delivery webhook can report back against this
+      // booking. Without it, "emailed" would stay the end of the story.
+      b.declineEmail = {
+        id: typeof sent === 'string' ? sent : null,
+        to: booking.clientEmail,
+        sentAt: Date.now(),
+        status: 'Sent',
+        detail: '',
+        rank: 1,
+        problem: false
+      };
     });
     return 'sent';
   } catch (e) {

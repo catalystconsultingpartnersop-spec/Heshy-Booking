@@ -448,6 +448,20 @@
   }
   .pay-done-title{font-family:'Source Serif 4',Georgia,serif;font-size:23px;}
   .charge-problem-sent{font-size:13px;color:#2E5B27;line-height:1.6;margin-top:8px;}
+  /* What became of the decline email, kept on the session so it can be checked hours later. */
+  .email-status{
+    margin-top:12px;padding:11px 14px;border-radius:6px;background:#FAF9F6;
+    border-left:3px solid #7FA37F;font-size:13px;line-height:1.65;color:var(--muted);
+  }
+  .email-status.bad{border-left-color:#B3261E;background:#FCF6F5;}
+  .email-status-label{font-size:10.5px;font-weight:600;letter-spacing:0.07em;text-transform:uppercase;margin-bottom:4px;}
+  .email-status-state{font-weight:600;color:var(--ink);margin-top:2px;}
+  .email-status.bad .email-status-state{color:#B3261E;}
+  .resend-setup{margin-top:10px;padding:12px 14px;background:#FAF9F6;border:1px solid var(--line);border-radius:6px;font-size:13px;}
+  .paste-me{
+    display:inline-block;margin-top:4px;padding:5px 8px;background:#fff;border:1px solid var(--line-strong);
+    border-radius:4px;font-family:ui-monospace,Menlo,monospace;font-size:12px;word-break:break-all;
+  }
   /* Typing the length in, next to the timer that didn't run. */
   .actual-entry{
     margin:0 0 10px;padding:12px 14px;background:#FAF9F6;border:1px solid var(--line);
@@ -2694,6 +2708,25 @@ function renderAdmin(){
   const clientById = {};
   state.clients.forEach(c=>{ clientById[c.id] = c; });
 
+  // What became of the decline email. Shown on the session itself and kept there, because the
+  // question "did he actually get it?" is asked hours later, long after the red banner from the
+  // failed charge is gone. A bounce is the one that matters: it means nobody ever saw it, and
+  // without this nothing in the app would ever say so.
+  function emailStatusHtml(b){
+    const e = b.declineEmail;
+    if(!e) return '';
+    const clock = ms => ms ? new Date(ms).toLocaleTimeString('en-US',{hour:'numeric',minute:'2-digit'}) : '';
+    const when = e.rank > 1 && e.statusAt ? ` at ${clock(e.statusAt)}` : '';
+    return `
+      <div class="email-status${e.problem?' bad':''}">
+        <div class="email-status-label">Payment email</div>
+        <div>Sent to ${esc(e.to||'')}${e.sentAt?` at ${clock(e.sentAt)}`:''}</div>
+        <div class="email-status-state">${esc(e.status || 'Sent')}${when}</div>
+        ${e.detail ? `<div style="margin-top:3px;">${esc(e.detail)}</div>` : ''}
+        ${e.rank === 1 ? `<div class="note" style="margin-top:4px;">Delivery hasn't been reported back yet.</div>` : ''}
+      </div>`;
+  }
+
   function sessionCardHtml(b){
     const running = !!runningTimer[b.id];
     const isRecording = recordingStatus[b.id]==='recording';
@@ -2828,12 +2861,14 @@ function renderAdmin(){
               <div class="charge-problem-title">Not charged</div>
               <div class="charge-problem-msg">${esc(chargeProblem.message)}</div>
               ${chargeProblem.next?`<div class="charge-problem-next">${esc(chargeProblem.next)}</div>`:''}
-              ${chargeProblem.emailed==='sent' ? `<div class="charge-problem-sent">The client has been emailed about it, with a link to update their card. You don't need to chase this.</div>`
+              ${b.declineEmail ? ''
+                : chargeProblem.emailed==='sent' ? `<div class="charge-problem-sent">The client has been emailed about it, with a link to update their card. You don't need to chase this.</div>`
                 : chargeProblem.emailed==='already-sent' ? `<div class="charge-problem-sent">The client was already emailed about this, so they haven't been emailed again.</div>`
                 : chargeProblem.emailed==='no-email' ? `<div class="charge-problem-next">No email address on file for this client, so they couldn't be told automatically.</div>`
                 : chargeProblem.emailed==='failed' ? `<div class="charge-problem-next">The client could not be emailed about it &mdash; you may want to tell them yourself.</div>` : ''}
               <div class="note" style="margin-top:8px;">Nothing was taken from the card, and this session is still unbilled.</div>
             </div>` : ''}
+          ${emailStatusHtml(b)}
           <div style="margin-top:12px;"><button class="primary small" data-charge="${b.id}">${chargeProblem && chargeProblem.id===b.id ? (chargeProblem.retryable ? 'Try the card again' : 'Charge anyway') : 'Charge and send receipt'}</button></div>
           <button class="ghost small danger-ghost" data-skip-charge="${b.id}" style="margin-top:8px;">Mark complete, don't charge</button>
         </div>`;
@@ -3338,6 +3373,26 @@ function renderAdmin(){
                 <div class="sub">Without this, refunding in Stripe leaves the session showing as charged here.</div>
                 ${systemStatus.stripe.configured ? '' : `<div style="margin-top:8px;"><button class="primary small" id="setupStripeBtn">Connect it</button></div>`}
               </div>
+              <div style="padding:9px 0;">
+                <div><strong>Email delivery reports</strong> &mdash; ${systemStatus.resend && systemStatus.resend.configured
+                  ? 'connected. Sessions show whether a payment email arrived.'
+                  : 'not connected yet.'}</div>
+                <div class="sub">Without this, a payment email that bounces looks exactly like one that was read.</div>
+                ${systemStatus.resend && systemStatus.resend.configured ? '' : `
+                  <div class="resend-setup">
+                    <div style="margin-bottom:8px;">Resend has no way to set this up from here, so it takes two minutes once:</div>
+                    <ol style="margin:0 0 10px 18px;padding:0;line-height:1.8;">
+                      <li>Open <a href="https://resend.com/webhooks" target="_blank" rel="noopener">resend.com/webhooks</a> and add an endpoint.</li>
+                      <li>Paste this as the URL:<br><code class="paste-me">${esc((systemStatus.resend && systemStatus.resend.url) || '')}</code></li>
+                      <li>Tick the <strong>email.*</strong> events (delivered, bounced, opened, complained).</li>
+                      <li>Copy the signing secret it gives you and paste it here:</li>
+                    </ol>
+                    <div style="display:flex;gap:8px;flex-wrap:wrap;">
+                      <input type="text" id="resendSecret" placeholder="whsec_..." style="max-width:280px;">
+                      <button class="primary small" id="saveResendBtn">Save</button>
+                    </div>
+                  </div>`}
+              </div>
             </div>
             <div style="margin-top:10px;"><button class="ghost small" id="loadSystemBtn">Refresh</button></div>`}
         <div id="system-msg" style="font-size:12.5px;color:var(--muted);margin-top:8px;"></div>
@@ -3747,11 +3802,12 @@ function attachHandlers(){
   };
   const sysMsg = ()=> $('system-msg');
   async function loadSystemStatus(){
-    const [f, st] = await Promise.all([
+    const [f, st, rs] = await Promise.all([
       fetch('/api/admin-data?action=secure-files', { headers:{ 'X-Admin-Token': adminToken } }).then(r=>r.json()).catch(()=>({remaining:0})),
-      fetch('/api/admin-data?action=stripe-webhook-status', { headers:{ 'X-Admin-Token': adminToken } }).then(r=>r.json()).catch(()=>({configured:false}))
+      fetch('/api/admin-data?action=stripe-webhook-status', { headers:{ 'X-Admin-Token': adminToken } }).then(r=>r.json()).catch(()=>({configured:false})),
+      fetch('/api/admin-data?action=resend-webhook-status', { headers:{ 'X-Admin-Token': adminToken } }).then(r=>r.json()).catch(()=>({configured:false}))
     ]);
-    systemStatus = { files: f, stripe: st };
+    systemStatus = { files: f, stripe: st, resend: rs };
   }
   const loadSystemBtn = $('loadSystemBtn');
   if(loadSystemBtn) loadSystemBtn.onclick = async ()=>{
@@ -3797,6 +3853,24 @@ function attachHandlers(){
       if(m) m.textContent = 'Connected.';
       await loadSystemStatus();
     }catch(e){ if(m) m.textContent = e.message || 'Could not connect it just now.'; }
+    render();
+  };
+  const saveResendBtn = $('saveResendBtn');
+  if(saveResendBtn) saveResendBtn.onclick = async ()=>{
+    const input = $('resendSecret');
+    const m = sysMsg();
+    const secret = input ? input.value.trim() : '';
+    if(!secret){ if(m) m.textContent = 'Paste the signing secret first.'; return; }
+    saveResendBtn.disabled = true; saveResendBtn.textContent = 'Saving…';
+    try{
+      const r = await fetch('/api/admin-data', { method:'POST',
+        headers:{ 'Content-Type':'application/json', 'X-Admin-Token': adminToken },
+        body: JSON.stringify({ action:'set-resend-secret', secret }) });
+      const d = await r.json();
+      if(d.error) throw new Error(d.error);
+      if(m) m.textContent = 'Saved. Delivery reports will start arriving with the next email.';
+      await loadSystemStatus();
+    }catch(e){ if(m) m.textContent = e.message || 'Could not save it just now.'; }
     render();
   };
   const backupMsg = ()=> $('backup-msg');

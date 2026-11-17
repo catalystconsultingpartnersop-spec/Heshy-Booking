@@ -30,7 +30,16 @@ export async function sendEmail({ to, subject, html }) {
       console.error('Resend error:', await res.text());
       return false;
     }
-    return true;
+    // Returns Resend's id for the message on success, which is what the delivery webhook
+    // reports against — so an email can be followed from here to "delivered" or "bounced".
+    // Still falsy on failure, and still never `=== false` on success, so every existing
+    // caller's truthiness check keeps working unchanged.
+    try {
+      const body = await res.json();
+      return body?.id || true;
+    } catch (e) {
+      return true;   // sent, but the id couldn't be read; not worth failing a sent email over
+    }
   } catch (e) {
     console.error('Email send failed:', e);
     return false;

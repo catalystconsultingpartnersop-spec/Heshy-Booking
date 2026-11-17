@@ -5,6 +5,9 @@
       "schedule": "0 12 * * *"
     }
   ],
+  "rewrites": [
+    { "source": "/api/email-webhook", "destination": "/api/stripe-webhook" }
+  ],
   "headers": [
     {
       "source": "/(.*)",

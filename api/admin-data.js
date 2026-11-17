@@ -720,6 +720,29 @@ export default async function handler(req, res) {
         return res.status(500).json({ error: 'Could not set up the Stripe webhook: ' + err.message });
       }
     }
+    // Resend has no API for creating webhooks, so its signing secret is pasted in once from
+    // their dashboard. Stored in KV like Stripe's, rather than becoming another environment
+    // variable Heshy would have to go and set.
+    if (req.method === 'POST' && req.body?.action === 'set-resend-secret') {
+      const secret = String(req.body.secret || '').trim();
+      if (!secret) {
+        await kv.del('resend-webhook-secret');
+        return res.status(200).json({ ok: true, cleared: true });
+      }
+      // Checked for shape before storing, so a mistyped paste fails here rather than silently
+      // rejecting every delivery report later.
+      if (!/^whsec_[A-Za-z0-9+/=]{16,}$/.test(secret)) {
+        return res.status(400).json({ error: "That doesn't look like a Resend signing secret — it should start with whsec_." });
+      }
+      await kv.set('resend-webhook-secret', secret);
+      return res.status(200).json({ ok: true });
+    }
+    if (req.query?.action === 'resend-webhook-status' || req.body?.action === 'resend-webhook-status') {
+      return res.status(200).json({
+        configured: !!(await kv.get('resend-webhook-secret')),
+        url: (process.env.SITE_URL || 'https://heshy-booking.vercel.app') + '/api/email-webhook'
+      });
+    }
     if (req.query?.action === 'stripe-webhook-status' || req.body?.action === 'stripe-webhook-status') {
       const id = await kv.get('stripe-webhook-id');
       const hasSecret = !!(await kv.get('stripe-webhook-secret'));
