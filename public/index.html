@@ -336,6 +336,30 @@
     font-size:12px;font-weight:600;background:#F6F1E4;color:#8A6D2F;
   }
   .session-flag.bad{background:#FBEAE8;color:#B3261E;}
+  /* Who owes you money, on the client row. */
+  .owes-badge{
+    display:inline-block;margin-left:6px;padding:2px 7px;border-radius:4px;
+    font-size:11px;font-weight:600;background:#F6F1E4;color:#8A6D2F;vertical-align:middle;
+  }
+  .owes-badge.bad{background:#FBEAE8;color:#B3261E;}
+  /* The weekly hours, stated on the Schedule tab instead of hidden behind an Edit button. */
+  .weekly-summary{
+    margin-top:20px;padding:14px 16px;border:1px solid var(--line-strong);
+    border-left:3px solid var(--ink);border-radius:8px;background:var(--paper);
+  }
+  .weekly-summary-label{font-size:10.5px;font-weight:600;letter-spacing:0.07em;text-transform:uppercase;color:var(--muted);margin-bottom:8px;}
+  .weekly-line{font-size:14px;line-height:1.9;}
+  /* The holiday's name, in the day itself rather than only in a tooltip nobody sees. */
+  .cal-holiday-name{
+    font-size:9px;line-height:1.15;color:#8A6D2F;font-weight:600;
+    margin-top:3px;padding:0 2px;overflow:hidden;
+  }
+  .cal-holiday-sm{font-size:8.5px;line-height:1.1;color:#8A6D2F;font-weight:600;margin-top:2px;}
+  .cal-cell-sm.holiday-sm{background:#FBF6EA;}
+  .cal-holiday-note{
+    margin-top:10px;font-size:12.5px;color:#8A6D2F;background:#FBF6EA;
+    border-left:3px solid #C9A961;border-radius:4px;padding:8px 11px;
+  }
   .session-time-big{font-size:22px;font-weight:600;font-family:Georgia,serif;margin-top:4px;line-height:1.2;}
   .session-format{font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:.04em;margin-top:4px;}
   .session-controls{margin-top:14px;padding:14px;background:#F7F7F5;border-radius:6px;}
@@ -802,6 +826,14 @@ let actualEntryError = null;
 // Which session cards are open. Closed by default: a session is a one-line row until there is a
 // reason to look inside it.
 let expandedSessions = {};
+// The four maintenance panels sit behind one button. They run themselves, so they were three
+// screens of scrolling past things Heshy never needs to touch.
+let showMaintenance = false;
+// Google Calendar, the fallback meet link, the fallback address, the intake questions: set once
+// and then never touched, but sitting in the middle of the things that do get changed.
+// saveSettings already falls back to the stored value for any field not on screen, so hiding
+// them cannot blank them.
+let showSetOnce = false;
 let billingBasisChoice = {}; // bookingId -> 'actual' | 'minimum', overrides the global default per session
 let rescheduleType = {};
 let runningTimer = {};
@@ -2555,6 +2587,7 @@ function renderClientCalendar(candidateDates){
 
   const totalCells = clientCalWeeksShown * 7;
   let cells = '';
+  const clientHolidaysInView = [];
   for(let i=0;i<todayDow;i++) cells += `<div class="cal-cell-sm empty"></div>`;
   for(let i=0;i<totalCells-todayDow;i++){
     const d = new Date(today); d.setDate(d.getDate()+i);
@@ -2564,9 +2597,13 @@ function renderClientCalendar(candidateDates){
     const isAvailable = count > 0;
     const isSelected = selectedDay === ds;
     const isToday = ds === todayDs;
-    cells += `<div class="cal-cell-sm ${!isAvailable?'past':''} ${isSelected?'selected':''} ${isToday?'today':''}" ${isAvailable?`data-day="${ds}"`:''} ${isHoliday?`title="${jewishHolidayNames[ds]||'Jewish holiday'}"`:''}>
+    // A client looking at a blank day deserves to know it's a holiday rather than assume Heshy
+    // is simply booked out.
+    if(isHoliday) clientHolidaysInView.push({ ds, name: jewishHolidayNames[ds] || 'Jewish holiday' });
+    cells += `<div class="cal-cell-sm ${!isAvailable?'past':''} ${isHoliday?'holiday-sm':''} ${isSelected?'selected':''} ${isToday?'today':''}" ${isAvailable?`data-day="${ds}"`:''} ${isHoliday?`title="${esc(jewishHolidayNames[ds]||'Jewish holiday')}"`:''}>
       <div class="cal-daynum-sm">${d.getDate()}</div>
-      ${isAvailable ? `<div class="cal-slot-count">${count} open</div>` : ''}
+      ${isHoliday ? `<div class="cal-holiday-sm">${esc(shortHoliday(jewishHolidayNames[ds]))}</div>`
+        : (isAvailable ? `<div class="cal-slot-count">${count} open</div>` : '')}
     </div>`;
   }
 
@@ -2578,7 +2615,15 @@ function renderClientCalendar(candidateDates){
       ${['S','M','T','W','T','F','S'].map(d=>`<div class="cal-dow-sm">${d}</div>`).join('')}
       ${cells}
     </div>
+    ${clientHolidaysInView.length ? `<div class="cal-holiday-note">Closed for ${holidayList(clientHolidaysInView)}.</div>` : ''}
   `;
+}
+
+// The cell is small, so a long festival name is shortened to fit. The full name is in the
+// tooltip and spelled out under the calendar either way.
+function shortHoliday(name){
+  const n = String(name || 'Holiday').replace(/\s+[IVX]+$/, '').trim();
+  return n.length > 11 ? n.slice(0, 10) + '…' : n;
 }
 
 function renderCalendarNav(){
@@ -2611,6 +2656,7 @@ function renderScheduleCalendar(){
   }
 
   let cells = '';
+  const holidaysInView = [];
   for(let i=0;i<firstDow;i++) cells += `<div class="cal-cell empty"></div>`;
   for(let day=1; day<=daysInMonth; day++){
     const d = new Date(monthStart.getFullYear(), monthStart.getMonth(), day);
@@ -2620,9 +2666,12 @@ function renderScheduleCalendar(){
     const hasSlots = !!countsForType[ds];
     const isSelected = selectedScheduleDate === ds;
     const isToday = ds === todayDs;
-    cells += `<div class="cal-cell ${isPast?'past':''} ${isHoliday?'holiday':''} ${isSelected?'selected':''} ${isToday?'today':''}" ${isPast?'':`data-cal-day="${ds}"`} ${isHoliday?`title="${jewishHolidayNames[ds]||'Jewish holiday'}"`:''}>
+    // The holiday's name goes in the cell, not only in a tooltip. A tooltip is invisible on a
+    // phone and easy to miss anywhere else, so "why is this day closed?" had no answer on screen.
+    if(isHoliday) holidaysInView.push({ ds, name: jewishHolidayNames[ds] || 'Jewish holiday' });
+    cells += `<div class="cal-cell ${isPast?'past':''} ${isHoliday?'holiday':''} ${isSelected?'selected':''} ${isToday?'today':''}" ${isPast?'':`data-cal-day="${ds}"`} ${isHoliday?`title="${esc(jewishHolidayNames[ds]||'Jewish holiday')}"`:''}>
       <div class="cal-daynum">${day}</div>
-      ${hasSlots ? `<div class="cal-dot"></div>` : ''}
+      ${isHoliday ? `<div class="cal-holiday-name">${esc(jewishHolidayNames[ds]||'Holiday')}</div>` : (hasSlots ? `<div class="cal-dot"></div>` : '')}
     </div>`;
   }
 
@@ -2638,9 +2687,25 @@ function renderScheduleCalendar(){
     </div>
     <div class="cal-legend">
       <span><span class="cal-dot-legend"></span> has open times</span>
-      <span><span class="cal-holiday-legend"></span> Jewish holiday, unavailable</span>
+      ${holidaysInView.length ? `<span><span class="cal-holiday-legend"></span> closed for ${holidayList(holidaysInView)}</span>` : ''}
     </div>
   `;
+}
+
+// Names the holidays actually on screen, rather than a legend that claims one is there when
+// none is. Repeated days of the same festival are named once.
+function holidayList(items){
+  const seen = [];
+  for(const h of items){
+    const base = h.name.replace(/\s+[IVX]+$/, '').replace(/\s+\d+$/, '').trim();
+    if(!seen.includes(base)) seen.push(base);
+  }
+  const names = seen.slice(0, 3).map(esc);
+  const extra = seen.length - names.length;
+  let text = names.length <= 1 ? (names[0] || 'a Jewish holiday')
+    : names.slice(0, -1).join(', ') + ' and ' + names[names.length - 1];
+  if(extra > 0) text += ` and ${extra} more`;
+  return text;
 }
 
 function renderDayDetail(){
@@ -3056,6 +3121,17 @@ function renderAdmin(){
           <div class="type-btn ${adminType==='in-person'?'active':''}" data-admin-type="in-person">In person</div>
         </div>
 
+        <div class="weekly-summary">
+          <div class="weekly-summary-label">Your ${adminType==='virtual'?'online':'in-person'} hours, every week</div>
+          ${(state.availability[adminType]||[]).length === 0
+            ? `<div class="note">Nothing set &mdash; no one can book ${adminType==='virtual'?'online':'in person'} until you add a window below.</div>`
+            : (state.availability[adminType]||[]).map(r=>
+                `<div class="weekly-line"><strong>${daysLabel(r.days)}</strong> &nbsp;${fmtTimeShort(r.start)} &ndash; ${fmtTimeShort(r.end)}${r.generalArea?` &middot; ${esc(r.generalArea)}`:''}</div>`
+              ).join('')}
+          ${(state.overrides||[]).filter(o=>o.type===adminType && o.date>=dateStr(new Date())).length
+            ? `<div class="note" style="margin-top:8px;">Plus ${(state.overrides||[]).filter(o=>o.type===adminType && o.date>=dateStr(new Date())).length} one-off date(s) added below.</div>` : ''}
+        </div>
+
         <div style="margin-top:24px;">
           ${renderScheduleCalendar()}
         </div>
@@ -3098,26 +3174,46 @@ function renderAdmin(){
 
   if(adminView==='clients'){
     const search = clientSearch.trim().toLowerCase();
+    // A session that hasn't happened yet is not one you've had. The list used to take the
+    // latest booking by date and call it "last met", so an upcoming session showed as a past
+    // one — and counted towards how many times you'd met.
+    const todayStr = dateStr(new Date());
     const clientsWithMeta = state.clients.map(c=>{
-      const clientBookings = state.bookings.filter(b=>b.clientId===c.id);
-      const sessionCount = clientBookings.length;
-      const lastBooking = clientBookings.slice().sort((a,b)=>(b.date+b.time).localeCompare(a.date+a.time))[0];
-      return { c, sessionCount, lastDate: lastBooking ? lastBooking.date : null };
+      const clientBookings = state.bookings.filter(b=>b.clientId===c.id && !b.cancelled);
+      const past = clientBookings.filter(b=>b.date < todayStr).sort((a,b)=>(b.date+b.time).localeCompare(a.date+a.time));
+      const future = clientBookings.filter(b=>b.date >= todayStr).sort((a,b)=>(a.date+a.time).localeCompare(b.date+b.time));
+      // What he's owed: a session that has happened and hasn't been charged or comped.
+      const owing = past.filter(b=>b.status === 'scheduled');
+      return {
+        c,
+        sessionCount: past.length,
+        lastDate: past[0] ? past[0].date : null,
+        nextDate: future[0] ? future[0].date : null,
+        owing: owing.length,
+        declined: clientBookings.some(b=>b.lastDeclineCode || (b.declineEmail && b.declineEmail.problem))
+      };
     }).filter(({c})=> !search || c.name.toLowerCase().includes(search) || (c.email||'').toLowerCase().includes(search));
     clientsWithMeta.sort((a,b)=>{
-      const aKey = a.lastDate || '0';
-      const bKey = b.lastDate || '0';
+      // Anyone who owes money comes first; it is the reason to open this list at all.
+      if((b.owing>0) !== (a.owing>0)) return (b.owing>0) ? 1 : -1;
+      const aKey = a.nextDate || a.lastDate || '0';
+      const bKey = b.nextDate || b.lastDate || '0';
       if(aKey !== bKey) return bKey.localeCompare(aKey);
       return b.c.createdAt - a.c.createdAt;
     });
 
     let clientsHtml = clientsWithMeta.length===0 ? `<div class="empty">${search ? 'No clients match that search.' : 'No client profiles yet.'}</div>` : '';
-    clientsWithMeta.forEach(({c, sessionCount, lastDate})=>{
+    clientsWithMeta.forEach(({c, sessionCount, lastDate, nextDate, owing, declined})=>{
+      const bits = [esc(c.email)];
+      bits.push(sessionCount === 0 ? 'not met yet' : `${sessionCount} session${sessionCount!==1?'s':''}`);
+      if(lastDate) bits.push('last met ' + fmtDate(lastDate));
+      if(nextDate) bits.push('next ' + fmtDate(nextDate));
       clientsHtml += `
         <div class="client-row" data-view-client-profile="${c.id}">
           <div>
-            <div class="main">${esc(c.name)}${c.wgLetters ? ` <span class="wg-badge" title="Strengths result">${c.wgLetters.toUpperCase()}</span>` : (c.wgPdfData ? ' <span class="wg-badge" title="Older Working Genius PDF on file">PDF</span>' : '')}</div>
-            <div class="sub">${esc(c.email)} &middot; ${sessionCount} session${sessionCount!==1?'s':''}${lastDate ? ' &middot; last met ' + fmtDate(lastDate) : ''}</div>
+            <div class="main">${esc(c.name)}${c.wgLetters ? ` <span class="wg-badge" title="Strengths result">${c.wgLetters.toUpperCase()}</span>` : (c.wgPdfData ? ' <span class="wg-badge" title="Older Working Genius PDF on file">PDF</span>' : '')}${
+              owing ? ` <span class="owes-badge${declined?' bad':''}">${declined ? 'card declined' : `${owing} unbilled`}</span>` : ''}</div>
+            <div class="sub">${bits.join(' &middot; ')}</div>
           </div>
           ${c.blocked ? `<span class="tag blocked">blocked</span>` : ''}
         </div>`;
@@ -3274,12 +3370,6 @@ function renderAdmin(){
     body = `
       <div class="admin-block">
         <h2 class="sect">Settings</h2>
-        <label>Google Calendar</label>
-        <div style="display:flex;align-items:center;gap:14px;">
-          <span class="tag ${calendarConnected?'status-completed':'status-scheduled'}">${calendarConnected?'connected':'not connected'}</span>
-          <a class="wg-link" href="/api/google-auth-url?token=${encodeURIComponent(adminToken)}">${calendarConnected?'Reconnect':'Connect Google Calendar'}</a>
-        </div>
-        <div class="note">When connected, times that conflict with your personal calendar won't show as bookable, and booked sessions get added to your calendar automatically.</div>
         <label>Hourly rate</label>
         <div class="note" style="margin-bottom:8px;">Updates everywhere at once &mdash; the booking page, charge calculations, and confirmation emails.</div>
         <input type="text" id="set-hourly-rate" style="max-width:120px;" value="${state.settings.hourlyRate!=null?state.settings.hourlyRate:500}">
@@ -3302,16 +3392,28 @@ function renderAdmin(){
           <div class="type-btn ${(state.settings.billingMode||'actual')==='actual'?'active':''}" id="billing-mode-actual">Actual time</div>
           <div class="type-btn ${state.settings.billingMode==='minimum'?'active':''}" id="billing-mode-minimum">Full booked length</div>
         </div>
-        <label>Backup video call link</label>
-        <div class="note" style="margin-bottom:8px;">Every booking gets its own unique Meet link automatically when Google Calendar is connected \u2014 this field is only used as a fallback for the rare case a booking happens while Calendar is disconnected.</div>
-        <input type="text" id="set-meet" placeholder="https://meet.google.com/xxx-xxxx-xxx" value="${state.settings.meetLink}">
-        <label>Default in-person location <span class="note" style="display:inline;">(fallback only)</span></label>
-        <div class="note" style="margin-bottom:8px;">Set the actual location per day in Schedule \u2014 Mon-Thu can be a different address than Friday, for example. This is only used if a day's own location isn't set.</div>
-        <textarea id="set-location" placeholder="Address, parking, floor, buzzer code, etc.">${esc(state.settings.location)}</textarea>
-        <label>Intake questions (one per line, asked only on a client's first booking)</label>
-        <textarea id="set-intake" style="min-height:140px;">${(state.settings.intakeQuestions||[]).join('\n')}</textarea>
-        <div class="note">Sent automatically on every confirmation, based on which format the client picked.</div>
-        <div style="margin-top:16px;">
+        <div style="margin-top:22px;padding-top:18px;border-top:1px solid var(--line);">
+          <button class="ghost small" id="toggleSetOnce">${showSetOnce?'Hide the set-once settings':'Google Calendar, location, intake questions\u2026'}</button>
+        </div>
+        ${!showSetOnce ? '' : `
+        <div style="margin-top:18px;">
+          <label>Google Calendar</label>
+          <div style="display:flex;align-items:center;gap:14px;">
+            <span class="tag ${calendarConnected?'status-completed':'status-scheduled'}">${calendarConnected?'connected':'not connected'}</span>
+            <a class="wg-link" href="/api/google-auth-url?token=${encodeURIComponent(adminToken)}">${calendarConnected?'Reconnect':'Connect Google Calendar'}</a>
+          </div>
+          <div class="note">When connected, times that conflict with your personal calendar won't show as bookable, and booked sessions get added to your calendar automatically.</div>
+          <label>Backup video call link</label>
+          <div class="note" style="margin-bottom:8px;">Every booking gets its own unique Meet link automatically when Google Calendar is connected \u2014 this field is only used as a fallback for the rare case a booking happens while Calendar is disconnected.</div>
+          <input type="text" id="set-meet" placeholder="https://meet.google.com/xxx-xxxx-xxx" value="${state.settings.meetLink}">
+          <label>Default in-person location <span class="note" style="display:inline;">(fallback only)</span></label>
+          <div class="note" style="margin-bottom:8px;">Set the actual location per day in Schedule \u2014 Mon-Thu can be a different address than Friday, for example. This is only used if a day's own location isn't set.</div>
+          <textarea id="set-location" placeholder="Address, parking, floor, buzzer code, etc.">${esc(state.settings.location)}</textarea>
+          <label>Intake questions (one per line, asked only on a client's first booking)</label>
+          <textarea id="set-intake" style="min-height:140px;">${(state.settings.intakeQuestions||[]).join('\n')}</textarea>
+          <div class="note">Sent automatically on every confirmation, based on which format the client picked.</div>
+        </div>`}
+        <div style="margin-top:20px;">
           <button class="primary small" id="save-settings-btn">Save settings</button>
           <span id="settings-save-msg" style="font-size:13px;margin-left:12px;"></span>
         </div>
@@ -3346,6 +3448,12 @@ function renderAdmin(){
         <div style="margin-top:14px;"><button class="ghost small" id="addCouponBtn">Add coupon</button></div>
       </div>
 
+      <div class="admin-block">
+        <h2 class="sect">Maintenance</h2>
+        <div class="note" style="margin-bottom:10px;">The problem log, file and payment checks, backups, and Claude's access log. All of it looks after itself &mdash; open it when something seems wrong.</div>
+        <button class="ghost small" id="toggleMaintenance">${showMaintenance?'Hide maintenance':'Open maintenance'}</button>
+      </div>
+      ${!showMaintenance ? '' : `
       <div class="admin-block">
         <h2>Problem log</h2>
         <div class="note" style="margin-bottom:10px;">Anything that failed on the server &mdash; a booking that didn't save, a charge that didn't go through, an email that didn't send. If a client ever says something went wrong, look here first.</div>
@@ -3487,7 +3595,7 @@ function renderAdmin(){
                  }).join('')}
                </div>
                <div style="margin-top:12px;"><button class="ghost small" id="loadAgentLogBtn">Refresh</button></div>`}
-      </div>
+      </div>`}
     `;
   }
 
@@ -3886,6 +3994,10 @@ function attachHandlers(){
     }catch(e){ if(m) m.textContent = e.message || 'Could not connect it just now.'; }
     render();
   };
+  const toggleSetOnceBtn = $('toggleSetOnce');
+  if(toggleSetOnceBtn) toggleSetOnceBtn.onclick = ()=>{ showSetOnce = !showSetOnce; render(); };
+  const toggleMaintenanceBtn = $('toggleMaintenance');
+  if(toggleMaintenanceBtn) toggleMaintenanceBtn.onclick = ()=>{ showMaintenance = !showMaintenance; render(); };
   const saveResendBtn = $('saveResendBtn');
   if(saveResendBtn) saveResendBtn.onclick = async ()=>{
     const input = $('resendSecret');

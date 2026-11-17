@@ -114,6 +114,54 @@ check('...a declined card too', /Card was declined \\u2014 not charged/.test(htm
 check('...and a session still waiting to be charged', /Not charged yet/.test(html));
 check('a problem is marked differently from a reminder', /session-flag\.bad/.test(html));
 
+// --- the three other Manage tabs, and the holidays ----------------------------------------------
+// Clients: the list took the latest booking by date and called it "last met", so a session that
+// hadn't happened yet showed as a past one — and counted towards how often they'd met.
+check('a session that has not happened is not counted as one you have had',
+      /const past = clientBookings\.filter\(b=>b\.date < todayStr\)/.test(html));
+check('...and an upcoming one is labelled as next, not last', /'next ' \+ fmtDate\(nextDate\)/.test(html));
+check('...someone you have never met says so', /not met yet/.test(html));
+check('...and cancelled sessions do not count', /b\.clientId===c\.id && !b\.cancelled/.test(html));
+check('the list shows who owes money', /owes-badge/.test(html));
+check('...with a declined card called out separately', /card declined/.test(html));
+check('...and those clients sorted to the top', /if\(\(b\.owing>0\) !== \(a\.owing>0\)\)/.test(html));
+
+// Schedule: the weekly hours were only visible after pressing "Edit weekly pattern".
+check('the weekly hours are stated on the Schedule tab', /weekly-summary/.test(html));
+check('...for the format being looked at', /Your \$\{adminType==='virtual'\?'online':'in-person'\} hours/.test(html));
+check('...saying plainly when nothing is set', /no one can book/.test(html));
+
+// Holidays: a day was greyed out with the name only in a tooltip, and the legend claimed a
+// holiday was on screen even when none was.
+check('a holiday names itself in the day', /cal-holiday-name/.test(html));
+check('...on the client\'s calendar too', /cal-holiday-sm/.test(html));
+check('...and under it in words', /cal-holiday-note/.test(html));
+check('the legend only appears when a holiday is in view', /\$\{holidaysInView\.length \?/.test(html));
+check('...and names which one', /closed for \$\{holidayList\(holidaysInView\)\}/.test(html));
+
+// Chanukah I and Chanukah II are one festival, not two.
+const hsrc = html.slice(html.indexOf('function holidayList('));
+// The page's esc() lives in its own scope, so it is handed in rather than redeclared.
+const holidayList = new Function('esc', hsrc.slice(0, hsrc.indexOf('\n}\n') + 3) + '; return holidayList;')(x => x);
+check('repeated days of one festival are named once',
+      holidayList([{name:'Chanukah I'},{name:'Chanukah II'},{name:'Chanukah III'}]) === 'Chanukah',
+      holidayList([{name:'Chanukah I'},{name:'Chanukah II'}]));
+check('two different holidays are both named',
+      holidayList([{name:'Rosh Hashana I'},{name:'Yom Kippur'}]) === 'Rosh Hashana and Yom Kippur',
+      holidayList([{name:'Rosh Hashana I'},{name:'Yom Kippur'}]));
+check('a long list is cut short rather than running on',
+      /and 1 more$/.test(holidayList([{name:'A'},{name:'B'},{name:'C'},{name:'D'}])),
+      holidayList([{name:'A'},{name:'B'},{name:'C'},{name:'D'}]));
+
+// Settings: one long scroll mixing what he changes with what he set once and never opens.
+check('the set-once settings are tucked away', /toggleSetOnce/.test(html));
+// Hiding a field must never blank it on save.
+check('...and saving while they are hidden keeps them', /meetEl \? meetEl\.value : state\.settings\.meetLink/.test(html));
+check('...for the location too', /locEl \? locEl\.value : state\.settings\.location/.test(html));
+check('...and the intake questions', /intakeEl \? intakeEl\.value\.split/.test(html));
+check('the four maintenance panels sit behind one button', /toggleMaintenance/.test(html));
+check('...and are not rendered until opened', /\$\{!showMaintenance \? '' : `/.test(html));
+
 console.log(`\n${pass} passed, ${fail} failed`);
 if (fail) { console.log('\nFAILURES:\n' + failures.map(f => '  ' + f).join('\n')); process.exit(1); }
 
