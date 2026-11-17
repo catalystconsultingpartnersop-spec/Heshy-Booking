@@ -327,6 +327,15 @@
   .session-top{display:flex;justify-content:space-between;align-items:flex-start;}
   .session-name{font-weight:600;font-size:14.5px;}
   .session-meta{font-size:12.5px;color:var(--muted);margin-top:2px;}
+  /* A session is a closed row until there's a reason to open it. */
+  .session-head{cursor:pointer;}
+  .session-head:hover .session-chev{color:var(--ink);}
+  .session-chev{font-size:18px;color:var(--muted);line-height:1;padding:0 2px;user-select:none;}
+  .session-flag{
+    display:inline-block;margin-top:7px;padding:3px 9px;border-radius:4px;
+    font-size:12px;font-weight:600;background:#F6F1E4;color:#8A6D2F;
+  }
+  .session-flag.bad{background:#FBEAE8;color:#B3261E;}
   .session-time-big{font-size:22px;font-weight:600;font-family:Georgia,serif;margin-top:4px;line-height:1.2;}
   .session-format{font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:.04em;margin-top:4px;}
   .session-controls{margin-top:14px;padding:14px;background:#F7F7F5;border-radius:6px;}
@@ -790,6 +799,9 @@ let billedHoursDraft = {};
 // The session whose length is being typed in next to the timer, and anything wrong with it.
 let editingActualId = null;
 let actualEntryError = null;
+// Which session cards are open. Closed by default: a session is a one-line row until there is a
+// reason to look inside it.
+let expandedSessions = {};
 let billingBasisChoice = {}; // bookingId -> 'actual' | 'minimum', overrides the global default per session
 let rescheduleType = {};
 let runningTimer = {};
@@ -2892,17 +2904,35 @@ function renderAdmin(){
         </div>
       </div>
     ` : '';
+    // Every session used to render fully open \u2014 timer, two textareas, the whole billing block.
+    // Three sessions was a wall of empty boxes to scroll past, and anything that needed Heshy was
+    // buried in the middle of it. Collapsed now, with whatever needs him stated on the closed row.
+    const open = expandedSessions[b.id] === true;
+    const needsBilling = !b.cancelled && b.status === 'scheduled' && b.date < dateStr(new Date());
+    const flag = b.declineEmail && b.declineEmail.problem
+        ? { bad: true, text: `Payment email ${String(b.declineEmail.status).toLowerCase()} \u2014 they never got it` }
+      : b.lastDeclineCode
+        ? { bad: true, text: 'Card was declined \u2014 not charged' }
+      : needsBilling
+        ? { bad: false, text: 'Not charged yet' }
+      : null;
+
     return `
-      <div class="session">
-        <div class="session-top">
+      <div class="session${open?' open':''}">
+        <div class="session-top session-head" data-toggle-session="${b.id}" role="button" tabindex="0" aria-expanded="${open}">
           <div>
             <div class="session-name">${b.clientId?`<a class="client-link" data-view-client="${b.clientId}">${esc(b.clientName)}</a>`:esc(b.clientName)}</div>
             <div class="session-time-big">${fmtTime(b.time)}</div>
             <div class="session-meta">${fmtDate(b.date)} &middot; ${b.durationMin} min scheduled${b.actualMinutes?', '+b.actualMinutes+' min actual':''}</div>
             <div class="session-format">${b.durationMin===15?'Phone call':(b.type==='virtual'?'Video call':'In person')}${b.comped?' &middot; comped ('+esc(b.couponCode)+')':(b.couponDiscount?' &middot; '+couponDescribe({discountType:b.couponDiscount.type,discountValue:b.couponDiscount.value})+' ('+esc(b.couponCode)+')':'')}</div>
+            ${flag ? `<div class="session-flag${flag.bad?' bad':''}">${esc(flag.text)}</div>` : ''}
           </div>
-          <span class="tag status-${b.status}">${b.status}</span>${b.cancelled ? ` <span class="tag status-cancelled">cancelled</span>` : ''}
+          <div style="display:flex;align-items:center;gap:8px;">
+            <span class="tag status-${b.status}">${b.status}</span>${b.cancelled ? ` <span class="tag status-cancelled">cancelled</span>` : ''}
+            <span class="session-chev">${open?'&minus;':'+'}</span>
+          </div>
         </div>
+        ${open ? `
         ${b.cancelled ? `<div class="note" style="margin-top:8px;">Cancelled${b.status==='charged' ? ' \u2014 this session was already charged, so it stays visible to the client and in your records.' : ' \u2014 the time was freed up. Any notes or billing from before cancelling are kept below for your records.'}</div>` : ''}
         ${controls}
         ${action?`<div class="session-actions">${action}</div>`:''}
@@ -2912,7 +2942,7 @@ function renderAdmin(){
           <button class="ghost small danger-ghost" data-cancel-booking="${b.id}">Cancel booking</button>
         </div>
         ${rescheduleBlock}
-        ` : ''}
+        ` : ''}` : ''}
       </div>`;
   }
 
@@ -2993,10 +3023,11 @@ function renderAdmin(){
         <h2 class="sect">Calendar</h2>
         ${renderDashboardCalendar()}
       </div>
+      ${isSelectedToday ? '' : `
       <div class="admin-block">
-        <h2 class="sect">${isSelectedToday ? 'Today' : fmtDate(selectedDashboardDate)}</h2>
+        <h2 class="sect">${fmtDate(selectedDashboardDate)}</h2>
         ${dayHtml}
-      </div>
+      </div>`}
     `;
     const filteredBlock = `
       <div class="admin-block">
@@ -3961,6 +3992,18 @@ function attachHandlers(){
           amtEl.value = (Math.round(hours*(state.settings.hourlyRate||500)*100)/100).toFixed(2);
         }
       };
+    });
+    document.querySelectorAll('[data-toggle-session]').forEach(el=>{
+      const id = el.getAttribute('data-toggle-session');
+      const toggle = ev => {
+        // The client name inside the header is a link to their profile, so it must not also
+        // open the card.
+        if(ev.target.closest('[data-view-client]')) return;
+        expandedSessions[id] = !expandedSessions[id];
+        render();
+      };
+      el.onclick = toggle;
+      el.onkeydown = ev => { if(ev.key==='Enter' || ev.key===' '){ ev.preventDefault(); toggle(ev); } };
     });
     document.querySelectorAll('[data-edit-actual]').forEach(el=>{ el.onclick = ()=>toggleActualEntry(el.getAttribute('data-edit-actual')); });
     document.querySelectorAll('[data-save-actual]').forEach(el=>{ el.onclick = ()=>saveActualTime(el.getAttribute('data-save-actual')); });

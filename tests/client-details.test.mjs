@@ -96,6 +96,24 @@ check('the old step-1-only link is gone', !/Already a client\?/.test(html));
 check('the link is wired up', /querySelectorAll\('\[data-go-portal\]'\)/.test(html));
 check('...and it is a real link, so it works without script too', /<a href="#portal"/.test(html));
 
+// --- the Manage dashboard ---------------------------------------------------------------------
+// It rendered "Today" twice: once as its own block, and again as the calendar's selected day,
+// which defaults to today. The same sessions, listed twice, in full.
+check('the calendar day block is skipped when it would repeat Today',
+      /\$\{isSelectedToday \? '' : `/.test(html));
+// Every session rendered fully open — timer, two textareas, the whole billing block. Three
+// sessions was a wall of empty boxes, with anything needing attention buried in the middle.
+check('a session starts closed', /const open = expandedSessions\[b\.id\] === true/.test(html));
+check('...and opens when its header is used', /data-toggle-session="/.test(html));
+check('...by keyboard as well as mouse', /ev\.key==='Enter' \|\| ev\.key===' '/.test(html));
+check('...without the client name opening it instead of their profile',
+      /ev\.target\.closest\('\[data-view-client\]'\)/.test(html));
+// The point of collapsing: what needs him has to be visible without opening anything.
+check('a bounced payment email is flagged on the closed row', /Payment email \$\{String\(b\.declineEmail\.status\)/.test(html));
+check('...a declined card too', /Card was declined \\u2014 not charged/.test(html));
+check('...and a session still waiting to be charged', /Not charged yet/.test(html));
+check('a problem is marked differently from a reminder', /session-flag\.bad/.test(html));
+
 console.log(`\n${pass} passed, ${fail} failed`);
 if (fail) { console.log('\nFAILURES:\n' + failures.map(f => '  ' + f).join('\n')); process.exit(1); }
 
