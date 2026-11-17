@@ -10,6 +10,7 @@ import { takeBackup, listBackups, readBackup, isDueForBackup } from './_lib/back
 import { validateAppData } from './_lib/schema.js';
 import { stripe } from './_lib/stripecustomer.js';
 import { EVENTS as STRIPE_EVENTS } from './_lib/stripeevents.js';
+import { probeGoogleSignIn } from './_lib/googlecheck.js';
 import { callerIp, checkDataUrl, MAX_PDF_BYTES, MAX_AUDIO_BYTES } from './_lib/limits.js';
 
 const ADMIN_SESSION_SECONDS = 60 * 60 * 12; // 12 hours
@@ -662,8 +663,22 @@ export default async function handler(req, res) {
         await logAgentAccess('detail', { bookingId, clientId });
         return res.status(200).json(buildDetail(data, { bookingId, clientId }));
       }
+      // Read-only health checks, so Claude can verify these are actually working instead of
+      // asking Heshy to press buttons and report back. None of them change anything.
+      if (what === 'checks') {
+        await logAgentAccess('checks', {});
+        const legacyFiles = (data.clients || []).filter(c => c.wgPdfData && isLegacyPath(c.wgPdfData)).length
+          + (data.bookings || []).reduce((n, b) => n + (b.recordingSegments || []).filter(sg => sg.url && isLegacyPath(sg.url)).length, 0);
+        return res.status(200).json({
+          google: await probeGoogleSignIn(),
+          stripeWebhook: { configured: !!(await kv.get('stripe-webhook-secret')) },
+          files: { onOldPaths: legacyFiles },
+          clientsWithPassword: (data.clients || []).filter(c => c.passwordHash).length,
+          backups: (await listBackups()).length
+        });
+      }
       await logAgentAccess('unknown-view', { view: String(what).slice(0, 40) });
-      return res.status(400).json({ error: 'Unknown view. Use summary, problems or detail.' });
+      return res.status(400).json({ error: 'Unknown view. Use summary, problems, detail or checks.' });
     }
     // ------------------------------------------------------------------------------------------
 
@@ -772,50 +787,7 @@ export default async function handler(req, res) {
     // screen is still in Testing mode, because Google only enforces that after someone picks an
     // account; that one needs a real sign-in by somebody who isn't the project owner.
     if (req.query?.action === 'test-google-signin' || req.body?.action === 'test-google-signin') {
-      const clientId = process.env.GOOGLE_CLIENT_ID;
-      const redirectUri = process.env.GOOGLE_REDIRECT_URI;
-      if (!clientId || !redirectUri) {
-        return res.status(200).json({ ok: false, problem: 'missing-config',
-          message: 'Google isn\'t configured on the server at all (no client id or redirect address).' });
-      }
-      const probe = `https://accounts.google.com/o/oauth2/v2/auth?client_id=${encodeURIComponent(clientId)}`
-        + `&redirect_uri=${encodeURIComponent(redirectUri)}&response_type=code`
-        + `&scope=${encodeURIComponent('openid email profile')}&state=probe&prompt=select_account`;
-      try {
-        const r = await fetch(probe, { redirect: 'manual', headers: { 'User-Agent': 'Mozilla/5.0' } });
-        const body = await r.text().catch(() => '');
-        const found = m => body.toLowerCase().includes(m);
-
-        if (found('redirect_uri_mismatch')) {
-          return res.status(200).json({ ok: false, problem: 'redirect-mismatch', redirectUri,
-            message: 'Google does not recognise this app\'s redirect address. It has to be listed exactly, in the Google Cloud console.' });
-        }
-        if (found('invalid_client') || r.status === 401) {
-          return res.status(200).json({ ok: false, problem: 'bad-client',
-            message: 'Google does not recognise the client id this app is using.' });
-        }
-        if (found('invalid_scope')) {
-          return res.status(200).json({ ok: false, problem: 'bad-scope',
-            message: 'Google refused the sign-in permissions this app asks for.' });
-        }
-        if (found('accounterror') || found('error 400') || found('error 401') || found('error 403')) {
-          return res.status(200).json({ ok: false, problem: 'refused', status: r.status,
-            message: 'Google refused the request. The exact reason is on its error page.' });
-        }
-        // A 200 sign-in page or a redirect into Google's own login flow both mean the
-        // configuration is accepted and a real person would now be asked to choose an account.
-        const reachedSignIn = r.status === 200 || (r.status >= 300 && r.status < 400
-          && /accounts\.google\.com|accounts\.youtube\.com/.test(r.headers.get('location') || ''));
-        if (reachedSignIn) {
-          return res.status(200).json({ ok: true, redirectUri,
-            message: 'Google accepted the request and would now ask the client to choose an account.' });
-        }
-        return res.status(200).json({ ok: false, problem: 'unexpected', status: r.status,
-          message: `Google answered unexpectedly (${r.status}).` });
-      } catch (err) {
-        await logError('test-google-signin', err, {});
-        return res.status(200).json({ ok: false, problem: 'unreachable', message: 'Could not reach Google: ' + err.message });
-      }
+      return res.status(200).json(await probeGoogleSignIn());
     }
 
     if (req.query?.action === 'secure-files' || req.body?.action === 'secure-files') {

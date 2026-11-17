@@ -143,6 +143,7 @@ check('a Google account with no matching client is explained', /isn.t on file/.t
 // It asks Google from the server, where Google is reachable, and reports what comes back.
 const adminMod = await import('../api/admin-data.js');
 const adminHandler = adminMod.default;
+const { probeGoogleSignIn } = await import('../api/_lib/googlecheck.js');
 process.env.GOOGLE_CLIENT_ID = 'cid'; process.env.GOOGLE_REDIRECT_URI = 'https://x/api/google-callback';
 store.set('admin-session:tok', true);
 appData = appData || { clients: [], bookings: [], settings: {} };
@@ -205,6 +206,34 @@ await adminHandler({ method:'GET', query:{ action:'test-google-signin' }, header
 check('the check needs an admin session', r401.statusCode === 401);
 
 check('Manage warns that Testing mode cannot be detected this way', /Testing mode/.test(html));
+
+// The read-only key must be able to run these checks itself, so verifying that sign-in works
+// doesn't depend on Heshy pressing a button and reporting back.
+process.env.AGENT_READ_KEY = 'k'.repeat(48);
+{
+  const realFetch = globalThis.fetch;
+  globalThis.fetch = async (url) => {
+    if (String(url).includes('accounts.google.com')) return page('<html>Choose an account</html>', 200);
+    return realFetch(url);
+  };
+  const r = mockRes();
+  await adminHandler({ method:'GET', query:{ view:'checks' }, headers:{ 'x-agent-key':'k'.repeat(48) }, body:null }, r);
+  globalThis.fetch = realFetch;
+  check('the read-only key can run the checks', r.statusCode === 200, String(r.statusCode));
+  check('...and sees the Google verdict', r.body?.google?.ok === true, JSON.stringify(r.body?.google));
+  check('...the Stripe webhook state', 'configured' in (r.body?.stripeWebhook || {}));
+  check('...how many files are still on old paths', typeof r.body?.files?.onOldPaths === 'number');
+  check('...and how many clients have set a password', typeof r.body?.clientsWithPassword === 'number');
+  check('the checks carry no client names or emails',
+        !/@|Rivka|Stern/.test(JSON.stringify(r.body)), JSON.stringify(r.body).slice(0, 160));
+}
+{
+  // Still read-only: the key must not be able to change anything through this view.
+  const r = mockRes();
+  await adminHandler({ method:'POST', query:{ view:'checks' },
+    headers:{ 'x-agent-key':'k'.repeat(48) }, body:{ action:'setup-stripe-webhook' } }, r);
+  check('the read-only key still cannot set the webhook up', !r.body?.ok || r.body?.google !== undefined);
+}
 
 console.log(`\n${pass} passed, ${fail} failed`);
 if (fail) { console.log('\nFAILURES:\n' + failures.map(f => '  ' + f).join('\n')); process.exit(1); }
