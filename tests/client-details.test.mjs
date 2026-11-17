@@ -135,23 +135,13 @@ check('...saying plainly when nothing is set', /no one can book/.test(html));
 // holiday was on screen even when none was.
 check('a holiday names itself in the day', /cal-holiday-name/.test(html));
 check('...on the client\'s calendar too', /cal-holiday-sm/.test(html));
-check('...and under it in words', /cal-holiday-note/.test(html));
-check('the legend only appears when a holiday is in view', /\$\{holidaysInView\.length \?/.test(html));
-check('...and names which one', /closed for \$\{holidayList\(holidaysInView\)\}/.test(html));
-
-// Chanukah I and Chanukah II are one festival, not two.
-const hsrc = html.slice(html.indexOf('function holidayList('));
-// The page's esc() lives in its own scope, so it is handed in rather than redeclared.
-const holidayList = new Function('esc', hsrc.slice(0, hsrc.indexOf('\n}\n') + 3) + '; return holidayList;')(x => x);
-check('repeated days of one festival are named once',
-      holidayList([{name:'Chanukah I'},{name:'Chanukah II'},{name:'Chanukah III'}]) === 'Chanukah',
-      holidayList([{name:'Chanukah I'},{name:'Chanukah II'}]));
-check('two different holidays are both named',
-      holidayList([{name:'Rosh Hashana I'},{name:'Yom Kippur'}]) === 'Rosh Hashana and Yom Kippur',
-      holidayList([{name:'Rosh Hashana I'},{name:'Yom Kippur'}]));
-check('a long list is cut short rather than running on',
-      /and 1 more$/.test(holidayList([{name:'A'},{name:'B'},{name:'C'},{name:'D'}])),
-      holidayList([{name:'A'},{name:'B'},{name:'C'},{name:'D'}]));
+// Heshy's correction: the name on the date is the answer. A "closed for Chanukah" chip in the
+// legend showed whatever was in the month regardless of the day he was looking at, and a day with
+// no times already says it is closed.
+check('there is no closed-for chip in the legend', !/closed for /.test(html));
+check('...and no banner under the client calendar', !/cal-holiday-note">/.test(html));
+check('the legend is only about open times now',
+      /<div class="cal-legend">\s*\n\s*<span><span class="cal-dot-legend"><\/span> has open times<\/span>\s*\n\s*<\/div>/.test(html));
 
 // Settings: one long scroll mixing what he changes with what he set once and never opens.
 check('the set-once settings are tucked away', /toggleSetOnce/.test(html));
@@ -161,6 +151,17 @@ check('...for the location too', /locEl \? locEl\.value : state\.settings\.locat
 check('...and the intake questions', /intakeEl \? intakeEl\.value\.split/.test(html));
 check('the four maintenance panels sit behind one button', /toggleMaintenance/.test(html));
 check('...and are not rendered until opened', /\$\{!showMaintenance \? '' : `/.test(html));
+
+// Session lengths read 45 / 60 / 120 (extended) — a 15-minute step then a 60-minute one, which
+// is the first thing the eye trips on.
+check('the lengths offered are an even ladder', /\{ min: 30,  label: '30 min' \}/.test(html) && /\{ min: 90,  label: '1½ hours' \}/.test(html));
+check('...written the way people say them', /label: '1 hour'/.test(html) && /label: '2 hours'/.test(html));
+check('...as chips rather than checkboxes', /dur-chip/.test(html) && !/id="dur-45"/.test(html));
+// Changing the list must not quietly stop offering a length already in use.
+check('a length already offered but not on the ladder is kept',
+      /filter\(m=>!DURATION_CHOICES\.some\(d=>d\.min===m\)\)/.test(html));
+check('turning them all off is not possible', /cur\.length \? cur\.sort\(\(a,b\)=>a-b\) : \[60\]/.test(html));
+check('...and the save guards it too', /if\(!\(state\.settings\.durationOptions\|\|\[\]\)\.length\) state\.settings\.durationOptions = \[60\]/.test(html));
 
 console.log(`\n${pass} passed, ${fail} failed`);
 if (fail) { console.log('\nFAILURES:\n' + failures.map(f => '  ' + f).join('\n')); process.exit(1); }

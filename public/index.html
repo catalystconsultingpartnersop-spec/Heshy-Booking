@@ -356,10 +356,14 @@
   }
   .cal-holiday-sm{font-size:8.5px;line-height:1.1;color:#8A6D2F;font-weight:600;margin-top:2px;}
   .cal-cell-sm.holiday-sm{background:#FBF6EA;}
-  .cal-holiday-note{
-    margin-top:10px;font-size:12.5px;color:#8A6D2F;background:#FBF6EA;
-    border-left:3px solid #C9A961;border-radius:4px;padding:8px 11px;
+  /* The session lengths offered, as chips rather than three checkboxes on an uneven ladder. */
+  .dur-row{display:flex;gap:8px;flex-wrap:wrap;}
+  .dur-chip{
+    font:inherit;font-size:13.5px;font-weight:500;padding:9px 16px;cursor:pointer;
+    border:1px solid var(--line-strong);border-radius:6px;background:var(--paper);color:var(--ink);
   }
+  .dur-chip:hover{border-color:var(--ink);}
+  .dur-chip.on{background:var(--ink);border-color:var(--ink);color:#fff;}
   .session-time-big{font-size:22px;font-weight:600;font-family:Georgia,serif;margin-top:4px;line-height:1.2;}
   .session-format{font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:.04em;margin-top:4px;}
   .session-controls{margin-top:14px;padding:14px;background:#F7F7F5;border-radius:6px;}
@@ -834,6 +838,14 @@ let showMaintenance = false;
 // saveSettings already falls back to the stored value for any field not on screen, so hiding
 // them cannot blank them.
 let showSetOnce = false;
+// An even ladder. It used to read 45 / 60 / 120 (extended), which steps 15 then 60 — the gap
+// does no work and is the first thing the eye trips on.
+const DURATION_CHOICES = [
+  { min: 30,  label: '30 min' },
+  { min: 60,  label: '1 hour' },
+  { min: 90,  label: '1½ hours' },
+  { min: 120, label: '2 hours' }
+];
 let billingBasisChoice = {}; // bookingId -> 'actual' | 'minimum', overrides the global default per session
 let rescheduleType = {};
 let runningTimer = {};
@@ -2587,7 +2599,6 @@ function renderClientCalendar(candidateDates){
 
   const totalCells = clientCalWeeksShown * 7;
   let cells = '';
-  const clientHolidaysInView = [];
   for(let i=0;i<todayDow;i++) cells += `<div class="cal-cell-sm empty"></div>`;
   for(let i=0;i<totalCells-todayDow;i++){
     const d = new Date(today); d.setDate(d.getDate()+i);
@@ -2598,8 +2609,8 @@ function renderClientCalendar(candidateDates){
     const isSelected = selectedDay === ds;
     const isToday = ds === todayDs;
     // A client looking at a blank day deserves to know it's a holiday rather than assume Heshy
-    // is simply booked out.
-    if(isHoliday) clientHolidaysInView.push({ ds, name: jewishHolidayNames[ds] || 'Jewish holiday' });
+    // is simply booked out. The name on the date does that on its own; the day shows no times,
+    // which needs no further announcement.
     cells += `<div class="cal-cell-sm ${!isAvailable?'past':''} ${isHoliday?'holiday-sm':''} ${isSelected?'selected':''} ${isToday?'today':''}" ${isAvailable?`data-day="${ds}"`:''} ${isHoliday?`title="${esc(jewishHolidayNames[ds]||'Jewish holiday')}"`:''}>
       <div class="cal-daynum-sm">${d.getDate()}</div>
       ${isHoliday ? `<div class="cal-holiday-sm">${esc(shortHoliday(jewishHolidayNames[ds]))}</div>`
@@ -2615,7 +2626,6 @@ function renderClientCalendar(candidateDates){
       ${['S','M','T','W','T','F','S'].map(d=>`<div class="cal-dow-sm">${d}</div>`).join('')}
       ${cells}
     </div>
-    ${clientHolidaysInView.length ? `<div class="cal-holiday-note">Closed for ${holidayList(clientHolidaysInView)}.</div>` : ''}
   `;
 }
 
@@ -2656,7 +2666,6 @@ function renderScheduleCalendar(){
   }
 
   let cells = '';
-  const holidaysInView = [];
   for(let i=0;i<firstDow;i++) cells += `<div class="cal-cell empty"></div>`;
   for(let day=1; day<=daysInMonth; day++){
     const d = new Date(monthStart.getFullYear(), monthStart.getMonth(), day);
@@ -2668,7 +2677,8 @@ function renderScheduleCalendar(){
     const isToday = ds === todayDs;
     // The holiday's name goes in the cell, not only in a tooltip. A tooltip is invisible on a
     // phone and easy to miss anywhere else, so "why is this day closed?" had no answer on screen.
-    if(isHoliday) holidaysInView.push({ ds, name: jewishHolidayNames[ds] || 'Jewish holiday' });
+    // The name on the date is the whole answer — no legend, no banner: the day simply has no
+    // times, which speaks for itself.
     cells += `<div class="cal-cell ${isPast?'past':''} ${isHoliday?'holiday':''} ${isSelected?'selected':''} ${isToday?'today':''}" ${isPast?'':`data-cal-day="${ds}"`} ${isHoliday?`title="${esc(jewishHolidayNames[ds]||'Jewish holiday')}"`:''}>
       <div class="cal-daynum">${day}</div>
       ${isHoliday ? `<div class="cal-holiday-name">${esc(jewishHolidayNames[ds]||'Holiday')}</div>` : (hasSlots ? `<div class="cal-dot"></div>` : '')}
@@ -2687,25 +2697,8 @@ function renderScheduleCalendar(){
     </div>
     <div class="cal-legend">
       <span><span class="cal-dot-legend"></span> has open times</span>
-      ${holidaysInView.length ? `<span><span class="cal-holiday-legend"></span> closed for ${holidayList(holidaysInView)}</span>` : ''}
     </div>
   `;
-}
-
-// Names the holidays actually on screen, rather than a legend that claims one is there when
-// none is. Repeated days of the same festival are named once.
-function holidayList(items){
-  const seen = [];
-  for(const h of items){
-    const base = h.name.replace(/\s+[IVX]+$/, '').replace(/\s+\d+$/, '').trim();
-    if(!seen.includes(base)) seen.push(base);
-  }
-  const names = seen.slice(0, 3).map(esc);
-  const extra = seen.length - names.length;
-  let text = names.length <= 1 ? (names[0] || 'a Jewish holiday')
-    : names.slice(0, -1).join(', ') + ' and ' + names[names.length - 1];
-  if(extra > 0) text += ` and ${extra} more`;
-  return text;
 }
 
 function renderDayDetail(){
@@ -3374,11 +3367,16 @@ function renderAdmin(){
         <div class="note" style="margin-bottom:8px;">Updates everywhere at once &mdash; the booking page, charge calculations, and confirmation emails.</div>
         <input type="text" id="set-hourly-rate" style="max-width:120px;" value="${state.settings.hourlyRate!=null?state.settings.hourlyRate:500}">
         <label>Session lengths you offer</label>
-        <div class="note" style="margin-bottom:8px;">Clients choose from these when booking, within whatever time you have open. 60 min is the standard, pre-selected option.</div>
-        <div style="display:flex;gap:18px;">
-          <label style="display:flex;align-items:center;gap:6px;font-weight:normal;"><input type="checkbox" id="dur-45" ${(state.settings.durationOptions||[60]).includes(45)?'checked':''}> 45 min</label>
-          <label style="display:flex;align-items:center;gap:6px;font-weight:normal;"><input type="checkbox" id="dur-60" ${(state.settings.durationOptions||[60]).includes(60)?'checked':''}> 60 min</label>
-          <label style="display:flex;align-items:center;gap:6px;font-weight:normal;"><input type="checkbox" id="dur-120" ${(state.settings.durationOptions||[60]).includes(120)?'checked':''}> 120 min (extended)</label>
+        <div class="note" style="margin-bottom:8px;">Clients choose from these when booking, within whatever time you have open. 1 hour is the standard, pre-selected option.</div>
+        <div class="dur-row">
+          ${DURATION_CHOICES.map(d=>{
+            const on = (state.settings.durationOptions||[60]).includes(d.min);
+            return `<button type="button" class="dur-chip ${on?'on':''}" data-duration-opt="${d.min}" aria-pressed="${on}">${d.label}</button>`;
+          }).join('')}
+          ${/* Anything previously offered that isn't on the standard ladder stays selectable,
+                 so changing this list can never silently drop a length already in use. */''}
+          ${(state.settings.durationOptions||[]).filter(m=>!DURATION_CHOICES.some(d=>d.min===m)).map(m=>
+            `<button type="button" class="dur-chip on" data-duration-opt="${m}" aria-pressed="true">${m} min</button>`).join('')}
         </div>
         <label>Minimum notice required to book</label>
         <div class="note" style="margin-bottom:8px;">Clients can't see or book a time closer than this many hours away.</div>
@@ -3881,7 +3879,20 @@ function attachHandlers(){
         await saveState(); render();
       };
     });
-    const meetEl=$('set-meet'), locEl=$('set-location'), intakeEl=$('set-intake'), dur45El=$('dur-45'), dur60El=$('dur-60'), dur120El=$('dur-120'), leadHoursEl=$('set-lead-hours'), cancelHoursEl=$('set-cancel-hours'), rateEl=$('set-hourly-rate');
+    const meetEl=$('set-meet'), locEl=$('set-location'), intakeEl=$('set-intake'), leadHoursEl=$('set-lead-hours'), cancelHoursEl=$('set-cancel-hours'), rateEl=$('set-hourly-rate');
+    // The lengths are chips now. Toggling one writes straight to settings so the choice survives
+    // a re-render, exactly as the billing-mode toggle already does.
+    document.querySelectorAll('[data-duration-opt]').forEach(el=>{
+      el.onclick = ()=>{
+        const m = Number(el.getAttribute('data-duration-opt'));
+        const cur = (state.settings.durationOptions||[60]).slice();
+        const at = cur.indexOf(m);
+        if(at >= 0) cur.splice(at, 1); else cur.push(m);
+        // At least one length has to be offered, or nobody can book anything.
+        state.settings.durationOptions = cur.length ? cur.sort((a,b)=>a-b) : [60];
+        render();
+      };
+    });
     const billingActualBtn = $('billing-mode-actual'), billingMinimumBtn = $('billing-mode-minimum');
     if(billingActualBtn) billingActualBtn.onclick = ()=>{ state.settings.billingMode = 'actual'; render(); };
     if(billingMinimumBtn) billingMinimumBtn.onclick = ()=>{ state.settings.billingMode = 'minimum'; render(); };
@@ -3891,11 +3902,8 @@ function attachHandlers(){
         state.settings.meetLink = meetEl ? meetEl.value : state.settings.meetLink;
         state.settings.location = locEl ? locEl.value : state.settings.location;
         state.settings.intakeQuestions = intakeEl ? intakeEl.value.split('\n').map(s=>s.trim()).filter(Boolean) : state.settings.intakeQuestions;
-        const chosenDurations = [];
-        if(dur45El && dur45El.checked) chosenDurations.push(45);
-        if(dur60El && dur60El.checked) chosenDurations.push(60);
-        if(dur120El && dur120El.checked) chosenDurations.push(120);
-        state.settings.durationOptions = chosenDurations.length ? chosenDurations : [60];
+        // Already kept in state by the chips above; just guard against an empty list.
+        if(!(state.settings.durationOptions||[]).length) state.settings.durationOptions = [60];
         if(leadHoursEl){ const n = Number(leadHoursEl.value); state.settings.minLeadHours = isNaN(n) ? 12 : Math.max(0, n); }
         if(cancelHoursEl){ const n2 = Number(cancelHoursEl.value); state.settings.clientCancelCutoffHours = isNaN(n2) ? 3 : Math.max(0, n2); }
         if(rateEl){ const n3 = Number(rateEl.value); state.settings.hourlyRate = (isNaN(n3) || n3 <= 0) ? 500 : n3; }
