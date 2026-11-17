@@ -510,7 +510,9 @@ async function handleRescheduleBooking(req, res) {
   const type = booking.type;
   const verdict = checkSlot(data, {
     date: newDate, time: newTime, durationMin, type,
-    excludeBookingId: booking.id, requireLeadTime: true
+    // A client moving their own session is held to the same edge rule as booking one, so a move
+    // can't do what a booking isn't allowed to: land in the middle of an open stretch.
+    excludeBookingId: booking.id, requireLeadTime: true, mustHugEdge: true
   });
   if (!verdict.ok) return res.status(400).json({ error: verdict.reason });
 
@@ -527,7 +529,7 @@ async function handleRescheduleBooking(req, res) {
     if (b.cancelled || b.status === 'charged') { conflict = 'This session can no longer be moved online.'; return SKIP_WRITE; }
     const recheck = checkSlot(fresh, {
       date: newDate, time: newTime, durationMin, type,
-      excludeBookingId: b.id, requireLeadTime: true
+      excludeBookingId: b.id, requireLeadTime: true, mustHugEdge: true
     });
     if (!recheck.ok) { conflict = recheck.reason; return SKIP_WRITE; }
     b.date = newDate;

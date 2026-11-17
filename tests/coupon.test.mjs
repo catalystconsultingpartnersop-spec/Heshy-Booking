@@ -41,7 +41,9 @@ function mockRes() {
   r.json = b => { r.body = b; return r; };
   return r;
 }
-async function book(couponCode, token, time = '11:00') {
+// A client may only book flush against an edge of an open stretch, so these use 09:00 — the
+// start of the 09:00-17:00 window this fixture opens.
+async function book(couponCode, token, time = '09:00') {
   const res = mockRes();
   await handler({ method: 'POST', query: {}, headers: {}, body: {
     date: FUTURE, time, durationMin: 60, type: 'virtual',
@@ -113,7 +115,8 @@ const firstCustomer = afterFirst.clients[0].stripeCustomerId;
 kv.set = async (k, v) => { if (k === 'app-data') saved = v; else tokenStore.set(k, v); return 'OK'; };
 const token2 = await sc.issueSetupToken('cus_x', 'rivka@example.com');
 saved = null;
-res = await book('', token2, '13:00'); // a different hour — the first booking still holds 11:00
+// The first booking holds 09:00-10:00, so 10:00 is the start edge of what's left.
+res = await book('', token2, '10:00');
 check('a second booking by the same client reuses the same customer',
       res.statusCode === 200 && saved?.clients?.length === 1 && saved.clients[0].stripeCustomerId === firstCustomer,
       `status ${res.statusCode}, ${saved?.clients?.length} client(s), customer ${saved?.clients?.[0]?.stripeCustomerId}`);

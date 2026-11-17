@@ -90,9 +90,9 @@ async function doMove(body) {
 
 // --- the happy path -----------------------------------------------------------------------------
 reset();
-let res = await doMove({ token: 'psess', bookingId: 'b1', newDate: '2099-03-06', newTime: '14:00' });
+let res = await doMove({ token: 'psess', bookingId: 'b1', newDate: '2099-03-06', newTime: '09:00' });
 check('a client can move their own session', res.statusCode === 200, `${res.statusCode} ${JSON.stringify(res.body)}`);
-check('the booking actually moves', appData.bookings[0].date === '2099-03-06' && appData.bookings[0].time === '14:00',
+check('the booking actually moves', appData.bookings[0].date === '2099-03-06' && appData.bookings[0].time === '09:00',
       `${appData.bookings[0].date} ${appData.bookings[0].time}`);
 check('it records that the client did it', appData.bookings[0].rescheduledBy === 'client');
 check('it records when', typeof appData.bookings[0].rescheduledAt === 'number');
@@ -101,14 +101,14 @@ check('the format is unchanged', appData.bookings[0].type === 'virtual');
 check('it is not left looking cancelled', !appData.bookings[0].cancelled);
 // The pending reminder describes the old time, so it has to be sent again.
 check('the old reminder is cleared so a fresh one goes out', !('reminderSentAt' in appData.bookings[0]));
-check('the new time comes back for the page to show', res.body?.date === '2099-03-06' && res.body?.time === '14:00');
+check('the new time comes back for the page to show', res.body?.date === '2099-03-06' && res.body?.time === '09:00');
 check('nothing is warned about when it all worked', !res.body?.warning, res.body?.warning);
 
 // --- the calendar follows -------------------------------------------------------------------------
 check('the calendar event is patched, not duplicated', calendarCalls.filter(c => c.method === 'PATCH').length === 1,
       JSON.stringify(calendarCalls.map(c => c.method)));
-check('...to the new start', calendarCalls[0]?.body?.start?.dateTime === '2099-03-06T14:00:00');
-check('...and the right end', calendarCalls[0]?.body?.end?.dateTime === '2099-03-06T15:00:00');
+check('...to the new start', calendarCalls[0]?.body?.start?.dateTime === '2099-03-06T09:00:00');
+check('...and the right end', calendarCalls[0]?.body?.end?.dateTime === '2099-03-06T10:00:00');
 check('...on the Eastern clock, not the server\'s', calendarCalls[0]?.body?.start?.timeZone === 'America/New_York');
 check('...telling the attendee', /sendUpdates=all/.test(calendarCalls[0]?.url || ''));
 
@@ -129,12 +129,12 @@ check('...and links to their profile', /#manage\/client\/c1/.test(toHeshy?.html 
 
 // --- it has to be your own session ------------------------------------------------------------------
 reset();
-res = await doMove({ token: 'other', bookingId: 'b1', newDate: '2099-03-06', newTime: '14:00' });
+res = await doMove({ token: 'other', bookingId: 'b1', newDate: '2099-03-06', newTime: '09:00' });
 check('another client cannot move someone else\'s session', res.statusCode === 403, String(res.statusCode));
 check('...and nothing moved', appData.bookings[0].date === '2099-03-04');
 
 reset();
-res = await doMove({ token: 'nope', bookingId: 'b1', newDate: '2099-03-06', newTime: '14:00' });
+res = await doMove({ token: 'nope', bookingId: 'b1', newDate: '2099-03-06', newTime: '09:00' });
 check('an unknown session token is refused', res.statusCode === 401, String(res.statusCode));
 
 reset();
@@ -149,7 +149,7 @@ check('a time outside open hours is refused', res.statusCode === 400 && /open ho
 check('...and the session stays where it was', appData.bookings[0].time === '11:00');
 
 reset();
-res = await doMove({ token: 'psess', bookingId: 'b1', newDate: '2020-03-06', newTime: '14:00' });
+res = await doMove({ token: 'psess', bookingId: 'b1', newDate: '2020-03-06', newTime: '09:00' });
 check('a time in the past is refused', res.statusCode === 400, JSON.stringify(res.body));
 
 reset();
@@ -170,18 +170,20 @@ check('a client cannot move into the notice period', res.statusCode === 400 && /
       JSON.stringify(res.body));
 
 reset();
-appData.bookings.push({ id: 'b2', clientId: 'c2', date: '2099-03-06', time: '14:00', durationMin: 60, type: 'in-person', status: 'scheduled' });
-res = await doMove({ token: 'psess', bookingId: 'b1', newDate: '2099-03-06', newTime: '14:00' });
+appData.bookings.push({ id: 'b2', clientId: 'c2', date: '2099-03-06', time: '09:00', durationMin: 60, type: 'in-person', status: 'scheduled' });
+res = await doMove({ token: 'psess', bookingId: 'b1', newDate: '2099-03-06', newTime: '09:00' });
 check('a slot someone else holds is refused', res.statusCode === 400 && /already booked/i.test(res.body?.error || ''), JSON.stringify(res.body));
 check('...even when the other session is a different format', appData.bookings[0].time === '11:00');
 
 reset();
 appData.blockedDates = [{ date: '2099-03-06', type: 'virtual' }];
-res = await doMove({ token: 'psess', bookingId: 'b1', newDate: '2099-03-06', newTime: '14:00' });
+res = await doMove({ token: 'psess', bookingId: 'b1', newDate: '2099-03-06', newTime: '09:00' });
 check('a blocked date is refused', res.statusCode === 400, JSON.stringify(res.body));
 
-// Moving onto its own slot: the session itself must not be treated as a clash.
+// Moving onto its own slot: the session itself must not be treated as a clash. The window is
+// 11:00-12:30 here, so 11:30 is the latest 60-minute start — an edge, and overlapping its own hour.
 reset();
+appData.availability.virtual = [{ id: 'r1', days: ALL_DAYS, start: '11:00', end: '12:30' }];
 res = await doMove({ token: 'psess', bookingId: 'b1', newDate: '2099-03-04', newTime: '11:30' });
 check('a session does not block itself when overlapping its own slot', res.statusCode === 200, JSON.stringify(res.body));
 check('...and it lands on the new time', appData.bookings[0].time === '11:30');
@@ -194,12 +196,12 @@ check('moving to the time it already has is refused plainly', res.statusCode ===
 // --- sessions that can no longer be moved ------------------------------------------------------------
 reset();
 appData.bookings[0].cancelled = true;
-res = await doMove({ token: 'psess', bookingId: 'b1', newDate: '2099-03-06', newTime: '14:00' });
+res = await doMove({ token: 'psess', bookingId: 'b1', newDate: '2099-03-06', newTime: '09:00' });
 check('a cancelled session cannot be moved', res.statusCode === 400 && /cancelled/i.test(res.body?.error || ''), JSON.stringify(res.body));
 
 reset();
 appData.bookings[0].status = 'charged';
-res = await doMove({ token: 'psess', bookingId: 'b1', newDate: '2099-03-06', newTime: '14:00' });
+res = await doMove({ token: 'psess', bookingId: 'b1', newDate: '2099-03-06', newTime: '09:00' });
 check('a charged session is sent to Heshy rather than moved', res.statusCode === 400 && /contact Heshy/i.test(res.body?.error || ''),
       JSON.stringify(res.body));
 
@@ -209,7 +211,7 @@ reset();
 const imminent = etWallClock(60 * 60 * 1000);   // one hour away, inside the 3-hour cutoff
 appData.bookings[0].date = imminent.date;
 appData.bookings[0].time = imminent.time;
-res = await doMove({ token: 'psess', bookingId: 'b1', newDate: '2099-03-06', newTime: '14:00' });
+res = await doMove({ token: 'psess', bookingId: 'b1', newDate: '2099-03-06', newTime: '09:00' });
 check('a session inside the notice period cannot be moved online', res.statusCode === 400 && /3 hours in advance/.test(res.body?.error || ''),
       JSON.stringify(res.body));
 
@@ -217,18 +219,18 @@ check('a session inside the notice period cannot be moved online', res.statusCod
 reset();
 appData.bookings[0].type = 'in-person';
 appData.overrides = [{ id: 'o1', date: '2099-03-06', type: 'in-person', start: '09:00', end: '17:00', address: '9 Elsewhere Ave' }];
-res = await doMove({ token: 'psess', bookingId: 'b1', newDate: '2099-03-06', newTime: '14:00' });
+res = await doMove({ token: 'psess', bookingId: 'b1', newDate: '2099-03-06', newTime: '09:00' });
 check('an in-person move resolves that date\'s own address', appData.bookings[0].location === '9 Elsewhere Ave', appData.bookings[0].location);
 check('...and sends it to the calendar', calendarCalls[0]?.body?.location === '9 Elsewhere Ave');
 
 reset();
-res = await doMove({ token: 'psess', bookingId: 'b1', newDate: '2099-03-06', newTime: '14:00' });
+res = await doMove({ token: 'psess', bookingId: 'b1', newDate: '2099-03-06', newTime: '09:00' });
 check('a video session is given no address', appData.bookings[0].location === '', JSON.stringify(appData.bookings[0].location));
 
 // --- the calendar failing never loses the move -------------------------------------------------------------
 reset();
 calendarPatchOk = false; calendarPatchStatus = 404;
-res = await doMove({ token: 'psess', bookingId: 'b1', newDate: '2099-03-06', newTime: '14:00' });
+res = await doMove({ token: 'psess', bookingId: 'b1', newDate: '2099-03-06', newTime: '09:00' });
 check('a deleted calendar event is replaced rather than left missing',
       calendarCalls.some(c => c.method === 'POST'), JSON.stringify(calendarCalls.map(c => c.method)));
 check('...and the new event id is stored', appData.bookings[0].calendarEventId === 'ev-new', appData.bookings[0].calendarEventId);
@@ -238,14 +240,14 @@ check('...while the move itself still stands', appData.bookings[0].date === '209
 
 reset();
 calendarPatchOk = false; calendarPatchStatus = 500;
-res = await doMove({ token: 'psess', bookingId: 'b1', newDate: '2099-03-06', newTime: '14:00' });
+res = await doMove({ token: 'psess', bookingId: 'b1', newDate: '2099-03-06', newTime: '09:00' });
 check('a calendar error is reported, not hidden', !!res.body?.warning, JSON.stringify(res.body));
 check('...and the move is still saved', appData.bookings[0].date === '2099-03-06');
 
 reset();
 hasGoogle = false;
 store.delete('google-refresh-token');
-res = await doMove({ token: 'psess', bookingId: 'b1', newDate: '2099-03-06', newTime: '14:00' });
+res = await doMove({ token: 'psess', bookingId: 'b1', newDate: '2099-03-06', newTime: '09:00' });
 check('no Google connection is said plainly', /not connected/i.test(res.body?.warning || ''), res.body?.warning);
 check('...and the move still happens', appData.bookings[0].date === '2099-03-06' && res.statusCode === 200);
 
@@ -264,9 +266,9 @@ check('...then the general setting',
 reset();
 res = mockRes();
 await adminHandler({ method: 'POST', query: {}, headers: { 'x-admin-token': 'tok' },
-  body: { action: 'reschedule-booking', bookingId: 'b1', newDate: '2099-03-06', newTime: '14:00' } }, res);
+  body: { action: 'reschedule-booking', bookingId: 'b1', newDate: '2099-03-06', newTime: '09:00' } }, res);
 check('Heshy can still move a session', res.statusCode === 200, `${res.statusCode} ${JSON.stringify(res.body)}`);
-check('...and it moves', appData.bookings[0].date === '2099-03-06' && appData.bookings[0].time === '14:00');
+check('...and it moves', appData.bookings[0].date === '2099-03-06' && appData.bookings[0].time === '09:00');
 check('...with the calendar patched once', calendarCalls.filter(c => c.method === 'PATCH').length === 1);
 const adminMail = sent.find(s => s.to === 'rivka@example.com');
 check('...and the client told it was Heshy who moved it', /Heshy has moved/.test(adminMail?.html || ''),
@@ -278,7 +280,7 @@ check('...and Heshy is not emailed about his own change', !sent.some(s => s.to =
 // for a client and fine for Heshy, which is exactly the branch being checked.
 reset();
 appData.settings.minLeadHours = 700000;
-res = await doMove({ token: 'psess', bookingId: 'b1', newDate: '2099-03-06', newTime: '14:00' });
+res = await doMove({ token: 'psess', bookingId: 'b1', newDate: '2099-03-06', newTime: '09:00' });
 check('...a time a client is refused for being too soon', res.statusCode === 400 && /too soon/i.test(res.body?.error || ''),
       JSON.stringify(res.body));
 check('...and that refusal moves nothing', appData.bookings[0].time === '11:00');
@@ -286,7 +288,9 @@ res = mockRes();
 await adminHandler({ method: 'POST', query: {}, headers: { 'x-admin-token': 'tok' },
   body: { action: 'reschedule-booking', bookingId: 'b1', newDate: '2099-03-06', newTime: '14:00' } }, res);
 check('an admin move is not subject to the client notice period', res.statusCode === 200, JSON.stringify(res.body));
-check('...and it moves', appData.bookings[0].date === '2099-03-06' && appData.bookings[0].time === '14:00');
+// 14:00 sits mid-window, which a client may not do and Heshy may.
+check('...nor to the edge rule a client is held to',
+      appData.bookings[0].date === '2099-03-06' && appData.bookings[0].time === '14:00');
 
 // --- syncCalendarMove on its own -------------------------------------------------------------------------------
 reset();

@@ -16,12 +16,14 @@ export function dowOf(dateStr) { const [y, mo, d] = dateStr.split('-').map(Numbe
  *   excludeBookingId   ignore this booking when looking for clashes (used when moving it)
  *   calendarBusyRanges [[startMin,endMin]] on the Eastern wall clock, or null if unavailable
  *   requireLeadTime    false for admin actions, which aren't subject to the client notice period
+ *   mustHugEdge        true for anything a client does; see hugsAnEdge() below
  * @returns {{ok: true} | {ok: false, reason: string}}
  */
 export function checkSlot(data, opts) {
   const {
     date, time, durationMin, type,
-    excludeBookingId = null, calendarBusyRanges = null, requireLeadTime = true
+    excludeBookingId = null, calendarBusyRanges = null, requireLeadTime = true,
+    mustHugEdge = false
   } = opts;
 
   if (!/^\d{4}-\d{2}-\d{2}$/.test(String(date || ''))) return { ok: false, reason: 'That date looks wrong.' };
@@ -80,10 +82,73 @@ export function checkSlot(data, opts) {
     return { ok: false, reason: 'That time is blocked on your Google Calendar.' };
   }
 
+  // A short session dropped into the middle of a long open stretch destroys it: a 30-minute
+  // booking at 11:30 turns an 11:00-13:00 window into two 90-minute-or-less fragments, neither
+  // of which can take a 2-hour session any more. So a client's booking has to sit flush against
+  // one end of whatever free stretch it lands in. The booking page only ever offers those two
+  // start times; this is what makes it a rule rather than a suggestion.
+  if (mustHugEdge) {
+    const free = freeRanges(data, date, type, excludeBookingId, calendarBusyRanges);
+    const holding = free.find(([fs, fe]) => reqStart >= fs && reqEnd <= fe);
+    if (!holding) return { ok: false, reason: 'That time is no longer free.' };
+    if (reqStart !== holding[0] && reqEnd !== holding[1]) {
+      return { ok: false, reason: 'That time would leave an awkward gap — please pick one of the times offered.' };
+    }
+  }
+
   return { ok: true };
 }
 
-// Back-compatible boolean form, for the booking path that only needs yes/no.
+/**
+ * The open stretches on a date with everything already booked cut out of them — the same shape
+ * the booking page computes to decide what to offer. Kept here so the rule above is checked
+ * against the real record rather than whatever the browser believed.
+ */
+export function freeRanges(data, date, type, excludeBookingId = null, calendarBusyRanges = null) {
+  const weekday = dowOf(date);
+  const windows = [];
+  const isBlocked = (data.blockedDates || []).some(bl => bl.date === date && bl.type === type);
+  if (!isBlocked) {
+    (data.availability?.[type] || [])
+      .filter(r => r.days.includes(weekday))
+      .forEach(r => windows.push([timeToMin(r.start), timeToMin(r.end)]));
+  }
+  (data.overrides || [])
+    .filter(o => o.date === date && o.type === type)
+    .forEach(o => windows.push([timeToMin(o.start), timeToMin(o.end)]));
+  if (!windows.length) return [];
+
+  windows.sort((a, b) => a[0] - b[0]);
+  const merged = [windows[0].slice()];
+  for (let i = 1; i < windows.length; i++) {
+    const last = merged[merged.length - 1];
+    if (windows[i][0] <= last[1]) last[1] = Math.max(last[1], windows[i][1]);
+    else merged.push(windows[i].slice());
+  }
+
+  // Every active booking blocks, whatever its format.
+  const busy = (data.bookings || [])
+    .filter(b => b.id !== excludeBookingId && b.date === date && !b.cancelled)
+    .map(b => { const s = timeToMin(b.time); return [s, s + (b.durationMin || 60)]; });
+  if (calendarBusyRanges) calendarBusyRanges.forEach(r => busy.push(r));
+
+  let free = merged;
+  busy.forEach(([bs, be]) => {
+    const next = [];
+    free.forEach(([fs, fe]) => {
+      if (be <= fs || bs >= fe) { next.push([fs, fe]); return; }
+      if (bs > fs) next.push([fs, bs]);
+      if (be < fe) next.push([be, fe]);
+    });
+    free = next;
+  });
+  return free;
+}
+
+// Back-compatible boolean form, for the booking path that only needs yes/no. A new booking is
+// always a client's, so the edge rule applies.
 export function isRangeAvailable(data, date, time, durationMin, type, excludeBookingId, calendarBusyRanges) {
-  return checkSlot(data, { date, time, durationMin, type, excludeBookingId, calendarBusyRanges }).ok;
+  return checkSlot(data, {
+    date, time, durationMin, type, excludeBookingId, calendarBusyRanges, mustHugEdge: true
+  }).ok;
 }
