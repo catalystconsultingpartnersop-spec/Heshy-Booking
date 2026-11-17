@@ -281,11 +281,16 @@ export function chargeDeclinedEmail(booking, decline, settings = {}, payUrl = ''
 
   // What the client should do, in their own terms — not the internal decline code, and not the
   // instruction Heshy sees. "Ask them to update their card" is useless advice to the them.
-  // No "below" in any of these: what follows depends on whether a pay link was issued, and a
-  // sentence pointing at the wrong thing is worse than no sentence.
+  // Each of these states the fact and stops. No reassurance, no "this is common", no guessing at
+  // what the bank was thinking: Heshy is not in the business of managing his clients' feelings
+  // about their own card, and a claim like "this happens all the time" is one he can't vouch for
+  // and wouldn't want sent in his name.
+  //
+  // No "below" in any of them either: what follows depends on whether a pay link was issued, and
+  // a sentence pointing at the wrong thing is worse than no sentence.
   const ACTIONS = {
-    authentication_required: "Your bank would like you to approve this payment yourself rather than letting it go through on file.",
-    insufficient_funds: "This is usually a timing thing rather than anything to worry about.",
+    authentication_required: "Your bank wants you to approve this payment yourself rather than letting it go through on file.",
+    insufficient_funds: "The card didn't have enough available funds.",
     expired_card: "The card we have on file has expired.",
     incorrect_cvc: "The card's security code didn't match.",
     card_velocity_exceeded: "The card has hit a limit on recent transactions.",
@@ -294,13 +299,12 @@ export function chargeDeclinedEmail(booking, decline, settings = {}, payUrl = ''
     pickup_card: "Your bank has blocked this card.",
     transaction_not_allowed: "This card doesn't allow this type of payment.",
     currency_not_supported: "This card doesn't support payments in US dollars.",
-    do_not_honor: "Your bank declined it without giving a reason &mdash; this is common, and usually means their fraud check was being cautious rather than anything being wrong with your account."
+    do_not_honor: "Your bank declined it without giving a reason."
   };
-  const action = ACTIONS[decline.code]
-    || "Your bank didn't give a reason for it.";
+  const action = ACTIONS[decline.code] || "Your bank didn't give a reason for it.";
 
   return {
-    subject: 'A quick issue with your payment',
+    subject: `Your payment didn't go through — ${amount}`,
     html: wrap(`
       <div style="font-size:22px;font-family:Georgia,serif;margin-bottom:8px;">Your card didn't go through.</div>
       <div style="font-size:14px;font-family:Arial,sans-serif;color:#6E6E6E;line-height:1.65;margin-bottom:20px;">
@@ -312,8 +316,7 @@ export function chargeDeclinedEmail(booking, decline, settings = {}, payUrl = ''
         <a href="${payUrl}" style="display:inline-block;padding:13px 24px;background:#111111;color:#ffffff;text-decoration:none;border-radius:6px;font-size:14px;font-weight:600;">Pay ${amount} now</a>
       </div>
       <div style="font-family:Arial,sans-serif;font-size:13.5px;line-height:1.7;margin-bottom:20px;">
-        Paying through that link usually works even when the charge on file didn't &mdash; your bank is far happier approving a payment you're making yourself than one that arrives without you.
-        ${'' /* The real mechanism, in words a client can act on rather than a lecture about 3-D Secure. */}
+        That link often goes through when a charge on file doesn't, because your bank can see it's you paying.
       </div>
       <div style="font-family:Arial,sans-serif;font-size:13.5px;color:#6E6E6E;line-height:1.7;margin-bottom:20px;">
         Or <a href="${baseUrl}/#portal" style="color:#111111;">update the card we have on file</a>${decline.code === 'do_not_honor' ? ', or call the number on the back of your card and ask them to let it through' : ''}.
@@ -325,7 +328,7 @@ export function chargeDeclinedEmail(booking, decline, settings = {}, payUrl = ''
         <a href="${baseUrl}/#portal" style="display:inline-block;padding:12px 22px;background:#111111;color:#ffffff;text-decoration:none;border-radius:6px;font-size:14px;">Update your card</a>
       </div>`}
       <div style="font-family:Arial,sans-serif;font-size:13.5px;color:#6E6E6E;line-height:1.7;">
-        Nothing has been taken from your account, and there's nothing urgent here &mdash; whenever you get to it is fine. Just reply to this email if you'd rather sort it another way.
+        Nothing has been taken from your account yet. Reply to this email if you'd rather settle it another way.
       </div>
     `)
   };

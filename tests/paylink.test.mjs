@@ -197,7 +197,7 @@ const mail = chargeDeclinedEmail(
   { code:'do_not_honor', amount:1125 }, {}, 'https://heshy-booking.vercel.app/#pay/abc123');
 check('the decline email offers paying directly', /#pay\/abc123/.test(mail.html));
 check('...with the amount on the button, so there is no surprise', /Pay \$1125\.00 now/.test(mail.html));
-check('...explaining why that works when the charge didn\'t', /happier approving a payment you're making yourself/.test(mail.html));
+check('...explaining why that works when the charge didn\'t', /your bank can see it's you paying/.test(mail.html));
 check('...and still offers updating the card', /#portal/.test(mail.html));
 // Without a link the email must still work rather than render a dead button.
 const noLink = chargeDeclinedEmail({ id:'b1', date:'2026-11-17', durationMin:60, clientName:'Y' }, { code:'do_not_honor', amount:10 }, {});

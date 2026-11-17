@@ -108,16 +108,23 @@ check('...names the amount', /\$500\.00/.test(dnhMail.html));
 check('...and the session it was for', /60-minute session on 2026-11-17/.test(dnhMail.html));
 check('...greets them by first name', /Hi Yoily/.test(dnhMail.html));
 check('...never shows the internal decline code', !/do_not_honor/.test(dnhMail.html));
-// A failed payment is embarrassing to receive. The wording has to take the blame off them.
-check('...says a bank decline is common, not their fault',
-      /common/i.test(dnhMail.html) && /rather than anything being wrong with your account/i.test(dnhMail.html));
+// Heshy's own correction: the app was writing reassurance in his name that he has no interest
+// in giving and can't vouch for. It states the fact and stops.
+check('...does not editorialise about how common declines are', !/common/i.test(dnhMail.html), dnhMail.html.slice(0,400));
+check('...does not guess at what the bank was thinking', !/fraud check/i.test(dnhMail.html) && !/being cautious/i.test(dnhMail.html));
+check('...just states what the bank did', /declined it without giving a reason/.test(dnhMail.html));
 check('...tells them to call the number on the card', /number on the back/i.test(dnhMail.html));
 check('...and does not point "below" at something that is not there', !/different card below/.test(dnhMail.html) || /Update your card/.test(dnhMail.html));
+// He requires invoices paid on receipt. The app must not undercut that on his behalf.
+check('...and does not tell the client there is no rush',
+      !/nothing urgent/i.test(dnhMail.html) && !/whenever you get to it/i.test(dnhMail.html), dnhMail.html.slice(-400));
+check('...while still making clear no money has moved', /Nothing has been taken/i.test(dnhMail.html));
+check('the subject says plainly what happened', /didn't go through/.test(dnhMail.subject), dnhMail.subject);
+check('...and carries the amount, so it is actionable from the inbox', /\$500\.00/.test(dnhMail.subject), dnhMail.subject);
 check('...and gives one clear action', /Update your card/.test(dnhMail.html));
 check('...linking to the portal', /#portal/.test(dnhMail.html));
 check('...reassures them nothing was taken', /Nothing has been taken/i.test(dnhMail.html));
-check('...and sets no deadline', /nothing urgent/i.test(dnhMail.html));
-check('the subject does not shame them', !/declined|failed|overdue/i.test(dnhMail.subject), dnhMail.subject);
+check('the subject does not call the client out', !/declined|refused|overdue/i.test(dnhMail.subject), dnhMail.subject);
 
 // Each reason gets its own advice, written for the client rather than for Heshy.
 const authMail = chargeDeclinedEmail(bk, { code:'authentication_required', amount:500 }, {});
