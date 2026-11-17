@@ -5,7 +5,7 @@ import { readFileSync } from 'node:fs';
 import handler from '../api/admin-data.js';
 import portalHandler from '../api/portal-lookup.js';
 import { strengthsInviteEmail } from '../api/_lib/email.js';
-import { ITEMS, PAIRS } from '../api/_lib/assessment.js';
+import { ITEMS, nextExtra } from '../api/_lib/assessment.js';
 
 let pass = 0, fail = 0; const failures = [];
 function check(name, cond, detail='') { if (cond) pass++; else { fail++; failures.push(name + (detail ? '\n    ' + detail : '')); } }
@@ -66,11 +66,11 @@ check('the email contains an assessment link with a token', !!link, sentMail[0].
 check('the token is a real one, not a placeholder', !!link && link.length > 20);
 
 // That token must actually let them save a result — the whole point of the nudge.
-const items = {}; for (const q of ITEMS) items[q.id] = q.key === 'W' ? 5 : 1;
-const pairs = {}; for (const p of PAIRS) pairs[p.id] = p.a;
+const items = {}; for (const q of ITEMS) items[q.id] = q.key === 'W' ? 5 : q.key === 'D' ? 4 : 1;
+const extra = []; let nx; while ((nx = nextExtra({ items, extra }))) { extra.push(nx); items[nx] = 3; }
 const pres = mockRes();
 await portalHandler({ method: 'POST', query: {}, headers: {}, body: {
-  action: 'save-strengths', strengthsToken: decodeURIComponent(link), answers: { items, pairs, extra: [] } } }, pres);
+  action: 'save-strengths', strengthsToken: decodeURIComponent(link), answers: { items, extra } } }, pres);
 check('the token in the email lets that client save their result', pres.statusCode === 200, `${pres.statusCode} ${JSON.stringify(pres.body)}`);
 check('...onto their own record', !!appData.clients[0].strengths);
 check('...and nobody else’s', !appData.clients[1].strengths);
@@ -110,7 +110,7 @@ mailWorks = true;
 const mail = strengthsInviteEmail({ name: 'Rivka Stern', email: 'r@example.com' }, 'TOKEN123');
 check('the email greets them by first name', /Hi Rivka/.test(mail.html), mail.html.slice(0, 120));
 check('it says it costs nothing', /no charge/i.test(mail.html));
-check('it says roughly how long it takes', /ten minutes/i.test(mail.html));
+check('it says roughly how long it takes', /8 minutes/i.test(mail.html));
 check('it has a plain-text fallback link for broken buttons', (mail.html.match(/TOKEN123/g) || []).length >= 2);
 check('a name with markup in it is escaped',
       !strengthsInviteEmail({ name: '<script>x</script>', email: 'a@b.com' }, 'T').html.includes('<script>x'));

@@ -327,7 +327,7 @@ export function strengthsInviteEmail(client, token) {
     html: wrap(`
       <div style="font-size:22px;font-family:Georgia,serif;margin-bottom:8px;">Before we meet</div>
       <div style="font-size:14px;font-family:Arial,sans-serif;color:#3C3C3C;line-height:1.65;margin-bottom:16px;">
-        Hi ${esc(firstName) || 'there'} &mdash; I'd like you to spend about ten minutes on this before our session.
+        Hi ${esc(firstName) || 'there'} &mdash; I'd like you to spend about 8 minutes on this before our session.
       </div>
       <div style="font-size:14px;font-family:Arial,sans-serif;color:#3C3C3C;line-height:1.65;margin-bottom:16px;">
         It tells me how you're actually wired &mdash; what energises you, what you're good at, and what quietly

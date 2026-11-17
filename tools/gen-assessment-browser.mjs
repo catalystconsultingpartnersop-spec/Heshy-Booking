@@ -13,8 +13,8 @@ const root = join(dirname(fileURLToPath(import.meta.url)), '..');
 const SOURCE = join(root, 'api/_lib/assessment.js');
 const TARGET = join(root, 'public/assessment.js');
 
-const EXPOSED = ['LETTERS', 'TRAITS', 'ITEMS', 'SCALE', 'PAIRS', 'SNIPPETS', 'MAX_EXTRA', 'TYPES',
-                 'baseComplete', 'validExtra', 'validAnswers', 'nextExtra', 'score',
+const EXPOSED = ['LETTERS', 'TRAITS', 'LENSES', 'QUESTIONS', 'ITEMS', 'MAX_EXTRA', 'TOTAL_MAX', 'TYPES', 'questionById', 'closeCall',
+                 'baseComplete', 'validAnswers', 'nextExtra', 'score',
                  'parseLetters', 'profileOf'];
 
 export function generate() {

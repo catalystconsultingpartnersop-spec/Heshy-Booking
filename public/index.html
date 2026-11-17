@@ -533,8 +533,8 @@ let bookingStep = 1;
 
 // Strengths assessment. The questions and scoring come from /assessment.js, which is generated
 // from api/_lib/assessment.js so the page and the server never disagree.
-let strengthsAnswers = { items:{}, pairs:{}, extra:[] };
-let strengthsStage = 'intro';      // intro | items | pairs | extra | saving | done
+let strengthsAnswers = { items:{}, extra:[] };
+let strengthsStage = 'intro';      // intro | part | q | more | saving | done
 let strengthsIdx = 0;
 let strengthsPending = null;
 let strengthsResult = null;
@@ -789,7 +789,7 @@ function intakeRegionHtml(){
         <div class="section-title" style="display:flex;align-items:center;gap:8px;">
           <span style="font-size:16px;">&#9733;</span> Strengths assessment
         </div>
-        <p>After you book, I'll ask you to spend ten minutes on a short assessment. It tells me how you're wired, so our session starts at the real conversation. It's included &mdash; there's no charge for it.</p>
+        <p>After you book, I'll ask you to spend about 8 minutes on a short assessment. It tells me how you're wired, so our session starts at the real conversation. It's included &mdash; there's no charge for it.</p>
       </div>
     `;
     return html;
@@ -1604,15 +1604,18 @@ function render(){
 // Logic and wording come from window.ASSESSMENT (/assessment.js), generated from the same source
 // the server scores with. Answers are sent raw; the server does the scoring.
 function strengthsAnswered(){
-  return Object.keys(strengthsAnswers.items).length
-       + Object.keys(strengthsAnswers.pairs).length
-       + strengthsAnswers.extra.length;
+  return Object.keys(strengthsAnswers.items).length;
+}
+// The questions in the order they're asked: the 30 main ones, then any backups.
+function strengthsList(){
+  const A = window.ASSESSMENT;
+  return A.ITEMS.concat(strengthsAnswers.extra.map(id => A.questionById(id)));
 }
 
 function openStrengths(from, inviteToken){
   strengthsFrom = from || 'client';
   strengthsInviteToken = inviteToken || null;
-  strengthsAnswers = { items:{}, pairs:{}, extra:[] };
+  strengthsAnswers = { items:{}, extra:[] };
   strengthsStage = 'intro'; strengthsIdx = 0; strengthsPending = null;
   strengthsResult = null; strengthsError = '';
   view = 'strengths'; window.scrollTo(0,0); render();
@@ -1620,63 +1623,68 @@ function openStrengths(from, inviteToken){
 
 function renderStrengths(){
   const A = window.ASSESSMENT;
-  const pct = strengthsStage==='done' ? 100 : Math.round((strengthsAnswered()/43)*100);
+  const done = strengthsAnswered();
+  const pct = strengthsStage==='done' ? 100
+    : Math.min(100, Math.round(done / (strengthsAnswers.extra.length ? A.ITEMS.length + strengthsAnswers.extra.length + 2 : A.ITEMS.length + 4) * 100));
+  const tip = (n, title, body) => `<div style="display:flex;gap:12px;align-items:flex-start;padding:12px 0;border-top:1px solid var(--line);">
+      <div style="flex:0 0 26px;height:26px;border-radius:50%;background:var(--ink);color:#C9A961;display:flex;align-items:center;justify-content:center;font-size:13px;font-weight:600;">${n}</div>
+      <div><div style="font-weight:600;">${title}</div><div style="color:var(--muted);font-size:14.5px;">${body}</div></div></div>`;
   let inner = '';
 
   if(strengthsStage==='intro'){
     inner = `
-      <h1>Before we meet, I'd like you to do this</h1>
+      <div class="step-label">Strengths assessment</div>
+      <h1>Discover how you&rsquo;re wired.</h1>
       <div class="wg-block" style="border:1.5px solid #C9A961;background:#FBF6EA;border-radius:8px;padding:16px 18px;margin-bottom:18px;">
-        <p style="margin:0 0 9px;">It takes about ten minutes, and it changes our session.</p>
-        <p style="margin:0 0 9px;">It tells me how you're actually wired &mdash; what energises you, what you're good at, and what quietly drains you. Without it, I spend the first part of our time working that out. With it, we start at the real conversation.</p>
+        <p style="margin:0 0 9px;">Before we meet, I&rsquo;d like you to do this. It takes about 8 minutes, and it changes our session.</p>
+        <p style="margin:0 0 9px;">It tells me how you&rsquo;re actually wired &mdash; the work that gives you energy, the work that drains you, and where you do your best. Without it, I spend the first part of our time working that out. With it, we start at the real conversation.</p>
         <p style="margin:0;"><strong>This used to cost money.</strong> I built my own version so I can give it to you as part of working together, at no charge.</p>
       </div>
-      <p style="color:var(--muted);">There's nothing to study for and no wrong answers. Answer how you actually feel, not how you think you should.</p>
+      ${tip(1,'Find a calm moment','Not between meetings or on the run. This is about you.')}
+      ${tip(2,'Think about your best days','Answer for what gives you energy and joy, not what you&rsquo;re able to do or what your job asks of you.')}
+      ${tip(3,'Go with your gut','Your first answer is usually the true one. No right or wrong answers.')}
+      <p style="color:var(--muted);font-size:14.5px;border-left:3px solid #C9A961;padding-left:12px;margin-top:14px;">Some questions will feel familiar. That&rsquo;s on purpose &mdash; I ask the same thing from a few angles to get you right.</p>
       <div class="btn-row" style="margin-top:22px;">
         <button class="ghost" id="strengths-close">Not now</button>
-        <button class="primary" id="strengths-start">Start &mdash; about 10 minutes</button>
+        <button class="primary" id="strengths-start">Start &mdash; about 8 minutes</button>
       </div>`;
   }
 
-  else if(strengthsStage==='items'){
-    const q = A.ITEMS[strengthsIdx];
-    const cur = strengthsAnswers.items[q.id];
+  else if(strengthsStage==='part'){
+    const li = Math.floor(strengthsIdx/6), lens = A.LENSES[li];
     inner = `
-      <div class="step-label">How much do you enjoy this? &middot; ${strengthsIdx+1} of 43</div>
+      <div class="step-label">Part ${li+1} of 5 &middot; ${esc(lens.part)}</div>
+      <h1>${esc(lens.prompt.replace('…',''))}</h1>
+      <p style="color:var(--muted);">${esc(lens.intro)}</p>
+      <div class="btn-row" style="margin-top:22px;">
+        <button class="ghost" id="strengths-back">Back</button>
+        <button class="primary" id="strengths-go">Start part ${li+1}</button>
+      </div>`;
+  }
+
+  else if(strengthsStage==='more'){
+    inner = `
+      <div class="step-label">Almost there</div>
+      <h1>A few of your strengths are close.</h1>
+      <p style="color:var(--muted);">I&rsquo;ll ask a handful more, from different angles, so your result is really you. This only happens when it&rsquo;s needed.</p>
+      <div class="btn-row" style="margin-top:22px;"><span></span><button class="primary" id="strengths-go">Keep going</button></div>`;
+  }
+
+  else if(strengthsStage==='q'){
+    const q = strengthsList()[strengthsIdx];
+    const lens = A.LENSES[q.lens];
+    const cur = strengthsAnswers.items[q.id];
+    const label = strengthsIdx >= A.ITEMS.length ? 'Getting it right' : `Part ${q.lens+1} of 5 &middot; ${esc(lens.part)}`;
+    inner = `
+      <div class="step-label">${label} &middot; ${done} answered</div>
+      <p style="color:var(--muted);margin:0 0 6px;">${esc(lens.prompt)}</p>
       <h1 style="margin-bottom:22px;">${esc(q.text)}</h1>
       <div style="display:flex;flex-direction:column;gap:8px;">
-        ${A.SCALE.map(sc=>`<div class="type-btn ${cur===sc.v?'active':''}" data-sv="${sc.v}" style="text-align:left;padding:13px 15px;">${esc(sc.label)}</div>`).join('')}
-      </div>
-      <div class="btn-row" style="margin-top:20px;">
-        <button class="ghost" id="strengths-back" ${strengthsIdx===0?'style="visibility:hidden"':''}>Back</button>
-        <button class="ghost" id="strengths-close">Finish later</button>
-      </div>`;
-  }
-
-  else if(strengthsStage==='pairs'){
-    const p = A.PAIRS[strengthsIdx];
-    const cur = strengthsAnswers.pairs[p.id];
-    inner = `
-      <div class="step-label">Which sounds more like you? &middot; ${A.ITEMS.length+strengthsIdx+1} of 43</div>
-      <h1 style="margin-bottom:22px;">Pick the one you'd rather be doing.</h1>
-      <div style="display:flex;flex-direction:column;gap:8px;">
-        <div class="type-btn ${cur===p.a?'active':''}" data-pk="${p.a}" style="text-align:left;padding:13px 15px;">${esc(p.at)}</div>
-        <div class="type-btn ${cur===p.b?'active':''}" data-pk="${p.b}" style="text-align:left;padding:13px 15px;">${esc(p.bt)}</div>
+        ${lens.scale.map((lab,i)=>({lab,v:i+1})).reverse().map(o=>`<div class="type-btn ${cur===o.v?'active':''}" data-sv="${o.v}" style="text-align:left;padding:13px 15px;">${esc(o.lab)}</div>`).join('')}
       </div>
       <div class="btn-row" style="margin-top:20px;">
         <button class="ghost" id="strengths-back">Back</button>
         <button class="ghost" id="strengths-close">Finish later</button>
-      </div>`;
-  }
-
-  else if(strengthsStage==='extra'){
-    const e = strengthsPending;
-    inner = `
-      <div class="step-label">Last few &mdash; these settle the close calls &middot; ${strengthsAnswered()+1} of 43</div>
-      <h1 style="margin-bottom:22px;">Which sounds more like you?</h1>
-      <div style="display:flex;flex-direction:column;gap:8px;">
-        <div class="type-btn" data-ek="${e.a}" style="text-align:left;padding:13px 15px;">${esc(A.SNIPPETS[e.a][e.ai])}</div>
-        <div class="type-btn" data-ek="${e.b}" style="text-align:left;padding:13px 15px;">${esc(A.SNIPPETS[e.b][e.bi])}</div>
       </div>`;
   }
 
@@ -1687,6 +1695,7 @@ function renderStrengths(){
   else {
     const prof = A.profileOf(strengthsResult.letters);
     const t = prof.type;
+    const near = (!strengthsResult.clear && A.baseComplete(strengthsAnswers)) ? A.closeCall(strengthsAnswers) : null;
     const row = k => `<div style="background:var(--paper);border:1px solid var(--line);border-left:3px solid ${k===prof.primary[0]||k===prof.primary[1]?'#8A6D2F':(k===prof.secondary[0]||k===prof.secondary[1]?'var(--line-strong)':'var(--line)')};border-radius:6px;padding:12px 14px;">
         <div style="font-weight:600;font-size:15.5px;">${esc(A.TRAITS[k].label)}</div>
         <div style="font-size:13.5px;color:var(--muted);margin-top:2px;">${esc(A.TRAITS[k].short)}</div></div>`;
@@ -1698,6 +1707,7 @@ function renderStrengths(){
       ${t ? `<div style="border:1.5px solid #C9A961;background:#FBF6EA;border-radius:8px;padding:22px;margin-bottom:18px;">
         <div style="font-family:'Source Serif 4',serif;font-size:26px;font-weight:500;color:#8A6D2F;margin-bottom:6px;">${esc(t.name)}</div>
         <div>${esc(t.line)}</div></div>` : ''}
+      ${near ? `<div style="border:1.5px dashed #C9A961;border-radius:8px;padding:12px 14px;margin-bottom:18px;color:var(--muted);font-size:14.5px;"><strong style="color:var(--ink);">A close call.</strong> ${esc(A.TRAITS[near[0]].label)} and ${esc(A.TRAITS[near[1]].label)} came out almost even for you. Both are real &mdash; we'll talk it through.</div>` : ''}
       ${t ? `<p style="color:var(--muted);margin-bottom:26px;">You're wired for <strong style="color:var(--ink);">${esc(t.wiredFor[0])}</strong>, <strong style="color:var(--ink);">${esc(t.wiredFor[1])}</strong> and <strong style="color:var(--ink);">${esc(t.wiredFor[2])}</strong>.</p>` : ''}
       ${band('Comes naturally', prof.primary)}
       ${band('You can do well', prof.secondary)}
@@ -1705,7 +1715,6 @@ function renderStrengths(){
       <div style="border-top:1px solid var(--line);padding-top:18px;color:var(--muted);font-size:14px;">
         Thank you &mdash; this is genuinely useful to me. We'll go through it together in your session: what it means day to day, and where it's costing you.
         <div style="font-family:'Source Serif 4',serif;letter-spacing:.24em;margin-top:8px;">${esc(prof.letters)}</div>
-        ${strengthsResult.clear ? '' : `<div style="margin-top:8px;">A couple of these were close, which is worth talking through.</div>`}
       </div>
       <div class="btn-row" style="margin-top:24px;"><span></span><button class="primary" id="strengths-close">Done</button></div>`;
   }
@@ -1723,42 +1732,50 @@ function attachStrengthsHandlers(){
   if(close) close.onclick = ()=>{ view = strengthsFrom; window.scrollTo(0,0); render(); };
 
   const start = document.getElementById('strengths-start');
-  if(start) start.onclick = ()=>{ strengthsStage='items'; strengthsIdx=0; window.scrollTo(0,0); render(); };
+  if(start) start.onclick = ()=>{ strengthsStage='part'; strengthsIdx=0; window.scrollTo(0,0); render(); };
+
+  const go = document.getElementById('strengths-go');
+  if(go) go.onclick = ()=>{ strengthsStage='q'; window.scrollTo(0,0); render(); };
 
   const back = document.getElementById('strengths-back');
   if(back) back.onclick = ()=>{
-    if(strengthsStage==='items' && strengthsIdx>0){ strengthsIdx--; }
-    else if(strengthsStage==='pairs'){
-      if(strengthsIdx>0) strengthsIdx--;
-      else { strengthsStage='items'; strengthsIdx=A.ITEMS.length-1; }
+    if(strengthsStage==='part'){
+      if(strengthsIdx===0) strengthsStage='intro';
+      else { strengthsIdx--; strengthsStage='q'; }
+    } else if(strengthsStage==='q'){
+      if(strengthsIdx >= A.ITEMS.length){
+        // Backups depend on the answers before them, so stepping back undoes the last one.
+        const last = strengthsAnswers.extra.pop();
+        delete strengthsAnswers.items[last];
+        strengthsIdx--;
+      } else if(strengthsIdx % 6 === 0) strengthsStage='part';
+      else strengthsIdx--;
     }
     window.scrollTo(0,0); render();
   };
 
   document.querySelectorAll('[data-sv]').forEach(el=>{ el.onclick = ()=>{
-    const q = A.ITEMS[strengthsIdx];
+    const q = strengthsList()[strengthsIdx];
     strengthsAnswers.items[q.id] = Number(el.getAttribute('data-sv'));
-    if(strengthsIdx < A.ITEMS.length-1){ strengthsIdx++; }
-    else { strengthsStage='pairs'; strengthsIdx=0; }
-    window.scrollTo(0,0); render();
+    document.querySelectorAll('[data-sv]').forEach(x=>x.classList.toggle('active', x===el));
+    setTimeout(advanceStrengths, 220);
   };});
+}
 
-  document.querySelectorAll('[data-pk]').forEach(el=>{ el.onclick = ()=>{
-    const p = A.PAIRS[strengthsIdx];
-    strengthsAnswers.pairs[p.id] = el.getAttribute('data-pk');
-    if(strengthsIdx < A.PAIRS.length-1){ strengthsIdx++; }
-    else { strengthsStage='extra'; strengthsPending = A.nextExtra(strengthsAnswers); }
-    window.scrollTo(0,0);
-    if(strengthsStage==='extra' && !strengthsPending) submitStrengths(); else render();
-  };});
-
-  document.querySelectorAll('[data-ek]').forEach(el=>{ el.onclick = ()=>{
-    const e = strengthsPending;
-    strengthsAnswers.extra.push({ a:e.a, ai:e.ai, b:e.b, bi:e.bi, pick: el.getAttribute('data-ek') });
-    strengthsPending = A.nextExtra(strengthsAnswers);
-    window.scrollTo(0,0);
-    if(strengthsPending) render(); else submitStrengths();
-  };});
+function advanceStrengths(){
+  const A = window.ASSESSMENT;
+  strengthsIdx++;
+  window.scrollTo(0,0);
+  if(strengthsIdx < A.ITEMS.length){ if(strengthsIdx % 6 === 0) strengthsStage='part'; return render(); }
+  if(strengthsIdx < strengthsList().length) return render();
+  const next = A.nextExtra(strengthsAnswers);
+  if(next){
+    const first = strengthsAnswers.extra.length === 0;
+    strengthsAnswers.extra.push(next);
+    strengthsStage = first ? 'more' : 'q';
+    return render();
+  }
+  submitStrengths();
 }
 
 async function submitStrengths(){

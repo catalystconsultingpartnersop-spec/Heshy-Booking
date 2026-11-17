@@ -18,12 +18,9 @@ new Function('window', onDisk)(win);
 const B = win.ASSESSMENT;
 check('the browser copy exposes an ASSESSMENT object', !!B);
 
-check('same number of rating statements', B.ITEMS.length === server.ITEMS.length);
-check('same statements, in the same order',
-      JSON.stringify(B.ITEMS) === JSON.stringify(server.ITEMS));
-check('same forced choices', JSON.stringify(B.PAIRS) === JSON.stringify(server.PAIRS));
-check('same answer scale', JSON.stringify(B.SCALE) === JSON.stringify(server.SCALE));
-check('same short phrasings', JSON.stringify(B.SNIPPETS) === JSON.stringify(server.SNIPPETS));
+check('same questions, in the same order', JSON.stringify(B.ITEMS) === JSON.stringify(server.ITEMS));
+check('same question bank', JSON.stringify(B.QUESTIONS) === JSON.stringify(server.QUESTIONS));
+check('same angles and answer wording', JSON.stringify(B.LENSES) === JSON.stringify(server.LENSES));
 check('same trait wording', JSON.stringify(B.TRAITS) === JSON.stringify(server.TRAITS));
 check('same result wording', JSON.stringify(B.TYPES) === JSON.stringify(server.TYPES));
 
@@ -33,20 +30,18 @@ const rnd = () => (s = (s * 1103515245 + 12345) % 2147483648) / 2147483648;
 let compared = 0, drift = 0;
 for (let i = 0; i < 300; i++) {
   const items = {};
-  for (const q of server.ITEMS) items[q.id] = server.SCALE[Math.floor(rnd() * server.SCALE.length)].v;
-  const pairs = {};
-  for (const p of server.PAIRS) pairs[p.id] = rnd() < 0.5 ? p.a : p.b;
-  const ans = { items, pairs, extra: [] };
-
-  // Walk the adaptive follow-ups on BOTH sides in lockstep; a difference in nextExtra would
-  // mean the page asks a question the server wouldn't have.
-  for (let k = 0; k < server.MAX_EXTRA; k++) {
+  for (const q of server.ITEMS) items[q.id] = 1 + Math.floor(rnd() * 5);
+  const ans = { items, extra: [] };
+  // Walk the backups on BOTH sides in lockstep; a difference would mean the page asks a
+  // question the server wouldn't accept.
+  for (let k = 0; k <= server.MAX_EXTRA; k++) {
     const qs = server.nextExtra(ans), qb = B.nextExtra(ans);
-    if (JSON.stringify(qs) !== JSON.stringify(qb)) { drift++; if (failures.length < 4) failures.push(`follow-up ${k} differs: server ${JSON.stringify(qs)} browser ${JSON.stringify(qb)}`); break; }
+    if (qs !== qb) { drift++; if (failures.length < 4) failures.push(`backup ${k} differs: server ${qs} browser ${qb}`); break; }
     if (!qs) break;
-    ans.extra.push({ a: qs.a, ai: qs.ai, b: qs.b, bi: qs.bi, pick: rnd() < 0.5 ? qs.a : qs.b });
+    ans.extra.push(qs); ans.items[qs] = 1 + Math.floor(rnd() * 5);
   }
   compared++;
+  if (!server.validAnswers(ans)) { drift++; if (failures.length < 6) failures.push('server rejected answers the page would send'); }
   const rs = server.score(ans), rb = B.score(ans);
   if (rs.letters !== rb.letters || rs.clear !== rb.clear || JSON.stringify(rs.scores) !== JSON.stringify(rb.scores)) {
     drift++;
@@ -59,12 +54,6 @@ for (let i = 0; i < 300; i++) {
 }
 check(`${compared} full assessments scored identically on both sides`, drift === 0, `${drift} differences`);
 console.log(`ran ${compared} complete assessments through both copies`);
-
-// And what the page sends, the server must accept.
-const items = {}; for (const q of server.ITEMS) items[q.id] = 3;
-const pairs = {}; for (const p of server.PAIRS) pairs[p.id] = p.a;
-check('answers the browser considers complete are accepted by the server',
-      B.baseComplete({ items, pairs, extra: [] }) && server.validAnswers({ items, pairs, extra: [] }));
 
 console.log(`\n${pass} passed, ${fail} failed`);
 if (fail) { console.log('\nFAILURES:\n' + failures.map(f => '  ' + f).join('\n')); process.exit(1); }

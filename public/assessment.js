@@ -3,15 +3,10 @@
 // server ask the same questions and score them the same way. Edit the source, then run:
 //   node tools/gen-assessment-browser.mjs
 (function(){
-// Heshy's own strengths assessment, brought over from The Candidate Collection.
+// Heshy's own strengths assessment. Also used by The Candidate Collection.
 //
 // Six kinds of work (the letters W I D G E T). The result is two that come naturally, two they
-// can do well, and two that wear them down. 43 questions: 24 ratings (four different ways of
-// asking about each kind of work), 9 "which would you rather", then 10 more chosen one at a
-// time to settle whatever is still too close to call.
-//
-// The questions, the scoring and the wording are all Heshy's. This replaces Working Genius
-// across the booking app.
+// can do well, and two that wear them down.
 //
 // The server re-scores from the raw answers rather than trusting a result computed in the
 // browser, so what gets stored on a client record is always what their answers actually say.
@@ -27,159 +22,171 @@ const TRAITS = {
   T: { label: 'Finishing the job',    short: 'Drives work over the finish line' }
 };
 
-// Part 1: how much energy each kind of work gives them. Four angles on each.
-const RAW = [
-  ['W', 'Stepping back to ask whether we’re even doing the right thing'],
-  ['I', 'Coming up with a brand-new idea or solution'],
-  ['D', 'Hearing an idea and sensing right away whether it will work'],
-  ['G', 'Getting people excited about a new plan'],
-  ['E', 'Jumping in when someone asks for a hand'],
-  ['T', 'Pushing a project across the finish line'],
-  ['I', 'Being handed a problem nobody has solved yet'],
-  ['T', 'Taking care of the last details so it’s fully done'],
+// ---- The questions ------------------------------------------------------------------------------
+// Version 3. Every question is answered on the same kind of five-step scale; there are no
+// either/or choices. The same question is asked from five angles: how the work makes you feel,
+// how you see yourself, how others see you, what you actually find yourself doing, and what a
+// whole day of it would be like. That last angle is the honesty check: everyone likes helping,
+// fewer want a whole day of it.
+//
+// 30 main questions (one per angle for each of the six kinds of work). When two kinds of work
+// come out too close to call, up to 13 backup questions are asked about just those two, so 43 at
+// most. Someone with a clear result finishes in about 34.
+//
+// The same questions and scoring live in the booking app (api/_lib/assessment.js) and in The
+// Candidate Collection (src/lib/assessment.ts). Change one, change both.
 
-  ['D', 'Giving honest feedback that makes someone’s plan better'],
-  ['W', 'Having quiet time to think about where things are heading'],
-  ['E', 'Helping make someone else’s plan a success'],
-  ['G', 'Getting a stuck project moving again'],
-  ['T', 'Sticking with a task until it’s complete, even when it gets boring'],
-  ['I', 'Brainstorming lots of different ways to do something'],
-  ['W', 'Wondering why something is done the way it is'],
-  ['D', 'Spotting what’s off in a plan before it goes wrong'],
-
-  ['G', 'Rallying a group when energy is low'],
-  ['E', 'Noticing what a teammate needs and taking care of it'],
-  ['W', 'Noticing a need or an opportunity before anyone else sees it'],
-  ['T', 'Checking off a to-do list, one item at a time'],
-  ['I', 'Starting from a blank page'],
-  ['D', 'Being the one people ask, “What do you think of this?”'],
-  ['E', 'Being the person everyone can count on to help'],
-  ['G', 'Pushing people to stop talking and start doing']
-];
-const ITEMS = RAW.map(([key, text], i) => ({ id: 'q' + (i + 1), key, text }));
-
-// Three choices, not five. The values stay 1 / 3 / 5 rather than 1 / 2 / 3 so the scoring keeps
-// the same spread it was calibrated against — only the number of buttons changes, not the maths.
-const SCALE = [
-  { v: 1, label: 'Drains me' },
-  { v: 3, label: 'It’s okay' },
-  { v: 5, label: 'Love it' }
+const LENSES = [
+  { id: 'energy', part: 'Your energy', intro: 'First, how different kinds of work make you feel. Think about your best days, not just your current job.', prompt: 'How does doing this make you feel?', scale: ['Drains me', 'Not really me', 'It’s okay', 'I enjoy it', 'Love it'] },
+  { id: 'self', part: 'How you see yourself', intro: 'Now, how true each statement is of you. Be honest, not modest and not generous.', prompt: 'How true is this of you?', scale: ['Not me at all', 'A little', 'Somewhat', 'Mostly', 'That’s me'] },
+  { id: 'others', part: 'How others see you', intro: 'Picture the people who know you best: family, friends, coworkers. What would they say?', prompt: 'People who know you well would say you…', scale: ['No way', 'Rarely', 'Sometimes', 'Often', 'Definitely'] },
+  { id: 'life', part: 'What you actually do', intro: 'Not what you think you should do. What you really find yourself doing.', prompt: 'How often do you find yourself…', scale: ['Never', 'Rarely', 'Sometimes', 'Often', 'All the time'] },
+  { id: 'day', part: 'A whole day of it', intro: 'Last angle. Imagine a whole workday made of just one thing.', prompt: 'If your whole workday was this, it would be…', scale: ['Exhausting', 'Draining', 'Fine', 'A good day', 'A great day'] }
 ];
 
-// Part 2: forced choices. Each kind of work comes up three times.
-const PAIRS_RAW = [
-  ['W', 'Thinking about where the business should go next', 'D', 'Judging which of three plans is best'],
-  ['I', 'Coming up with ideas', 'T', 'Getting things finished'],
-  ['G', 'Leading the charge on something new', 'E', 'Supporting the team behind the scenes'],
-  ['W', 'Reflecting on how things could be better', 'T', 'Finishing a project down to the last detail'],
-  ['I', 'Inventing a new way to solve a problem', 'D', 'Deciding which solution is the right one'],
-  ['G', 'Kicking off a project', 'T', 'Wrapping up a project'],
-  ['D', 'Giving advice on a big decision', 'E', 'Pitching in wherever help is needed'],
-  ['W', 'Pondering a big question', 'G', 'Getting people fired up to act'],
-  ['I', 'Designing something new', 'E', 'Helping a coworker get their work done']
-];
-const PAIRS = PAIRS_RAW.map(([a, at, b, bt], i) => ({ id: 'p' + (i + 1), a, at, b, bt }));
-
-// Part 3: short ways of saying each kind of work, for the follow-up choices.
-const SNIPPETS = {
-  W: ['Thinking through the big questions', 'Asking why we do it this way', 'Imagining where things could go',
-      'Taking time to reflect before acting', 'Spotting a need nobody has noticed', 'Questioning whether we have the right goal'],
-  I: ['Coming up with a new idea', 'Inventing a fresh solution', 'Starting something from scratch',
-      'Brainstorming ten ways to do it', 'Designing something original', 'Finding a creative way around a problem'],
-  D: ['Judging which idea will work', 'Giving honest feedback on a plan', 'Trusting my gut on a decision',
-      'Spotting the flaw in a plan', 'Weighing the options and picking the best', 'Being asked for my opinion'],
-  G: ['Getting people excited to start', 'Rallying the team', 'Kicking off something new',
-      'Convincing people to take action', 'Getting a stalled project moving', 'Recruiting people to help'],
-  E: ['Helping someone with their task', 'Supporting the team behind the scenes', 'Saying yes when someone needs a hand',
-      'Making someone else’s plan work', 'Taking care of what people need', 'Being there when the team needs me'],
-  T: ['Finishing what we started', 'Handling the final details', 'Making sure everything is done right',
-      'Pushing through to the deadline', 'Crossing tasks off the list', 'Seeing a project all the way through']
+// [main question, backup question] for each angle and kind of work.
+const BANK = {
+  energy: {
+    W: ['Thinking about why things are done the way they are', 'Imagining where things could be in a few years'],
+    I: ['Coming up with a brand-new idea or solution', 'Figuring out a new way when the old way isn’t working'],
+    D: ['Hearing an idea and giving your honest take on it', 'Weighing a few options and helping choose the best one'],
+    G: ['Getting people excited about a new plan', 'Getting a group moving when nobody’s taking the lead'],
+    E: ['Helping someone else get their work done', 'Hearing “can you give me a hand?” and jumping in'],
+    T: ['Taking care of the final details so something is fully done', 'Working through a to-do list until it’s empty']
+  },
+  self: {
+    W: ['I’m always wondering if there’s a better way, even when things are working.', 'I enjoy questions that don’t have an easy answer.'],
+    I: ['I have more ideas than I could ever use.', 'Starting from a blank page excites me.'],
+    D: ['I can usually tell right away whether an idea will work.', 'My gut about people and plans is usually right.'],
+    G: ['When a group is stuck, I’m the one who gets it going.', 'I like being the one who kicks things off.'],
+    E: ['I’m happiest when someone tells me what they need and I can take care of it.', 'I get real satisfaction from making someone else’s plan work.'],
+    T: ['I can’t rest until a task is completely finished.', 'Loose ends bother me until they’re tied up.']
+  },
+  others: {
+    W: ['always ask “why?”', 'are a deep thinker'],
+    I: ['are full of creative ideas', 'always have another idea'],
+    D: ['give great advice', 'have good instincts about people and plans'],
+    G: ['bring energy into a room and get people moving', 'can get people on board with a plan'],
+    E: ['are the first to offer help', 'make other people’s work easier'],
+    T: ['always follow through', 'are the one who makes sure things actually get finished']
+  },
+  life: {
+    W: ['wondering about the bigger picture in the middle of a task', 'asking “why do we do it this way?”'],
+    I: ['coming up with ideas nobody asked for', 'working out your own solution before anyone hands you one'],
+    D: ['being asked “what do you think?”', 'catching the weak spot in a plan before it goes wrong'],
+    G: ['rallying people, even when you’re not in charge', 'being the one who says “let’s go, let’s do this”'],
+    E: ['putting your own work aside to help someone', 'noticing what someone needs before they ask'],
+    T: ['going back to tie up loose ends others left behind', 'staying on a task until it’s completely done']
+  },
+  day: {
+    W: ['Thinking, reading and reflecting on where things are going', 'Talking through big questions with no deadline'],
+    I: ['Brainstorming and designing something from scratch', 'Sketching out new plans, ideas or designs'],
+    D: ['Reviewing other people’s plans and giving feedback', 'Being the person everyone runs their decisions by'],
+    G: ['Getting people fired up and moving on something new', 'Pitching a plan and getting people to sign on'],
+    E: ['Taking care of whatever the people around you need', 'Helping teammates with their tasks'],
+    T: ['Wrapping up projects down to the last detail', 'Checking task after task off the list']
+  }
 };
 
-const MAX_EXTRA = 10;
-const CLEAR = 0.15; // a gap this big between two kinds of work is a settled answer
+// The order inside each part, so the same kind of work never comes up twice in a row.
+const ORDERS = [['I','E','W','T','G','D'], ['G','D','T','W','E','I'], ['E','W','G','I','D','T'], ['I','T','D','E','W','G'], ['D','G','E','W','T','I']];
 
-const isLetter = x => typeof x === 'string' && LETTERS.includes(x);
+const LETTER_LIST = ['W', 'I', 'D', 'G', 'E', 'T'];
+const QUESTIONS = [];
+LENSES.forEach((lens, li) => {
+  for (const key of LETTER_LIST) {
+    BANK[lens.id][key].forEach((text, v) => QUESTIONS.push({ id: lens.id + '.' + key + v, lens: li, key, text, backup: v === 1 }));
+  }
+});
+const BY_ID = Object.fromEntries(QUESTIONS.map(q => [q.id, q]));
+const ITEMS = LENSES.flatMap((lens, li) => ORDERS[li].map(key => BY_ID[lens.id + '.' + key + '0']));
+const MAX_EXTRA = 13;
+const TOTAL_MAX = ITEMS.length + MAX_EXTRA;
+const SETTLED = 1.0; // how far apart two kinds of work must be (in measured uncertainty) to call it
+const BACKUP_LENS_ORDER = [4, 0, 1, 3, 2]; // backups ask the whole-day angle first: the hardest to over-rate
+
+function questionById(id) { return BY_ID[id] || null; }
+const okRating = v => Number.isInteger(v) && v >= 1 && v <= 5;
 
 function baseComplete(a) {
-  return ITEMS.every(q => a.items?.[q.id] >= 1 && a.items[q.id] <= 5)
-      && PAIRS.every(p => a.pairs?.[p.id] === p.a || a.pairs?.[p.id] === p.b);
+  return !!a && typeof a === 'object' && !!a.items && ITEMS.every(q => okRating(a.items[q.id]));
 }
 
-function validExtra(extra) {
-  return Array.isArray(extra) && extra.length <= MAX_EXTRA && extra.every(e =>
-    e && isLetter(e.a) && isLetter(e.b) && e.a !== e.b && (e.pick === e.a || e.pick === e.b) &&
-    Number.isInteger(e.ai) && Number.isInteger(e.bi) && e.ai >= 0 && e.ai < 6 && e.bi >= 0 && e.bi < 6);
-}
-
-/** Everything the server needs before it will store a result. */
-function validAnswers(a) {
-  return !!a && typeof a === 'object' && baseComplete(a) && validExtra(a.extra || []);
-}
-
-// Mostly from how they rated each kind of work (against their own average, so someone who loves
-// everything still gets a real answer), the rest from what they picked when they had to choose.
-function raw(a) {
-  const all = ITEMS.map(q => a.items[q.id] ?? 3);
-  const avg = all.reduce((x, y) => x + y, 0) / all.length;
-  const wins = {}, seen = {};
-  const choices = [...PAIRS.map(p => ({ a: p.a, b: p.b, pick: a.pairs[p.id] })), ...(a.extra || [])];
-  for (const c of choices) {
-    if (!c.pick) continue;
-    seen[c.a] = (seen[c.a] ?? 0) + 1;
-    seen[c.b] = (seen[c.b] ?? 0) + 1;
-    wins[c.pick] = (wins[c.pick] ?? 0) + 1;
+// Each answer is compared to how the person answers within that same angle, so a generous or a
+// strict rater still gets a true picture. Then each kind of work gets its average and how sure
+// we are of it.
+function stats(a) {
+  const asked = ITEMS.concat((a.extra || []).map(id => BY_ID[id]).filter(Boolean)).filter(q => okRating(a.items[q.id]));
+  const lensAvg = LENSES.map((_, li) => {
+    const xs = asked.filter(q => q.lens === li).map(q => a.items[q.id]);
+    return xs.length ? xs.reduce((x, y) => x + y, 0) / xs.length : 3;
+  });
+  const st = {};
+  for (const k of LETTER_LIST) {
+    const xs = asked.filter(q => q.key === k).map(q => a.items[q.id] - lensAvg[q.lens]);
+    const n = xs.length || 1;
+    const m = xs.reduce((x, y) => x + y, 0) / n;
+    const v = xs.reduce((x, y) => x + (y - m) ** 2, 0) / Math.max(1, xs.length - 1);
+    st[k] = { m, se: Math.sqrt(Math.max(v, 0.5) / n) };
   }
-  const out = {};
-  for (const k of LETTERS) {
-    const mine = ITEMS.filter(q => q.key === k).map(q => a.items[q.id] ?? 3);
-    const rating = Math.max(-1, Math.min(1, (mine.reduce((x, y) => x + y, 0) / mine.length - avg) / 2));
-    const choice = seen[k] ? ((wins[k] ?? 0) / seen[k] - 0.5) * 2 : 0;
-    out[k] = 0.6 * rating + 0.4 * choice;
-  }
-  return out;
-}
-
-function ranked(a) {
-  const r = raw(a);
-  return { r, order: [...LETTERS].sort((x, y) => r[y] - r[x]) };
-}
-
-// The two dividing lines that matter: strengths vs middle, middle vs drains.
-function unsettled(a) {
-  const { r, order } = ranked(a);
-  const out = [];
+  const order = [...LETTER_LIST].sort((x, y) => (st[y].m - st[x].m) || (LETTER_LIST.indexOf(x) - LETTER_LIST.indexOf(y)));
+  // Every pair that sits on opposite sides of a dividing line (strengths | middle | drains),
+  // closest first.
+  const pairs = [];
   for (const cut of [2, 4]) {
-    for (const hi of order.slice(0, cut)) for (const lo of order.slice(cut)) out.push({ a: hi, b: lo, gap: r[hi] - r[lo] });
+    for (const hi of order.slice(cut - 2, cut)) for (const lo of order.slice(cut, cut + 2)) {
+      pairs.push({ z: (st[hi].m - st[lo].m) / Math.hypot(st[hi].se, st[lo].se), a: hi, b: lo });
+    }
   }
-  return out.sort((x, y) => x.gap - y.gap);
+  pairs.sort((x, y) => x.z - y.z);
+  const worst = pairs[0];
+  return { st, order, worst, pairs };
 }
 
-/** The next follow-up question: always the closest call still open. Null once all ten are done. */
+// The next backup question, or null when the result is settled (or all 13 are used). Always
+// about one of the two kinds of work that are closest across a dividing line.
 function nextExtra(a) {
-  if ((a.extra || []).length >= MAX_EXTRA) return null;
   const extra = a.extra || [];
-  const asked = (x, y) => extra.filter(e => (e.a === x && e.b === y) || (e.a === y && e.b === x)).length;
-  const close = unsettled(a);
-  const open = close.filter(c => c.gap < CLEAR);
-  const pool = open.length ? open : close.slice(0, 3);
-  // The closest call, but don't keep asking the same two over and over.
-  const pick = [...pool].sort((x, y) => x.gap + asked(x.a, x.b) * 0.08 - (y.gap + asked(y.a, y.b) * 0.08))[0];
-  const used = k => extra.flatMap(e => (e.a === k ? [e.ai] : e.b === k ? [e.bi] : []));
-  const fresh = k => {
-    const u = used(k);
-    for (let i = 0; i < 6; i++) if (!u.includes(i)) return i;
-    return extra.length % 6;
+  if (extra.length >= MAX_EXTRA) return null;
+  const { st, pairs } = stats(a);
+  const pick = k => {
+    const used = extra.map(id => BY_ID[id]).filter(q => q && q.key === k).map(q => q.lens);
+    const li = BACKUP_LENS_ORDER.find(l => !used.includes(l));
+    return li === undefined ? null : LENSES[li].id + '.' + k + '1';
   };
-  const [x, y] = extra.length % 2 ? [pick.b, pick.a] : [pick.a, pick.b];
-  return { a: x, ai: fresh(x), b: y, bi: fresh(y) };
+  for (const p of pairs) {
+    if (p.z >= SETTLED) break;
+    const first = st[p.a].se >= st[p.b].se ? p.a : p.b;
+    const second = first === p.a ? p.b : p.a;
+    const id = pick(first) || pick(second);
+    if (id) return id;
+  }
+  return null;
+}
+
+/** Everything the server needs before it will store a result. The backups are replayed, so a
+ *  browser can't skip ahead or pick its own questions. */
+function validAnswers(a) {
+  if (!baseComplete(a) || !Array.isArray(a.extra || []) || (a.extra || []).length > MAX_EXTRA) return false;
+  const extra = a.extra || [];
+  for (let i = 0; i < extra.length; i++) {
+    if (nextExtra({ items: a.items, extra: extra.slice(0, i) }) !== extra[i]) return false;
+    if (!okRating(a.items[extra[i]])) return false;
+  }
+  return nextExtra({ items: a.items, extra }) === null;
 }
 
 function score(a) {
-  const { r, order } = ranked(a);
+  const { st, order, worst } = stats(a);
   const scores = {};
-  for (const k of LETTERS) scores[k] = Math.round((r[k] + 1) * 50);
-  return { v: 2, order, letters: order.join(''), scores, clear: !unsettled(a).some(c => c.gap < CLEAR) };
+  for (const k of LETTER_LIST) scores[k] = Math.max(0, Math.min(100, Math.round(50 + st[k].m * 25)));
+  return { v: 3, order, letters: order.join(''), scores, clear: worst.z >= SETTLED, asked: ITEMS.length + (a.extra || []).length };
+}
+
+/** The pair that was too close to call, if any, for the results page. */
+function closeCall(a) {
+  const { worst } = stats(a);
+  return worst.z >= SETTLED ? null : [worst.a, worst.b];
 }
 
 // --- How the result reads ---------------------------------------------------------------------
@@ -247,5 +254,5 @@ function profileOf(rawValue) {
   return { letters: l.join(''), primary, secondary, draining, type, complete: l.length === 6 };
 }
 
-window.ASSESSMENT = { LETTERS, TRAITS, ITEMS, SCALE, PAIRS, SNIPPETS, MAX_EXTRA, TYPES, baseComplete, validExtra, validAnswers, nextExtra, score, parseLetters, profileOf };
+window.ASSESSMENT = { LETTERS, TRAITS, LENSES, QUESTIONS, ITEMS, MAX_EXTRA, TOTAL_MAX, TYPES, questionById, closeCall, baseComplete, validAnswers, nextExtra, score, parseLetters, profileOf };
 })();

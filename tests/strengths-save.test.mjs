@@ -3,7 +3,7 @@
 import { kv } from '@vercel/kv';
 import handler from '../api/portal-lookup.js';
 import { issueScopedToken } from '../api/_lib/auth.js';
-import { ITEMS, PAIRS, SCALE, score } from '../api/_lib/assessment.js';
+import { ITEMS, nextExtra, questionById, score } from '../api/_lib/assessment.js';
 
 let pass = 0, fail = 0; const failures = [];
 function check(name, cond, detail='') { if (cond) pass++; else { fail++; failures.push(name + (detail ? '\n    ' + detail : '')); } }
@@ -27,11 +27,13 @@ kv.set = async (k, v) => { if (k === 'app-data') appData = v; else store.set(k, 
 kv.get = async k => (k === 'app-data' ? appData : (store.get(k) ?? null));
 kv.del = async k => { store.delete(k); return 1; };
 
-function answersFavouring(best, worst) {
-  const items = {}; for (const q of ITEMS) items[q.id] = q.key === best ? 5 : q.key === worst ? 1 : 3;
-  const pairs = {}; for (const p of PAIRS) pairs[p.id] = (p.a === best || p.b === worst) ? p.a : p.b;
-  return { items, pairs, extra: [] };
+function run(rate) {
+  const ans = { items: {}, extra: [] };
+  for (const q of ITEMS) ans.items[q.id] = rate(q);
+  let id; while ((id = nextExtra(ans))) { ans.extra.push(id); ans.items[id] = rate(questionById(id)); }
+  return ans;
 }
+function answersFavouring(best, worst) { return run(q => q.key === best ? 5 : q.key === worst ? 1 : 3); }
 function mockRes() {
   const r = {};
   r.status = c => { r.statusCode = c; return r; };
@@ -100,11 +102,10 @@ invite = await issueScopedToken('strengths-invite', 'c1', 3600);
 for (const [label, answers] of [
   ['nothing', null],
   ['an empty object', {}],
-  ['a missing rating', { ...good, items: { ...good.items, q7: undefined } }],
-  ['a rating out of range', { ...good, items: { ...good.items, q7: 11 } }],
-  ['a missing forced choice', { ...good, pairs: { ...good.pairs, p3: undefined } }],
-  ['a letter that was never offered', { ...good, pairs: { ...good.pairs, p3: 'Q' } }],
-  ['too many follow-ups', { ...good, extra: Array.from({ length: 11 }, () => ({ a:'W', ai:0, b:'T', bi:0, pick:'W' })) }],
+  ['a missing rating', { ...good, items: { ...good.items, [ITEMS[6].id]: undefined } }],
+  ['a rating out of range', { ...good, items: { ...good.items, [ITEMS[6].id]: 11 } }],
+  ['a backup question it would never have asked', { ...good, extra: ['day.W1'], items: { ...good.items, 'day.W1': 5 } }],
+  ['too many backups', { ...good, extra: Array.from({ length: 14 }, () => 'day.W1') }],
   ['a string instead of answers', 'WIDGET']
 ]) {
   const r = await post({ action: 'save-strengths', strengthsToken: invite, answers });
@@ -115,11 +116,11 @@ check('none of the junk was stored', !appData.clients[0].strengths);
 // --- a complete run including follow-ups ------------------------------------------------------------
 reset();
 invite = await issueScopedToken('strengths-invite', 'c1', 3600);
-const full = answersFavouring('D', 'G');
-full.extra = [{ a: 'W', ai: 0, b: 'I', bi: 1, pick: 'W' }, { a: 'E', ai: 2, b: 'T', bi: 3, pick: 'T' }];
+const full = run(q => ({ D: 4, W: 4, I: 3, E: 3, G: 3, T: 2 })[q.key]);
+check('this run needed backups', full.extra.length > 0, String(full.extra.length));
 res = await post({ action: 'save-strengths', strengthsToken: invite, answers: full });
-check('a run with follow-ups saves', res.statusCode === 200, String(res.statusCode));
-check('...and the follow-ups affected the score', appData.clients[0].strengths.letters === score(full).letters);
+check('a run with backups saves', res.statusCode === 200, String(res.statusCode));
+check('...and scores the same as the server', appData.clients[0].strengths.letters === score(full).letters);
 check('...and it records whether the result settled', typeof appData.clients[0].strengths.clear === 'boolean');
 
 console.log(`\n${pass} passed, ${fail} failed`);
