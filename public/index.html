@@ -379,6 +379,50 @@
   .portal-summary-box{margin-top:12px;padding:14px 16px;background:#FAF9F6;border-left:3px solid #C9A961;border-radius:4px;font-size:13.5px;line-height:1.65;color:var(--ink);}
   .portal-summary-label{font-size:10.5px;font-weight:600;letter-spacing:0.06em;text-transform:uppercase;color:#8A6D2F;margin-bottom:6px;}
 
+  /* An upcoming session, as a card. It used to be a line of small grey text with two faint
+     buttons under it: nothing said "this is your session" and nothing said it could be moved. */
+  .sess-card{
+    border:1px solid var(--line-strong);border-left:3px solid var(--ink);border-radius:8px;
+    background:var(--paper);padding:18px 20px;margin-bottom:12px;
+  }
+  .sess-card.open{border-left-color:#C9A961;}
+  .sess-when{font-family:'Source Serif 4',Georgia,serif;font-size:19px;line-height:1.25;}
+  .sess-at{font-size:26px;font-weight:600;letter-spacing:-0.02em;margin-top:2px;}
+  .sess-meta{font-size:13px;color:var(--muted);margin-top:4px;}
+  .sess-actions{display:flex;gap:8px;margin-top:16px;flex-wrap:wrap;}
+  .sess-locked{
+    margin-top:14px;padding:11px 14px;background:#FAF9F6;border-left:3px solid #C9A961;
+    border-radius:4px;font-size:13px;line-height:1.6;color:var(--muted);
+  }
+  /* The expanded reschedule / cancel panel, inside the card it belongs to. */
+  .sess-panel{margin-top:16px;padding-top:16px;border-top:1px solid var(--line);}
+  .sess-panel-title{font-size:15px;font-weight:600;margin-bottom:12px;}
+  .sess-swap{
+    display:flex;align-items:center;gap:9px;flex-wrap:wrap;margin-bottom:16px;
+    padding:10px 13px;background:#FAF9F6;border-radius:6px;font-size:13.5px;
+  }
+  .sess-swap-from{color:var(--muted);text-decoration:line-through;}
+  .sess-swap-arrow{color:var(--muted);}
+  .sess-swap-to{color:var(--muted);font-style:italic;}
+  .sess-swap-to.set{color:var(--ink);font-style:normal;font-weight:600;}
+  .sess-step{font-size:11px;font-weight:600;letter-spacing:0.07em;text-transform:uppercase;color:var(--muted);margin:14px 0 8px;}
+  .portal-empty{
+    padding:22px;border:1px dashed var(--line-strong);border-radius:8px;
+    text-align:center;font-size:14px;color:var(--muted);line-height:1.7;
+  }
+  .portal-flash{
+    margin-bottom:18px;padding:12px 15px;background:#F4F7F4;border-left:3px solid #7FA37F;
+    border-radius:4px;font-size:13.5px;color:#2E4A2E;
+  }
+  /* A client who has already taken the assessment is shown their result, not sold it again. */
+  .strengths-result{padding:18px 20px;border:1px solid var(--line-strong);border-radius:8px;background:var(--paper);}
+  .strengths-type{font-family:'Source Serif 4',Georgia,serif;font-size:21px;line-height:1.25;}
+  .strengths-line{font-size:13.5px;color:var(--muted);line-height:1.6;margin-top:5px;}
+  .strengths-pair{margin-top:15px;padding-top:14px;border-top:1px solid var(--line);}
+  .strengths-pair-label{font-size:10.5px;font-weight:600;letter-spacing:0.07em;text-transform:uppercase;color:var(--muted);}
+  .strengths-pair-value{font-size:15px;font-weight:600;margin-top:3px;}
+  .strengths-letters{margin-top:12px;font-size:13px;font-weight:600;letter-spacing:0.22em;color:var(--muted);}
+
   /* Moving a session: a compact day strip and a time grid, in the same shapes the booking page
      uses, so it reads as the familiar picker rather than a second, different one. */
   .portal-move{margin-top:10px;padding:14px;border:1px solid var(--line);border-radius:8px;background:var(--paper);}
@@ -873,6 +917,11 @@ async function saveState(){
 function fmtDate(d){
   const dt = new Date(d+'T00:00:00');
   return dt.toLocaleDateString('en-US',{weekday:'short', month:'short', day:'numeric'});
+}
+// The full, unabbreviated form, for the one place a date is the headline rather than a label.
+function fmtDateLong(d){
+  const dt = new Date(d+'T00:00:00');
+  return dt.toLocaleDateString('en-US',{weekday:'long', month:'long', day:'numeric'});
 }
 // Every time on this site is New York time. A client in another timezone had no way to know
 // that, so an 11:00 session could be read as 11:00 wherever they happened to be.
@@ -1880,29 +1929,45 @@ function goToPortal(){
 // The inline "move this session" picker. Deliberately the same shapes as the booking page's own
 // day and time cells, so a client who booked once already recognises it.
 function portalMovePickerHtml(b){
-  if(portalMoveLoading) return `<div class="note" style="margin-top:8px;">Finding open times…</div>`;
+  if(portalMoveLoading){
+    return `<div class="sess-panel"><div class="sess-panel-title">Reschedule this session</div>
+      <div class="note">Finding open times…</div></div>`;
+  }
   const days = portalMoveDates(b);
   if(days.length === 0){
     return `
-      <div class="note" style="margin-top:8px;">There are no other open times for a ${b.durationMin||60}-minute ${b.type==='virtual'?'video':'in-person'} session right now. Reply to your confirmation email and Heshy will sort it out.</div>
-      <button class="ghost small" data-abort-move="1" style="margin-top:8px;">Never mind</button>
-      ${portalMoveError?`<div class="card-error">${esc(portalMoveError)}</div>`:''}
+      <div class="sess-panel">
+        <div class="sess-panel-title">Reschedule this session</div>
+        <div class="note" style="margin-bottom:12px;">There are no other open times for a ${b.durationMin||60}-minute ${b.type==='virtual'?'video':'in-person'} session right now. Reply to your confirmation email and Heshy will sort it out.</div>
+        <div class="sess-actions"><button class="ghost small" data-abort-move="1">Keep current time</button></div>
+        ${portalMoveError?`<div class="card-error">${esc(portalMoveError)}</div>`:''}
+      </div>
     `;
   }
   const activeDay = (portalMoveDay && days.some(d=>d.date===portalMoveDay)) ? portalMoveDay : days[0].date;
   const times = (days.find(d=>d.date===activeDay) || {times:[]}).times;
+  const chosen = (portalMoveTime && portalMoveDay === activeDay)
+    ? `${fmtDateLong(activeDay)} at ${fmtTime(portalMoveTime)}${etSuffix()}` : null;
   return `
-    <div class="portal-move">
-      <div class="note" style="margin-bottom:8px;">Pick a new time. Same ${b.durationMin||60} minutes, same format.</div>
+    <div class="sess-panel">
+      <div class="sess-panel-title">Reschedule this session</div>
+      <div class="sess-swap">
+        <span class="sess-swap-from">${fmtDate(b.date)}, ${fmtTime(b.time)}</span>
+        <span class="sess-swap-arrow">&rarr;</span>
+        <span class="sess-swap-to${chosen?' set':''}">${chosen ? fmtDate(activeDay)+', '+fmtTime(portalMoveTime) : 'pick a new time'}</span>
+      </div>
+      <div class="sess-step">1. Which day?</div>
       <div class="portal-move-days">
         ${days.map(d=>`<button class="portal-move-day ${d.date===activeDay?'selected':''}" data-move-day="${d.date}">${fmtDate(d.date)}</button>`).join('')}
       </div>
+      <div class="sess-step">2. What time on ${fmtDate(activeDay)}?</div>
       <div class="portal-move-times">
         ${times.map(t=>`<button class="portal-move-time ${portalMoveTime===t && portalMoveDay===activeDay?'selected':''}" data-move-time="${t}">${fmtTime(t)}${VIEWER_IN_ET?'':'<span class="tz">ET</span>'}</button>`).join('')}
       </div>
-      <div style="display:flex;gap:8px;margin-top:12px;">
-        <button class="primary small" data-confirm-move="1" ${(!portalMoveTime||portalMoveBusy)?'disabled':''}>${portalMoveBusy?'Moving…':'Move to this time'}</button>
-        <button class="ghost small" data-abort-move="1" ${portalMoveBusy?'disabled':''}>Never mind</button>
+      <div class="note" style="margin-top:10px;">Still ${b.durationMin||60} minutes, still ${b.durationMin===15?'a phone call':(b.type==='virtual'?'a video call':'in person')}.</div>
+      <div class="sess-actions">
+        <button class="primary small" data-confirm-move="1" ${(!portalMoveTime||portalMoveBusy)?'disabled':''}>${portalMoveBusy?'Moving…':'Confirm new time'}</button>
+        <button class="ghost small" data-abort-move="1" ${portalMoveBusy?'disabled':''}>Keep current time</button>
       </div>
       ${portalMoveError?`<div class="card-error">${esc(portalMoveError)}</div>`:''}
     </div>
@@ -1968,31 +2033,42 @@ function renderPortal(){
   }
   const upcoming = (portalClient.upcoming||[]).slice().sort((a,b)=>(a.date+a.time).localeCompare(b.date+b.time));
   const past = (portalClient.past||[]).slice().sort((a,b)=>b.date.localeCompare(a.date));
-  let upHtml = upcoming.length===0 ? `<div class="empty">No upcoming sessions.</div>` : '';
+  // Each upcoming session is a card that says plainly what it is and what can be done to it.
+  // It used to be a line of small grey text with two faint buttons under it, and nobody could
+  // tell at a glance that it was a session, let alone that it could be moved.
+  let upHtml = upcoming.length===0
+    ? `<div class="portal-empty">Nothing booked at the moment.<br><span class="note">Use “Book a session” above whenever you'd like another one.</span></div>` : '';
   upcoming.forEach(b=>{
     const isCancelling = portalCancellingId === b.id;
     const isMoving = portalMovingId === b.id;
-    upHtml += `<div class="portal-session">
-      <div class="top"><span>${fmtDate(b.date)}, ${fmtTime(b.time)}${etSuffix()}</span><span>${b.type==='virtual'?'Video call':'In person'}</span></div>
+    const dur = b.durationMin || 60;
+    const format = dur === 15 ? 'Phone call' : (b.type==='virtual' ? 'Video call' : 'In person');
+    upHtml += `<div class="sess-card${(isMoving||isCancelling)?' open':''}">
+      <div class="sess-when">${fmtDateLong(b.date)}</div>
+      <div class="sess-at">${fmtTime(b.time)}${etSuffix()}</div>
+      <div class="sess-meta">${dur} minutes &middot; ${format}</div>
       ${isCancelling ? `
-        <div class="note" style="margin-top:8px;">Cancel this session? This can't be undone.</div>
-        <div style="display:flex;gap:8px;margin-top:8px;">
-          <button class="ghost small danger-ghost" data-confirm-cancel="${b.id}" ${portalCancelBusy?'disabled':''}>${portalCancelBusy?'Cancelling…':'Yes, cancel it'}</button>
-          <button class="ghost small" data-abort-cancel="1" ${portalCancelBusy?'disabled':''}>Never mind</button>
+        <div class="sess-panel">
+          <div class="sess-panel-title">Cancel this session</div>
+          <div class="note" style="margin-bottom:12px;">This frees up ${fmtDateLong(b.date)} at ${fmtTime(b.time)}. You won't be charged.</div>
+          <div class="sess-actions">
+            <button class="ghost small danger-ghost" data-confirm-cancel="${b.id}" ${portalCancelBusy?'disabled':''}>${portalCancelBusy?'Cancelling…':'Yes, cancel it'}</button>
+            <button class="ghost small" data-abort-cancel="1" ${portalCancelBusy?'disabled':''}>Keep this session</button>
+          </div>
+          ${portalCancelError?`<div class="card-error">${portalCancelError}</div>`:''}
         </div>
-        ${portalCancelError?`<div class="card-error">${portalCancelError}</div>`:''}
       ` : isMoving ? portalMovePickerHtml(b)
       : b.cancellable ? `
-        <div style="display:flex;gap:8px;margin-top:8px;">
-          <button class="ghost small" data-start-move="${b.id}">Move to another time</button>
-          <button class="ghost small" data-start-cancel="${b.id}">Cancel session</button>
+        <div class="sess-actions">
+          <button class="primary small" data-start-move="${b.id}">Reschedule</button>
+          <button class="ghost small" data-start-cancel="${b.id}">Cancel</button>
         </div>
       ` : `
-        <div class="note" style="margin-top:8px;">Within ${portalClient.cancelCutoffHours} hours of your session &mdash; please contact Heshy directly to move or cancel it.</div>
+        <div class="sess-locked">This session is less than ${portalClient.cancelCutoffHours} hours away, so it can't be changed here. Reply to your confirmation email and Heshy will sort it out.</div>
       `}
     </div>`;
   });
-  let pastHtml = past.length===0 ? `<div class="empty">No past sessions yet.</div>` : '';
+  let pastHtml = past.length===0 ? `<div class="portal-empty">No past sessions yet.</div>` : '';
   past.forEach(b=>{
     // A past session that hasn't been billed yet shouldn't claim it cost $0.00.
     const amountLabel = b.awaitingBilling ? `<span class="note">Not yet billed</span>` : money(b.amount||0);
@@ -2004,13 +2080,24 @@ function renderPortal(){
   // Existing clients take the assessment from here. Those who already have a result see it,
   // so the portal is also where they go back to look at it.
   const prof = portalClient.strengths ? window.ASSESSMENT.profileOf(portalClient.strengths.letters) : null;
+  // Someone who has already done this should be shown their result, not sold the assessment a
+  // second time. Retaking stays possible, but as a quiet line underneath rather than a button
+  // competing with the result itself.
   const strengthsSectionHtml = (prof && prof.complete) ? `
-    <div class="section-title" style="margin-top:32px;">Your strengths</div>
-    ${prof.type ? `<div class="note" style="margin-bottom:10px;"><strong>${esc(prof.type.name)}</strong> &mdash; ${esc(prof.type.line)}</div>` : ''}
-    <div class="note" style="margin-bottom:10px;">Comes naturally: <strong>${prof.primary.map(k=>esc(window.ASSESSMENT.TRAITS[k].label)).join(' &amp; ')}</strong></div>
-    <button class="ghost small" id="portal-retake-strengths">Take it again</button>
+    <div class="section-title" style="margin-top:36px;">Your strengths</div>
+    <div class="strengths-result">
+      ${prof.type ? `<div class="strengths-type">${esc(prof.type.name)}</div>
+        <div class="strengths-line">${esc(prof.type.line)}</div>` : ''}
+      <div class="strengths-pair">
+        <div class="strengths-pair-label">Comes naturally</div>
+        <div class="strengths-pair-value">${prof.primary.map(k=>esc(window.ASSESSMENT.TRAITS[k].label)).join(' &amp; ')}</div>
+      </div>
+      <div class="strengths-letters">${esc(prof.letters)}</div>
+    </div>
+    <div class="note" style="margin-top:10px;">Heshy has this, so your sessions start from it.
+      <button class="manage-link" id="portal-retake-strengths">Take it again</button></div>
   ` : `
-    <div class="section-title" style="margin-top:32px;">Strengths assessment</div>
+    <div class="section-title" style="margin-top:36px;">Strengths assessment</div>
     <div class="wg-block" style="border:1.5px solid #C9A961;background:#FBF6EA;border-radius:8px;padding:16px 18px;">
       <p style="margin:0 0 12px;">Ten minutes, and it changes our session &mdash; it tells me how you're wired so we start at the real conversation. Included, no charge.</p>
       <button class="primary small" id="portal-start-strengths">Take the assessment</button>
@@ -2037,11 +2124,11 @@ function renderPortal(){
       <a href="#portal" class="manage-link" data-go-portal="1">My sessions</a>
     </div>
     <h1>Hi ${esc(portalClient.name.split(' ')[0])}</h1>
-    <div class="btn-row" style="margin-top:0;margin-bottom:32px;"><button class="primary small" id="portal-book-again">Book another session</button></div>
-    ${portalMoveNotice ? `<div class="note" style="margin-bottom:18px;color:#2E5B27;">${esc(portalMoveNotice)}</div>` : ''}
-    <div class="section-title">Upcoming</div>
+    ${portalMoveNotice ? `<div class="portal-flash">${esc(portalMoveNotice)}</div>` : ''}
+    <div class="section-title">${upcoming.length === 1 ? 'Your next session' : 'Your upcoming sessions'}</div>
     ${upHtml}
-    <div class="section-title" style="margin-top:32px;">Past sessions</div>
+    <div class="btn-row" style="margin-top:18px;margin-bottom:0;"><button class="ghost small" id="portal-book-again">Book another session</button></div>
+    <div class="section-title" style="margin-top:36px;">Past sessions</div>
     ${pastHtml}
     ${strengthsSectionHtml}
     ${cardSectionHtml}

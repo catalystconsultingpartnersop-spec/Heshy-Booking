@@ -311,7 +311,23 @@ check('a 15-minute session is described as a phone call in the alert',
 // --- the page ----------------------------------------------------------------------------------------------------
 const html = readFileSync(new URL('../public/index.html', import.meta.url), 'utf8');
 check('the portal offers a way to move a session', /data-start-move="/.test(html));
+check('...calling it what the client would call it', />Reschedule</.test(html));
 check('...alongside cancelling, not instead of it', /data-start-cancel="/.test(html));
+// The upcoming session used to be a line of small grey text with two faint buttons under it.
+check('an upcoming session is a card, not a line of grey text', /class="sess-card/.test(html));
+check('...headed by the day it falls on', /fmtDateLong\(b\.date\)/.test(html));
+check('...with the time as the thing the eye lands on', /\.sess-at\{[^}]*font-size:26px/.test(html));
+check('...and the length and format spelled out', /\$\{dur\} minutes &middot; \$\{format\}/.test(html));
+check('a 15-minute session is called a phone call here too', /dur === 15 \? 'Phone call'/.test(html));
+check('the section says whose sessions these are', /Your next session/.test(html) && /Your upcoming sessions/.test(html));
+// Someone who already took the assessment should see their result, not be sold it again.
+check('a client with a result sees the result', /class="strengths-result"/.test(html));
+check('...including their type', /strengths-type/.test(html));
+check('...and their letters, which Heshy wanted kept visible', /strengths-letters/.test(html));
+check('...with retaking offered quietly, not as the main button',
+      /manage-link" id="portal-retake-strengths"/.test(html));
+check('...and the sales pitch only shown to someone who has not taken it',
+      /Ten minutes, and it changes our session/.test(html));
 check('...and sends the right action', /action: 'reschedule-booking'/.test(html));
 check('...with the chosen date and time', /newDate: portalMoveDay, newTime: portalMoveTime/.test(html));
 check('the picker is only built when asked for', /portalMovingId = bookingId/.test(html));
@@ -330,9 +346,15 @@ check('the session being moved stops blocking itself in the booking list', /stat
 check('...and in the calendar busy list', /calendarBusy = \(savedBusy\|\|\[\]\)\.filter/.test(html));
 check('...and the real lists are put back afterwards', /finally \{\s*\n\s*state\.bookings = savedBookings;/.test(html));
 check('the time it is already booked for is not offered', /ds === booking\.date && t === booking\.time/.test(html));
-check('the picker keeps the same length and format', /Same \$\{b\.durationMin\|\|60\} minutes, same format/.test(html));
-check('a session inside the cutoff says moving needs a call, not just cancelling',
-      /please contact Heshy directly to move or cancel it/.test(html));
+check('the picker says the length and format are unchanged', /Still \$\{b\.durationMin\|\|60\} minutes, still/.test(html));
+check('the picker says what it is', /Reschedule this session/.test(html));
+check('...and shows the old time next to the new one', /sess-swap-from/.test(html) && /sess-swap-to/.test(html));
+check('...and names the steps rather than leaving two rows of chips unexplained',
+      /1\. Which day\?/.test(html) && /2\. What time on/.test(html));
+check('backing out says what backing out does', /Keep current time/.test(html) && !/Never mind/.test(html));
+check('backing out of a cancel does too', /Keep this session/.test(html));
+check('a session inside the cutoff explains itself without jargon',
+      /less than \$\{portalClient\.cancelCutoffHours\} hours away/.test(html));
 check('the picker says so when there is nothing else open', /no other open times/.test(html));
 check('a successful move is confirmed on screen', /Your session has moved\. A confirmation is on its way\./.test(html));
 check('the stale open-hours snapshot is dropped after a move', /portalSlotsLoaded = false;/.test(html));
