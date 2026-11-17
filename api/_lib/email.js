@@ -273,7 +273,7 @@ export function receiptEmail(booking) {
  * what happened, says it's common, gives one clear action, and doesn't demand anything by a
  * deadline. `decline` is what explainDecline() produced.
  */
-export function chargeDeclinedEmail(booking, decline, settings = {}) {
+export function chargeDeclinedEmail(booking, decline, settings = {}, payUrl = '') {
   const firstName = esc((booking.clientName || '').split(' ')[0]);
   const baseUrl = process.env.SITE_URL || 'https://heshy-booking.vercel.app';
   const amount = '$' + (Number(decline.amount) || 0).toFixed(2);
@@ -281,21 +281,23 @@ export function chargeDeclinedEmail(booking, decline, settings = {}) {
 
   // What the client should do, in their own terms — not the internal decline code, and not the
   // instruction Heshy sees. "Ask them to update their card" is useless advice to the them.
+  // No "below" in any of these: what follows depends on whether a pay link was issued, and a
+  // sentence pointing at the wrong thing is worse than no sentence.
   const ACTIONS = {
-    authentication_required: "Your bank would like you to approve this payment yourself. Re-entering your card below takes care of it &mdash; you'll be asked to confirm with your bank as part of that.",
-    insufficient_funds: "This is usually a timing thing. If you'd rather use a different card, you can swap it below.",
-    expired_card: "The card we have on file has expired. You can add a current one below.",
-    incorrect_cvc: "The security code didn't match. Re-entering the card below should sort it.",
-    card_velocity_exceeded: "The card has hit a limit on recent transactions. You can try again tomorrow, or add a different card below.",
-    lost_card: "Your bank has this card flagged. You can add a different one below.",
-    stolen_card: "Your bank has this card flagged. You can add a different one below.",
-    pickup_card: "Your bank has blocked this card. You can add a different one below.",
-    transaction_not_allowed: "This card doesn't allow this type of payment. You can add a different one below.",
-    currency_not_supported: "This card doesn't support payments in US dollars. You can add a different one below.",
-    do_not_honor: "Your bank declined it without giving a reason &mdash; this is common and usually means their fraud check was being cautious, not that anything is wrong with your account. A quick call to the number on the back of your card normally clears it. Or you can add a different card below."
+    authentication_required: "Your bank would like you to approve this payment yourself rather than letting it go through on file.",
+    insufficient_funds: "This is usually a timing thing rather than anything to worry about.",
+    expired_card: "The card we have on file has expired.",
+    incorrect_cvc: "The card's security code didn't match.",
+    card_velocity_exceeded: "The card has hit a limit on recent transactions.",
+    lost_card: "Your bank has this card flagged, so it won't accept charges.",
+    stolen_card: "Your bank has this card flagged, so it won't accept charges.",
+    pickup_card: "Your bank has blocked this card.",
+    transaction_not_allowed: "This card doesn't allow this type of payment.",
+    currency_not_supported: "This card doesn't support payments in US dollars.",
+    do_not_honor: "Your bank declined it without giving a reason &mdash; this is common, and usually means their fraud check was being cautious rather than anything being wrong with your account."
   };
   const action = ACTIONS[decline.code]
-    || "You can add a different card below, or check with your bank if it keeps happening.";
+    || "Your bank didn't give a reason for it.";
 
   return {
     subject: 'A quick issue with your payment',
@@ -305,9 +307,23 @@ export function chargeDeclinedEmail(booking, decline, settings = {}) {
         Hi ${firstName || 'there'} &mdash; I tried to charge ${amount} for our ${mins}-minute session on ${esc(booking.date)}, and it didn't go through.
       </div>
       <div style="font-family:Arial,sans-serif;font-size:14px;line-height:1.7;margin-bottom:20px;">${action}</div>
+      ${payUrl ? `
+      <div style="margin:24px 0;font-family:Arial,sans-serif;">
+        <a href="${payUrl}" style="display:inline-block;padding:13px 24px;background:#111111;color:#ffffff;text-decoration:none;border-radius:6px;font-size:14px;font-weight:600;">Pay ${amount} now</a>
+      </div>
+      <div style="font-family:Arial,sans-serif;font-size:13.5px;line-height:1.7;margin-bottom:20px;">
+        Paying through that link usually works even when the charge on file didn't &mdash; your bank is far happier approving a payment you're making yourself than one that arrives without you.
+        ${'' /* The real mechanism, in words a client can act on rather than a lecture about 3-D Secure. */}
+      </div>
+      <div style="font-family:Arial,sans-serif;font-size:13.5px;color:#6E6E6E;line-height:1.7;margin-bottom:20px;">
+        Or <a href="${baseUrl}/#portal" style="color:#111111;">update the card we have on file</a>${decline.code === 'do_not_honor' ? ', or call the number on the back of your card and ask them to let it through' : ''}.
+      </div>` : `
+      <div style="font-family:Arial,sans-serif;font-size:14px;line-height:1.7;margin-bottom:20px;">
+        You can add a different card below${decline.code === 'do_not_honor' ? ', or call the number on the back of your card and ask them to let it through' : ''}.
+      </div>
       <div style="margin:24px 0;font-family:Arial,sans-serif;">
         <a href="${baseUrl}/#portal" style="display:inline-block;padding:12px 22px;background:#111111;color:#ffffff;text-decoration:none;border-radius:6px;font-size:14px;">Update your card</a>
-      </div>
+      </div>`}
       <div style="font-family:Arial,sans-serif;font-size:13.5px;color:#6E6E6E;line-height:1.7;">
         Nothing has been taken from your account, and there's nothing urgent here &mdash; whenever you get to it is fine. Just reply to this email if you'd rather sort it another way.
       </div>

@@ -434,6 +434,19 @@
   .charge-problem-title{font-size:10.5px;font-weight:600;letter-spacing:0.07em;text-transform:uppercase;color:#B3261E;margin-bottom:5px;}
   .charge-problem-msg{font-size:14px;font-weight:500;line-height:1.5;}
   .charge-problem-next{font-size:13px;color:var(--muted);line-height:1.6;margin-top:6px;}
+
+  /* Paying from a link. The amount is the whole point of the page, so it is the biggest thing
+     on it — a client should be able to tell what they're about to pay without reading. */
+  .pay-amount-block{padding:20px;border:1px solid var(--line-strong);border-left:3px solid var(--ink);border-radius:8px;background:var(--paper);}
+  .pay-amount-label{font-size:10.5px;font-weight:600;letter-spacing:0.07em;text-transform:uppercase;color:var(--muted);margin-bottom:4px;}
+  .pay-amount{font-size:38px;font-weight:600;letter-spacing:-0.03em;line-height:1.1;}
+  .card-box{padding:12px 14px;border:1px solid var(--line-strong);border-radius:6px;background:#fff;margin-top:6px;}
+  .pay-done{padding:28px 20px;text-align:center;border:1px solid var(--line-strong);border-radius:8px;background:var(--paper);}
+  .pay-done-tick{
+    width:46px;height:46px;line-height:46px;margin:0 auto 14px;border-radius:50%;
+    background:#F0F5F0;color:#2E5B27;font-size:24px;
+  }
+  .pay-done-title{font-family:'Source Serif 4',Georgia,serif;font-size:23px;}
   .charge-problem-sent{font-size:13px;color:#2E5B27;line-height:1.6;margin-top:8px;}
   /* Said where the timer's number would be, when there is no number because nobody ran it. */
   .charge-hint{
@@ -1648,6 +1661,8 @@ function render(){
     app.innerHTML = renderAdminGate();
   } else if(view==='strengths'){
     app.innerHTML = renderStrengths();
+  } else if(view==='pay'){
+    app.innerHTML = renderPay();
   } else if(view==='portal'){
     app.innerHTML = renderPortal();
   } else {
@@ -3502,6 +3517,12 @@ function attachHandlers(){
   mountPortalCardElementIfNeeded();
 
   if(view==='admin' && !adminUnlocked) return;
+  if(view==='pay'){
+    const payBtn = $('pay-submit'); if(payBtn) payBtn.onclick = submitPayment;
+    // The card field is destroyed by every re-render, so it has to be put back each time.
+    if(payStage === 'ready') mountPayCard();
+    return;
+  }
   if(view==='portal') return;
 
   if(view==='client'){
@@ -4049,6 +4070,120 @@ function attachHandlers(){
 
 // A client arriving from the "take the assessment" email: the link carries a token naming only
 // their own record, so they start straight away, without signing in or typing anything.
+// --- paying from a link -------------------------------------------------------------------------
+// A client opens #pay/<token> and pays the amount owed themselves. The amount is never read from
+// the link: the server works it out from the booking, so the page can't be edited into a
+// different price and can't show a stale figure if the length was corrected after the email.
+let payToken = null, payInfo = null, payStage = 'loading', payError = '', payBusy = false, payCard = null;
+
+function openPayLink(){
+  const m = (window.location.hash || '').match(/^#pay\/([a-f0-9]{24,})$/i);
+  if(!m) return false;
+  payToken = m[1];
+  view = 'pay'; payStage = 'loading';
+  render();
+  fetch('/api/create-setup-intent', {
+    method:'POST', headers:{'Content-Type':'application/json'},
+    body: JSON.stringify({ action:'pay-info', token: payToken })
+  }).then(r=>r.json()).then(info=>{
+    payInfo = info;
+    payStage = (info && info.state === 'owed') ? 'ready' : 'nothing';
+    render();
+    if(payStage === 'ready') mountPayCard();
+  }).catch(()=>{ payStage='nothing'; payInfo={state:'unknown'}; render(); });
+  return true;
+}
+
+// Every render replaces the DOM, so the Stripe field has to be put back into the new node —
+// checking the node itself rather than a flag, the same way the portal's card field does.
+let payElements = null;
+function mountPayCard(){
+  const host = document.getElementById('pay-card');
+  if(!host || host.childElementCount > 0) return;
+  payElements = stripe.elements();
+  payCard = payElements.create('card', { style: { base: { fontSize:'14.5px', fontFamily:'Inter, sans-serif', color:'#111111' } } });
+  payCard.mount('#pay-card');
+  payCard.on('change', ev => {
+    const el = document.getElementById('pay-card-error');
+    if(el) el.textContent = ev.error ? ev.error.message : '';
+  });
+}
+
+async function submitPayment(){
+  if(payBusy || !payCard) return;
+  payBusy = true; payError = ''; render(); mountPayCard();
+  try{
+    const r = await fetch('/api/create-setup-intent', {
+      method:'POST', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({ action:'pay-intent', token: payToken })
+    });
+    const data = await r.json();
+    if(data.error){ payError = data.error; payBusy = false; render(); mountPayCard(); return; }
+
+    // The cardholder is here, so the bank may ask them to confirm — which is the entire reason
+    // this link exists. confirmCardPayment handles that step.
+    const result = await stripe.confirmCardPayment(data.clientSecret, {
+      payment_method: { card: payCard }
+    });
+    if(result.error){
+      payError = result.error.message || 'That payment did not go through.';
+      payBusy = false; render(); mountPayCard(); return;
+    }
+    // Reported to the server, which re-reads the payment from Stripe rather than taking the
+    // browser's word for it.
+    await fetch('/api/create-setup-intent', {
+      method:'POST', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({ action:'pay-confirm', token: payToken, paymentIntentId: result.paymentIntent.id })
+    });
+    payStage = 'done'; payBusy = false; payCard = null; payElements = null; render();
+  }catch(e){
+    payError = 'Something went wrong. Nothing has been charged — please try again.';
+    payBusy = false; render(); mountPayCard();
+  }
+}
+
+function renderPay(){
+  const amt = payInfo && payInfo.amount != null ? money(payInfo.amount) : '';
+  let body;
+  if(payStage === 'loading'){
+    body = `<div class="note">Loading…</div>`;
+  } else if(payStage === 'done'){
+    body = `
+      <div class="pay-done">
+        <div class="pay-done-tick">&check;</div>
+        <div class="pay-done-title">Paid${amt?' — '+amt:''}</div>
+        <div class="note" style="margin-top:8px;">A receipt is on its way to you. Thank you.</div>
+      </div>`;
+  } else if(payStage === 'nothing'){
+    const s = payInfo?.state;
+    const line = s === 'paid' ? "This session has already been paid. Nothing more is owed."
+      : s === 'cancelled' ? "This session was cancelled, so there's nothing to pay."
+      : s === 'comped' || s === 'nothing-owed' ? "There's nothing owed on this session."
+      : "This payment link has expired or isn't valid any more.";
+    body = `<div class="note" style="line-height:1.7;">${line}</div>
+            <div class="note" style="margin-top:12px;">If that doesn't sound right, just reply to the email and Heshy will sort it out.</div>`;
+  } else {
+    body = `
+      <div class="pay-amount-block">
+        <div class="pay-amount-label">Amount due</div>
+        <div class="pay-amount">${amt}</div>
+        <div class="note" style="margin-top:6px;">${payInfo.minutes} minutes${payInfo.date?' &middot; '+fmtDate(payInfo.date):''}${payInfo.type==='virtual'?' &middot; Video call':(payInfo.type?' &middot; In person':'')}</div>
+      </div>
+      <label style="margin-top:20px;display:block;">Card details</label>
+      <div id="pay-card" class="card-box"></div>
+      <div id="pay-card-error" class="card-error"></div>
+      ${payError?`<div class="card-error">${esc(payError)}</div>`:''}
+      <button class="primary" id="pay-submit" style="margin-top:16px;width:100%;" ${payBusy?'disabled':''}>${payBusy?'Paying…':'Pay '+amt}</button>
+      <div class="note" style="margin-top:12px;text-align:center;">Your bank may ask you to confirm this payment. Payments are handled by Stripe; the card details never reach this site.</div>`;
+  }
+  return `
+    <div class="topbar"><div class="brand">Clarity Session w/ Heshy</div></div>
+    <h1>${payStage==='done' ? 'Thank you' : 'Pay for your session'}</h1>
+    ${payInfo && payInfo.name && payStage==='ready' ? `<div class="note" style="margin-bottom:18px;">Hi ${esc(payInfo.name)} — here's what's outstanding.</div>` : ''}
+    ${body}
+  `;
+}
+
 function openStrengthsFromLink(){
   try{
     const t = new URLSearchParams(window.location.search).get('strengths');
@@ -4100,9 +4235,11 @@ function openPortalFromGoogle(){
   }catch(e){ return false; }
 }
 
-if(!openStrengthsFromLink()){
-  if(openPortalFromGoogle()){ /* resuming that session */ }
-  else { openPasswordSetupFromLink().then(handled => { if(!handled) loadState(); }); }
+if(!openPayLink()){
+  if(!openStrengthsFromLink()){
+    if(openPortalFromGoogle()){ /* resuming that session */ }
+    else { openPasswordSetupFromLink().then(handled => { if(!handled) loadState(); }); }
+  }
 }
 </script>
 </body>

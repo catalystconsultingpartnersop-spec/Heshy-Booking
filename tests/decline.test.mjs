@@ -109,8 +109,10 @@ check('...and the session it was for', /60-minute session on 2026-11-17/.test(dn
 check('...greets them by first name', /Hi Yoily/.test(dnhMail.html));
 check('...never shows the internal decline code', !/do_not_honor/.test(dnhMail.html));
 // A failed payment is embarrassing to receive. The wording has to take the blame off them.
-check('...says a bank decline is common, not their fault', /common/i.test(dnhMail.html) && /not that anything is wrong/i.test(dnhMail.html));
+check('...says a bank decline is common, not their fault',
+      /common/i.test(dnhMail.html) && /rather than anything being wrong with your account/i.test(dnhMail.html));
 check('...tells them to call the number on the card', /number on the back/i.test(dnhMail.html));
+check('...and does not point "below" at something that is not there', !/different card below/.test(dnhMail.html) || /Update your card/.test(dnhMail.html));
 check('...and gives one clear action', /Update your card/.test(dnhMail.html));
 check('...linking to the portal', /#portal/.test(dnhMail.html));
 check('...reassures them nothing was taken', /Nothing has been taken/i.test(dnhMail.html));

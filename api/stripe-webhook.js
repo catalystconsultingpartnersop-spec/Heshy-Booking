@@ -30,9 +30,15 @@ export async function applyEvent(event) {
   const intentId = obj.payment_intent || obj.id;
   if (!intentId) return 'no payment intent on the event';
 
+  // A pay-link payment has no intent id on the booking yet — the booking only learns it once the
+  // payment succeeds — so the intent's own metadata is the fallback. Without this, a client who
+  // paid and then closed the tab mid-3-D-Secure would never be recorded as having paid.
+  const metaBookingId = obj.metadata?.bookingId || event.data?.object?.metadata?.bookingId || null;
+
   let note = 'no matching booking';
   await mutate(data => {
-    const booking = (data.bookings || []).find(b => b.stripePaymentIntentId === intentId);
+    const booking = (data.bookings || []).find(b => b.stripePaymentIntentId === intentId)
+      || (metaBookingId ? (data.bookings || []).find(b => b.id === metaBookingId) : null);
     if (!booking) return SKIP_WRITE;
 
     if (event.type === 'charge.refunded') {
@@ -54,6 +60,17 @@ export async function applyEvent(event) {
     } else if (event.type === 'charge.dispute.closed') {
       booking.disputeOutcome = obj.status || 'closed';
       note = `dispute ${obj.status || 'closed'}`;
+    } else if (event.type === 'payment_intent.succeeded') {
+      // Backstop for pay links: the page confirms the payment itself, but a client who closes
+      // the tab during the bank's 3-D Secure step never gets to. Stripe tells us either way.
+      if (booking.status === 'charged') { note = 'already recorded'; return SKIP_WRITE; }
+      booking.status = 'charged';
+      booking.amount = (obj.amount_received ?? obj.amount ?? 0) / 100;
+      booking.paidByClient = true;
+      booking.paidAt = Date.now();
+      booking.stripePaymentIntentId = intentId;
+      delete booking.lastDeclineCode;
+      note = `payment recorded ($${booking.amount})`;
     } else if (event.type === 'payment_intent.payment_failed') {
       booking.lastPaymentError = (obj.last_payment_error?.message || 'The payment failed.').slice(0, 300);
       booking.lastPaymentErrorAt = Date.now();

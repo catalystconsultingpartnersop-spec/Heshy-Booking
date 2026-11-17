@@ -122,8 +122,12 @@ check('...opens the assessment with it', /openStrengths\('client', t\)/.test(htm
 check('...and clears it from the address bar', /history\.replaceState/.test(html));
 // It has to run at boot. An earlier version of this landed inside the Manage search box's
 // keystroke handler, where it never fired on page load.
+// The boot chain starts at column 0 — inside no function and no handler — and the strengths
+// check is reached from it. The pay-link check now sits in front of it, which is still boot
+// code; what this guards against is the whole thing drifting back inside something else.
+const bootBlock = (html.match(/\nif\(!openPayLink\(\)\)\{[\s\S]{0,400}/) || [''])[0];
 check('the link check runs when the app starts, not inside another handler',
-      /\nif\(!openStrengthsFromLink\(\)\)\{/.test(html));
+      bootBlock.length > 0 && /openStrengthsFromLink\(\)/.test(bootBlock), bootBlock.slice(0, 200));
 check('...and the normal page still loads when no link was followed',
       /openPasswordSetupFromLink\(\)\.then\(handled => \{ if\(!handled\) loadState\(\); \}\)/.test(html));
 check('...and is a top-level function', /\nfunction openStrengthsFromLink\(\)\{/.test(html));

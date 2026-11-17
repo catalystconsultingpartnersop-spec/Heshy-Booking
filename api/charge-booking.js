@@ -5,6 +5,7 @@ import { sendEmail, receiptEmail, chargeDeclinedEmail } from './_lib/email.js';
 import { logError } from './_lib/errorlog.js';
 import { stripe, defaultCardFor } from './_lib/stripecustomer.js';
 import { computeCharge } from './_lib/billing.js';
+import { issuePayToken } from './_lib/paylink.js';
 
 // Turns a Stripe card error into something Heshy can act on. Each case says what happened and
 // what to do about it, because "declined" alone leaves him with no next step.
@@ -97,10 +98,17 @@ async function notifyClientOfDecline(bookingId, d, err) {
     if (!first) return 'already-sent';
 
     const amountCents = err?.payment_intent?.amount ?? err?.raw?.payment_intent?.amount ?? null;
+    // A link the client can pay through themselves. For the declines this app actually sees —
+    // a bank refusing a charge that arrives with no cardholder attached — this is the thing
+    // that clears it, so the email leads with it rather than only offering a card swap.
+    const payToken = await issuePayToken(bookingId).catch(() => null);
+    const baseUrl = process.env.SITE_URL || 'https://heshy-booking.vercel.app';
+    const payUrl = payToken ? `${baseUrl}/#pay/${payToken}` : '';
     const mail = chargeDeclinedEmail(
       booking,
       { ...d, amount: amountCents != null ? amountCents / 100 : (booking.amount || 0) },
-      data?.settings || {}
+      data?.settings || {},
+      payUrl
     );
     const sent = await sendEmail({ to: booking.clientEmail, subject: mail.subject, html: mail.html });
     if (!sent) {
