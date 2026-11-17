@@ -4241,6 +4241,13 @@ if(!openPayLink()){
     else { openPasswordSetupFromLink().then(handled => { if(!handled) loadState(); }); }
   }
 }
+
+// Clicking the link in an email loads the page fresh, so the check above catches it. Arriving
+// at #pay/... without a reload — pasting the link into a tab already on the site, or using the
+// back button — changes only the hash, and nothing would happen at all.
+window.addEventListener('hashchange', () => {
+  if(view !== 'pay' && /^#pay\/[a-f0-9]{24,}$/i.test(window.location.hash || '')) openPayLink();
+});
 </script>
 </body>
 </html>

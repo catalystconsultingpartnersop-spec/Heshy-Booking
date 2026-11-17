@@ -213,6 +213,10 @@ check('the page answers a pay link', /openPayLink/.test(html));
 check('...only for a properly-shaped token', /\^#pay\\\/\(\[a-f0-9\]\{24,\}\)\$/.test(html));
 check('...before any other route, so a pay link always lands on the pay page', html.indexOf('if(!openPayLink())') < html.indexOf('openStrengthsFromLink()){\n    if(openPortalFromGoogle'));
 check('the amount is fetched, never read from the link', /action:'pay-info', token: payToken/.test(html));
+// Clicking from an email loads the page fresh. Pasting the link into a tab already on the site
+// changes only the hash, which reloads nothing — so that has to be listened for too.
+check('a pay link arriving without a reload still opens the page', /addEventListener\('hashchange'/.test(html));
+check('...and does not re-enter the page it is already on', /view !== 'pay' &&/.test(html));
 check('the amount is the biggest thing on the page', /\.pay-amount\{font-size:38px/.test(html));
 check('the button says what will be charged', /'Pay '\+amt/.test(html));
 check('the bank\'s confirmation step is handled', /stripe\.confirmCardPayment/.test(html));
