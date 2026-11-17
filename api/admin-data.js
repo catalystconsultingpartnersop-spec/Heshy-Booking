@@ -12,6 +12,7 @@ import { stripe } from './_lib/stripecustomer.js';
 import { EVENTS as STRIPE_EVENTS } from './_lib/stripeevents.js';
 import { probeGoogleSignIn } from './_lib/googlecheck.js';
 import { callerIp, checkDataUrl, MAX_PDF_BYTES, MAX_AUDIO_BYTES } from './_lib/limits.js';
+import { resolveAddress, syncCalendarMove } from './_lib/schedulehelpers.js';
 
 const ADMIN_SESSION_SECONDS = 60 * 60 * 12; // 12 hours
 
@@ -27,35 +28,8 @@ function defaultState() {
   };
 }
 
-function dowOf(dateStr) { const [y, mo, d] = dateStr.split('-').map(Number); return new Date(Date.UTC(y, mo - 1, d)).getUTCDay(); }
-
-// Resolves which address applies for a given date, for in-person only — matches the same logic
-// used at original booking time in create-booking.js, so a reschedule to a different day (or a
-// different format) correctly picks up that day's own location.
-function resolveAddress(data, date) {
-  const override = (data.overrides || []).find(o => o.date === date && o.type === 'in-person' && o.address);
-  if (override) return override.address;
-  const weekday = dowOf(date);
-  const rule = (data.availability?.['in-person'] || []).find(r => r.days.includes(weekday) && r.address);
-  if (rule) return rule.address;
-  return data.settings?.location || '';
-}
-
-// Compute date/time after adding minutes, using UTC arithmetic purely as scratch
-// math (never converted to a real timezone) so it's deterministic regardless of
-// what timezone the server process happens to run in.
-function addMinutes(dateStr, timeStr, minutesToAdd) {
-  const [y, mo, d] = dateStr.split('-').map(Number);
-  const [h, mi] = timeStr.split(':').map(Number);
-  const dt = new Date(Date.UTC(y, mo - 1, d, h, mi));
-  dt.setUTCMinutes(dt.getUTCMinutes() + minutesToAdd);
-  const pad = n => String(n).padStart(2, '0');
-  return {
-    date: dt.getUTCFullYear() + '-' + pad(dt.getUTCMonth() + 1) + '-' + pad(dt.getUTCDate()),
-    time: pad(dt.getUTCHours()) + ':' + pad(dt.getUTCMinutes())
-  };
-}
-const APP_TIMEZONE = 'America/New_York';
+// resolveAddress, addMinutes and the calendar move now live in _lib/schedulehelpers.js, so the
+// client portal can run exactly the same logic when a client moves their own session.
 
 async function getGoogleAccessToken() {
   const refreshToken = await kv.get('google-refresh-token');
@@ -547,67 +521,15 @@ async function handleRescheduleBooking(req, res) {
   const previous = { date: booking.date, time: booking.time, type: booking.type };
   const targetLocation = targetType === 'in-person' ? resolveAddress(data, targetDate) : '';
 
-  // Keep Google Calendar in step, and report honestly when we can't.
-  let calendarWarning = null;
-  let newCalendarEventId = booking.calendarEventId || null;
-  let newMeetLink = booking.meetLink || '';
-  try {
-    const accessToken = await getGoogleAccessToken();
-    if (!accessToken) {
-      calendarWarning = 'Session moved, but Google Calendar is not connected — your calendar still shows the old time.';
-    } else {
-      const endAt = addMinutes(targetDate, targetTime, targetDuration);
-      const start = { dateTime: targetDate + 'T' + targetTime + ':00', timeZone: APP_TIMEZONE };
-      const end = { dateTime: endAt.date + 'T' + endAt.time + ':00', timeZone: APP_TIMEZONE };
-
-      let patched = false;
-      if (booking.calendarEventId) {
-        const r = await fetch(`https://www.googleapis.com/calendar/v3/calendars/primary/events/${booking.calendarEventId}?sendUpdates=all`, {
-          method: 'PATCH',
-          headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${accessToken}` },
-          body: JSON.stringify({ start, end, location: targetLocation })
-        });
-        patched = r.ok;
-        if (!r.ok && r.status !== 404 && r.status !== 410) {
-          const body = await r.text().catch(() => '');
-          console.error('Calendar patch failed:', r.status, body.slice(0, 300));
-          calendarWarning = 'Session moved, but updating the Google Calendar event failed — please check your calendar.';
-        }
-      }
-
-      // No event id, or the event was deleted straight out of Google Calendar (404/410).
-      // Previously the failed patch was swallowed and nothing was created, so the session
-      // simply vanished from the calendar while the app still showed it.
-      if (!patched) {
-        const evRes = await fetch('https://www.googleapis.com/calendar/v3/calendars/primary/events?conferenceDataVersion=1&sendUpdates=all', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${accessToken}` },
-          body: JSON.stringify({
-            summary: 'Clarity session — ' + (booking.clientName || ''),
-            location: targetLocation,
-            start, end,
-            attendees: booking.clientEmail ? [{ email: booking.clientEmail }] : [],
-            conferenceData: { createRequest: { requestId: booking.id + '-' + Date.now(), conferenceSolutionKey: { type: 'hangoutsMeet' } } }
-          })
-        });
-        if (evRes.ok) {
-          const ev = await evRes.json();
-          if (ev.id) newCalendarEventId = ev.id;
-          if (ev.hangoutLink) newMeetLink = ev.hangoutLink;
-          calendarWarning = booking.calendarEventId
-            ? 'The old calendar event was gone, so a new one was created at the new time.'
-            : calendarWarning;
-        } else {
-          const body = await evRes.text().catch(() => '');
-          console.error('Calendar create-on-reschedule failed:', evRes.status, body.slice(0, 300));
-          calendarWarning = 'Session moved, but it could not be added to your Google Calendar — please add it manually.';
-        }
-      }
-    }
-  } catch (e) {
-    console.error('Calendar sync on reschedule failed:', e);
-    calendarWarning = 'Session moved, but syncing Google Calendar failed — please check your calendar.';
-  }
+  // Keep Google Calendar in step, and report honestly when we can't. Shared with the client
+  // portal's own move, so the two can never drift apart.
+  const moved = await syncCalendarMove({
+    accessToken: await getGoogleAccessToken().catch(() => null),
+    booking, date: targetDate, time: targetTime, durationMin: targetDuration, location: targetLocation
+  });
+  const calendarWarning = moved.warning;
+  const newCalendarEventId = moved.calendarEventId;
+  const newMeetLink = moved.meetLink;
 
   booking.date = targetDate;
   booking.time = targetTime;

@@ -4,7 +4,9 @@ import { hashPassword, verifyPassword, passwordProblem } from './_lib/password.j
 import { randomToken, redeemScopedToken, issueScopedToken } from './_lib/auth.js';
 import { limited } from './_lib/limits.js';
 import { score, validAnswers, profileOf } from './_lib/assessment.js';
-import { sendEmail, cancellationEmail, clientCancelledAlertEmail, portalCodeEmail, passwordSetupEmail } from './_lib/email.js';
+import { sendEmail, cancellationEmail, clientCancelledAlertEmail, rescheduledEmail, clientRescheduledAlertEmail, portalCodeEmail, passwordSetupEmail } from './_lib/email.js';
+import { checkSlot } from './_lib/availability.js';
+import { resolveAddress, syncCalendarMove } from './_lib/schedulehelpers.js';
 import { mutate, SKIP_WRITE } from './_lib/store.js';
 import { logError } from './_lib/errorlog.js';
 import { stripe, resolveCustomer, setDefaultCard } from './_lib/stripecustomer.js';
@@ -63,7 +65,10 @@ function clientSummary(client, bookings, settings) {
     .filter(b => !b.cancelled && b.status !== 'charged' && !hasPassed(b))
     .map(b => ({
       id: b.id, date: b.date, time: b.time, type: b.type,
-      cancellable: etToUtc(b.date, b.time) >= cutoff
+      durationMin: b.durationMin || 60,
+      // Moving and cancelling sit behind the same notice period, so one flag answers both.
+      cancellable: etToUtc(b.date, b.time) >= cutoff,
+      movable: etToUtc(b.date, b.time) >= cutoff
     }));
   // History: anything charged (even if cancelled afterwards — they were billed, so they should
   // always be able to see it), plus any session whose time has simply passed.
@@ -460,6 +465,115 @@ async function handleCancelBooking(req, res) {
   res.status(200).json({ ok: true });
 }
 
+// Letting a client move their own session, rather than cancelling and booking again. The
+// cancel-and-rebook route lost the slot the moment it was released, so a client who wanted
+// Thursday instead of Wednesday could end up with neither.
+//
+// The rules are deliberately the same ones Heshy's own availability already enforces — this
+// adds no new way to get a time that wasn't being offered anyway.
+async function handleRescheduleBooking(req, res) {
+  const { token, bookingId, newDate, newTime } = req.body || {};
+  if (!token || !bookingId) return res.status(400).json({ error: 'Missing token or bookingId.' });
+  if (!newDate || !newTime) return res.status(400).json({ error: 'Please pick a new date and time.' });
+
+  const clientId = await kv.get('portal-session:' + token);
+  if (!clientId) return res.status(401).json({ error: 'Your session has expired — please log in again.' });
+
+  // A move rewrites a calendar event and sends two emails, so it is worth a ceiling even for a
+  // signed-in client.
+  if (await limited(req, res, 'portal-reschedule', 12, 3600)) return;
+
+  const data = await kv.get('app-data');
+  if (!data) return res.status(404).json({ error: 'No data found.' });
+  const booking = (data.bookings || []).find(b => b.id === bookingId);
+  if (!booking) return res.status(404).json({ error: 'Session not found.' });
+  if (booking.clientId !== clientId) return res.status(403).json({ error: 'This session does not belong to you.' });
+  if (booking.cancelled) return res.status(400).json({ error: 'This session is cancelled, so there is nothing to move.' });
+  if (booking.status === 'charged') return res.status(400).json({ error: 'This session has already been charged — please contact Heshy directly.' });
+
+  // Same notice period as cancelling, applied to the session as it stands now: a client can't
+  // dodge the cutoff by moving a session an hour before it instead of cancelling it.
+  const cutoffHours = (data.settings?.clientCancelCutoffHours != null) ? data.settings.clientCancelCutoffHours : 3;
+  const cutoff = new Date(Date.now() + cutoffHours * 60 * 60 * 1000);
+  if (etToUtc(booking.date, booking.time) < cutoff) {
+    return res.status(400).json({ error: `Sessions can only be moved online at least ${cutoffHours} hours in advance. Please contact Heshy directly for shorter notice.` });
+  }
+
+  if (newDate === booking.date && newTime === booking.time) {
+    return res.status(400).json({ error: 'That is the time it is already booked for.' });
+  }
+
+  // Length and format stay as they were — this moves a session, it doesn't rebook it. The new
+  // time goes through exactly the check a fresh booking goes through, lead time included, since
+  // this is a client acting and not an admin override.
+  const durationMin = booking.durationMin || 60;
+  const type = booking.type;
+  const verdict = checkSlot(data, {
+    date: newDate, time: newTime, durationMin, type,
+    excludeBookingId: booking.id, requireLeadTime: true
+  });
+  if (!verdict.ok) return res.status(400).json({ error: verdict.reason });
+
+  const previous = { date: booking.date, time: booking.time, type: booking.type };
+  const newLocation = type === 'in-person' ? resolveAddress(data, newDate) : '';
+
+  // Commit the move under the lock, re-running the availability check against the freshest
+  // record. Checking only above would let two clients moving at the same moment both pass and
+  // land on the same slot.
+  let conflict = null;
+  await mutate(fresh => {
+    const b = (fresh.bookings || []).find(x => x.id === booking.id);
+    if (!b) { conflict = 'Session not found.'; return SKIP_WRITE; }
+    if (b.cancelled || b.status === 'charged') { conflict = 'This session can no longer be moved online.'; return SKIP_WRITE; }
+    const recheck = checkSlot(fresh, {
+      date: newDate, time: newTime, durationMin, type,
+      excludeBookingId: b.id, requireLeadTime: true
+    });
+    if (!recheck.ok) { conflict = recheck.reason; return SKIP_WRITE; }
+    b.date = newDate;
+    b.time = newTime;
+    b.location = newLocation;
+    b.rescheduledAt = Date.now();
+    b.rescheduledBy = 'client';
+    // The pending reminder describes the old time, so let the daily job send a fresh one.
+    delete b.reminderSentAt;
+    delete b.reminderSent;
+  });
+  if (conflict) return res.status(400).json({ error: conflict });
+
+  booking.date = newDate;
+  booking.time = newTime;
+  booking.location = newLocation;
+
+  // Calendar and emails are best-effort: the move itself is already saved, so a failure here is
+  // reported rather than pretended away.
+  const moved = await syncCalendarMove({
+    accessToken: await getGoogleAccessToken().catch(() => null),
+    booking, date: newDate, time: newTime, durationMin, location: newLocation
+  });
+  if (moved.calendarEventId !== booking.calendarEventId || moved.meetLink !== booking.meetLink) {
+    booking.calendarEventId = moved.calendarEventId;
+    booking.meetLink = moved.meetLink;
+    await mutate(fresh => {
+      const b = (fresh.bookings || []).find(x => x.id === booking.id);
+      if (!b) return SKIP_WRITE;
+      b.calendarEventId = moved.calendarEventId;
+      b.meetLink = moved.meetLink;
+    });
+  }
+
+  try {
+    const mail = rescheduledEmail(booking, previous, data.settings || {}, { by: 'client' });
+    if (booking.clientEmail) await sendEmail({ to: booking.clientEmail, subject: mail.subject, html: mail.html });
+    const alert = clientRescheduledAlertEmail(booking, previous);
+    await sendEmail({ to: 'heshy@catalystconsultingnyc.com', subject: alert.subject, html: alert.html });
+  } catch (e) {
+    await logError('portal-reschedule-email', e, { bookingId: booking.id });
+  }
+
+  res.status(200).json({ ok: true, date: newDate, time: newTime, warning: moved.warning || undefined });
+}
+
 export default async function handler(req, res) {
   try {
     // Backward-compatible plain GET-by-email is intentionally removed — every path now requires
@@ -482,6 +596,7 @@ export default async function handler(req, res) {
     if (req.method === 'POST' && req.body?.action === 'start-card-update') return handleStartCardUpdate(req, res);
     if (req.method === 'POST' && req.body?.action === 'confirm-card-update') return handleConfirmCardUpdate(req, res);
     if (req.method === 'POST' && req.body?.action === 'cancel-booking') return handleCancelBooking(req, res);
+    if (req.method === 'POST' && req.body?.action === 'reschedule-booking') return handleRescheduleBooking(req, res);
     res.status(400).json({ error: 'Unknown or missing action.' });
   } catch (err) {
     console.error('Server error:', err);

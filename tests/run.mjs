@@ -13,7 +13,7 @@ const here = dirname(fileURLToPath(import.meta.url));
 const loader = join(here, 'register-loader.mjs');
 
 const SUITES = ['time.test.mjs', 'booking.test.mjs', 'browser.test.mjs', 'privacy.test.mjs', 'portal.test.mjs', 'errorlog.test.mjs', 'agent.test.mjs',
-               'billing.test.mjs', 'billing-parity.test.mjs', 'stripecustomer.test.mjs', 'coupon.test.mjs', 'assessment.test.mjs', 'assessment-copy.test.mjs', 'strengths-save.test.mjs', 'strengths-invite.test.mjs', 'store.test.mjs', 'schema.test.mjs', 'backup.test.mjs', 'limits.test.mjs', 'privacy-notice.test.mjs', 'client-details.test.mjs', 'hardening.test.mjs', 'cancellation.test.mjs', 'files-webhook.test.mjs', 'portal-login.test.mjs', 'password.test.mjs', 'portal-auth.test.mjs'];
+               'billing.test.mjs', 'billing-parity.test.mjs', 'stripecustomer.test.mjs', 'coupon.test.mjs', 'assessment.test.mjs', 'assessment-copy.test.mjs', 'strengths-save.test.mjs', 'strengths-invite.test.mjs', 'store.test.mjs', 'schema.test.mjs', 'backup.test.mjs', 'limits.test.mjs', 'privacy-notice.test.mjs', 'client-details.test.mjs', 'hardening.test.mjs', 'cancellation.test.mjs', 'files-webhook.test.mjs', 'portal-login.test.mjs', 'password.test.mjs', 'portal-auth.test.mjs', 'schedule-edit.test.mjs', 'reschedule.test.mjs'];
 // The app is Eastern-time only, so every suite must give identical results no matter where
 // the server or the viewer happens to be.
 const ZONES = ['America/New_York', 'UTC', 'America/Chicago', 'America/Los_Angeles',

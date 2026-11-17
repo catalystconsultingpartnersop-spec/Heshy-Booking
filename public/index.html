@@ -378,6 +378,27 @@
   .portal-session .summary{font-size:13.5px;line-height:1.6;margin-top:8px;color:var(--ink);}
   .portal-summary-box{margin-top:12px;padding:14px 16px;background:#FAF9F6;border-left:3px solid #C9A961;border-radius:4px;font-size:13.5px;line-height:1.65;color:var(--ink);}
   .portal-summary-label{font-size:10.5px;font-weight:600;letter-spacing:0.06em;text-transform:uppercase;color:#8A6D2F;margin-bottom:6px;}
+
+  /* Moving a session: a compact day strip and a time grid, in the same shapes the booking page
+     uses, so it reads as the familiar picker rather than a second, different one. */
+  .portal-move{margin-top:10px;padding:14px;border:1px solid var(--line);border-radius:8px;background:var(--paper);}
+  .portal-move-days{display:flex;gap:6px;overflow-x:auto;padding-bottom:6px;-webkit-overflow-scrolling:touch;}
+  .portal-move-day{
+    flex:0 0 auto;font:inherit;font-size:12.5px;font-weight:500;white-space:nowrap;
+    padding:8px 12px;border:1px solid var(--line-strong);border-radius:6px;
+    background:var(--paper);color:var(--ink);cursor:pointer;
+  }
+  .portal-move-day:hover{border-color:var(--ink);}
+  .portal-move-day.selected{background:var(--ink);border-color:var(--ink);color:#fff;}
+  .portal-move-times{display:grid;grid-template-columns:repeat(auto-fill,minmax(88px,1fr));gap:6px;margin-top:10px;}
+  .portal-move-time{
+    font:inherit;font-size:13.5px;font-weight:500;padding:10px 6px;text-align:center;
+    border:1px solid var(--line-strong);border-radius:6px;background:var(--paper);color:var(--ink);cursor:pointer;
+  }
+  .portal-move-time:hover{border-color:var(--ink);}
+  .portal-move-time.selected{background:var(--ink);border-color:var(--ink);color:#fff;}
+  .portal-move-time .tz{font-size:9.5px;letter-spacing:.06em;color:var(--muted);margin-left:3px;font-weight:500;}
+  .portal-move-time.selected .tz{color:inherit;opacity:.65;}
 </style>
 </head>
 <body>
@@ -564,6 +585,98 @@ async function submitPortalCancel(bookingId){
     portalCancelBusy = false; render();
   }
 }
+
+// --- moving a session ---------------------------------------------------------------------------
+// Cancelling and booking again meant giving up the existing slot before knowing another one was
+// free, so a client who wanted a different day could end up with no session at all.
+let portalMovingId = null;        // the booking being moved, or null
+let portalMoveDay = null;         // the date chosen in the picker
+let portalMoveTime = null;        // the start time chosen in the picker
+let portalMoveLoading = false;    // fetching open hours for the first time
+let portalMoveBusy = false;       // the move itself is in flight
+let portalMoveError = '';
+let portalMoveNotice = '';
+let portalSlotsLoaded = false;    // the portal doesn't load open hours until it needs them
+
+async function startPortalMove(bookingId){
+  portalMovingId = bookingId;
+  portalMoveDay = null; portalMoveTime = null; portalMoveError = ''; portalMoveNotice = '';
+  portalCancellingId = null;
+  if(!portalSlotsLoaded){
+    portalMoveLoading = true; render();
+    try{
+      await loadPublicState();
+      portalSlotsLoaded = true;
+    }catch(e){
+      portalMoveError = "Couldn't load the open times. Please try again.";
+    }
+    portalMoveLoading = false;
+  }
+  render();
+}
+
+function cancelPortalMove(){
+  portalMovingId = null; portalMoveDay = null; portalMoveTime = null;
+  portalMoveError = ''; render();
+}
+
+// The dates with at least one free start time for this session's own format and length. Same
+// computation the booking page runs, so the portal can never offer a time booking wouldn't.
+//
+// The session being moved has to stop blocking itself first. It occupies its slot twice — in the
+// booking list and as its own Google Calendar event — and leaving either in place would hide
+// every time overlapping the client's current one, which is exactly where they often want to go.
+// The server makes the same allowance, via excludeBookingId.
+function portalMoveDates(booking){
+  const dur = booking.durationMin || 60;
+  const ownStart = etToUtcC(booking.date, booking.time).getTime();
+  const savedBookings = state.bookings;
+  const savedBusy = calendarBusy;
+  state.bookings = (savedBookings||[]).filter(b => !(
+    b.date === booking.date && b.time === booking.time && (b.durationMin||60) === dur && b.type === booking.type
+  ));
+  calendarBusy = (savedBusy||[]).filter(b => new Date(b.start).getTime() !== ownStart);
+
+  const out = [];
+  try{
+    const [cy, cmo, cd] = etTodayC().split('-').map(Number);
+    for(let i=0;i<56;i++){
+      const d = new Date(cy, cmo - 1, cd); d.setDate(d.getDate()+i);
+      const ds = dateStr(d);
+      if(jewishHolidayDates.has(ds)) continue;
+      const times = computeStartTimes(ds, booking.type, dur)
+        // No point offering the time it is already booked for; the server refuses it anyway.
+        .filter(t => !(ds === booking.date && t === booking.time));
+      if(times.length>0) out.push({ date: ds, times });
+    }
+  } finally {
+    state.bookings = savedBookings;
+    calendarBusy = savedBusy;
+  }
+  return out;
+}
+
+async function submitPortalMove(){
+  if(!portalMovingId || !portalMoveDay || !portalMoveTime) return;
+  portalMoveBusy = true; portalMoveError = ''; render();
+  try{
+    const r = await fetch('/api/portal-lookup', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ action: 'reschedule-booking', token: portalToken, bookingId: portalMovingId, newDate: portalMoveDay, newTime: portalMoveTime })
+    });
+    const data = await r.json();
+    if(data.error){ portalMoveError = data.error; portalMoveBusy = false; render(); return; }
+    portalMovingId = null; portalMoveDay = null; portalMoveTime = null; portalMoveBusy = false;
+    portalMoveNotice = 'Your session has moved. A confirmation is on its way.';
+    // The open-hours snapshot is now out of date — this booking just changed slot.
+    portalSlotsLoaded = false;
+    await resumePortalSession();
+  }catch(e){
+    portalMoveError = 'Something went wrong. Please try again.';
+    portalMoveBusy = false; render();
+  }
+}
 let expandedClientId = null;
 let errorEntries = null; // null = not loaded yet
 let agentEntries = null; // null = not loaded yet
@@ -590,7 +703,13 @@ let overrideAddress = '';
 let dashboardCalMonth = (()=>{ const d = new Date(); d.setDate(1); d.setHours(0,0,0,0); return d; })();
 let selectedDashboardDate = null;
 let dashboardStatFilter = null;
-function selectAdminType(t){ adminType = t; selectedScheduleDate = null; render(); }
+function selectAdminType(t){
+  adminType = t;
+  selectedScheduleDate = null;
+  // A pattern being edited belongs to one list. Switching lists has to abandon that edit, or
+  // the form would save Online hours onto an In-person rule.
+  if(editingRuleId) cancelEditRule(); else render();
+}
 
 // Ids for rules, one-off dates and coupons. Was an 8-character Math.random() value, which can
 // collide; two records sharing an id looks exactly like one of them having vanished.
@@ -690,17 +809,22 @@ async function loadState(){
       render();
       return;
     }
-    const r = await fetch('/api/public-state');
-    const data = await r.json();
-    state.bookings = data.bookings || [];
-    state.overrides = data.overrides || [];
-    state.blockedDates = data.blockedDates || [];
-    state.settings = data.settings || { meetLink:'', location:'', intakeQuestions:[], durationOptions:[60], hourlyRate:500 };
-    state.availability = data.availability || { virtual: [], 'in-person': [] };
-    await loadCalendarBusy();
-    await loadJewishHolidays();
+    await loadPublicState();
   }catch(e){ console.error('load failed', e); }
   render();
+}
+// The open-hours picture the booking page works from. Split out of loadState because the portal
+// needs exactly the same thing when a client moves a session, and the portal never loaded it.
+async function loadPublicState(){
+  const r = await fetch('/api/public-state');
+  const data = await r.json();
+  state.bookings = data.bookings || [];
+  state.overrides = data.overrides || [];
+  state.blockedDates = data.blockedDates || [];
+  state.settings = data.settings || { meetLink:'', location:'', intakeQuestions:[], durationOptions:[60], hourlyRate:500 };
+  state.availability = data.availability || { virtual: [], 'in-person': [] };
+  await loadCalendarBusy();
+  await loadJewishHolidays();
 }
 async function loadAdminState(){
   try{
@@ -1089,6 +1213,7 @@ async function confirmBooking(){
 }
 
 let newRule = { days: [], start:'', end:'', generalArea:'', address:'' };
+let editingRuleId = null;   // when set, the form below edits that rule instead of adding one
 function toggleRuleDay(d){
   const i = newRule.days.indexOf(d);
   if(i>-1) newRule.days.splice(i,1); else newRule.days.push(d);
@@ -1096,11 +1221,45 @@ function toggleRuleDay(d){
 }
 async function addRule(){
   if(newRule.days.length===0 || !newRule.start || !newRule.end) return;
-  const rule = { id: uid(), days: newRule.days.slice(), start: newRule.start, end: newRule.end };
-  if(adminType==='in-person'){ rule.generalArea = newRule.generalArea.trim(); rule.address = newRule.address.trim(); }
-  state.availability[adminType].push(rule);
+  if(newRule.start >= newRule.end){ alert('That pattern ends before it starts.'); return; }
+
+  if(editingRuleId){
+    // Editing in place keeps the rule's id, so anything already pointing at it stays pointing
+    // at it. Before, the only way to change a pattern was to delete it and build a new one.
+    const rule = (state.availability[adminType]||[]).find(r=>r.id===editingRuleId);
+    if(rule){
+      rule.days = newRule.days.slice();
+      rule.start = newRule.start;
+      rule.end = newRule.end;
+      if(adminType==='in-person'){ rule.generalArea = newRule.generalArea.trim(); rule.address = newRule.address.trim(); }
+    }
+    editingRuleId = null;
+  } else {
+    const rule = { id: uid(), days: newRule.days.slice(), start: newRule.start, end: newRule.end };
+    if(adminType==='in-person'){ rule.generalArea = newRule.generalArea.trim(); rule.address = newRule.address.trim(); }
+    state.availability[adminType].push(rule);
+  }
   newRule = { days: [], start:'', end:'', generalArea:'', address:'' };
   await saveState(); render();
+}
+
+function startEditRule(id){
+  if(editingRuleId === id){ cancelEditRule(); return; }
+  const rule = (state.availability[adminType]||[]).find(r=>r.id===id);
+  if(!rule) return;
+  editingRuleId = id;
+  newRule = {
+    days: (rule.days||[]).slice(), start: rule.start||'', end: rule.end||'',
+    generalArea: rule.generalArea||'', address: rule.address||''
+  };
+  showScheduleEditor = true;
+  render();
+}
+
+function cancelEditRule(){
+  editingRuleId = null;
+  newRule = { days: [], start:'', end:'', generalArea:'', address:'' };
+  render();
 }
 async function removeRule(id){
   state.availability[adminType] = state.availability[adminType].filter(r=>r.id!==id);
@@ -1701,6 +1860,8 @@ function portalLogout(){
   portalToken = ''; portalClient = null; portalEmail=''; portalPhone='';
   portalCodeSent = false; portalCode=''; portalBusy=false;
   portalCancellingId = null; portalCancelError = ''; portalCancelBusy = false;
+  portalMovingId = null; portalMoveDay = null; portalMoveTime = null;
+  portalMoveError = ''; portalMoveNotice = ''; portalMoveBusy = false; portalSlotsLoaded = false;
   try{ localStorage.removeItem('heshyPortalToken'); }catch(e){}
   render();
 }
@@ -1714,6 +1875,38 @@ function goToPortal(){
   view = 'portal'; history.replaceState(null, '', '#portal');
   render();
   if(portalToken) resumePortalSession();
+}
+
+// The inline "move this session" picker. Deliberately the same shapes as the booking page's own
+// day and time cells, so a client who booked once already recognises it.
+function portalMovePickerHtml(b){
+  if(portalMoveLoading) return `<div class="note" style="margin-top:8px;">Finding open times…</div>`;
+  const days = portalMoveDates(b);
+  if(days.length === 0){
+    return `
+      <div class="note" style="margin-top:8px;">There are no other open times for a ${b.durationMin||60}-minute ${b.type==='virtual'?'video':'in-person'} session right now. Reply to your confirmation email and Heshy will sort it out.</div>
+      <button class="ghost small" data-abort-move="1" style="margin-top:8px;">Never mind</button>
+      ${portalMoveError?`<div class="card-error">${esc(portalMoveError)}</div>`:''}
+    `;
+  }
+  const activeDay = (portalMoveDay && days.some(d=>d.date===portalMoveDay)) ? portalMoveDay : days[0].date;
+  const times = (days.find(d=>d.date===activeDay) || {times:[]}).times;
+  return `
+    <div class="portal-move">
+      <div class="note" style="margin-bottom:8px;">Pick a new time. Same ${b.durationMin||60} minutes, same format.</div>
+      <div class="portal-move-days">
+        ${days.map(d=>`<button class="portal-move-day ${d.date===activeDay?'selected':''}" data-move-day="${d.date}">${fmtDate(d.date)}</button>`).join('')}
+      </div>
+      <div class="portal-move-times">
+        ${times.map(t=>`<button class="portal-move-time ${portalMoveTime===t && portalMoveDay===activeDay?'selected':''}" data-move-time="${t}">${fmtTime(t)}${VIEWER_IN_ET?'':'<span class="tz">ET</span>'}</button>`).join('')}
+      </div>
+      <div style="display:flex;gap:8px;margin-top:12px;">
+        <button class="primary small" data-confirm-move="1" ${(!portalMoveTime||portalMoveBusy)?'disabled':''}>${portalMoveBusy?'Moving…':'Move to this time'}</button>
+        <button class="ghost small" data-abort-move="1" ${portalMoveBusy?'disabled':''}>Never mind</button>
+      </div>
+      ${portalMoveError?`<div class="card-error">${esc(portalMoveError)}</div>`:''}
+    </div>
+  `;
 }
 
 function renderPortal(){
@@ -1778,6 +1971,7 @@ function renderPortal(){
   let upHtml = upcoming.length===0 ? `<div class="empty">No upcoming sessions.</div>` : '';
   upcoming.forEach(b=>{
     const isCancelling = portalCancellingId === b.id;
+    const isMoving = portalMovingId === b.id;
     upHtml += `<div class="portal-session">
       <div class="top"><span>${fmtDate(b.date)}, ${fmtTime(b.time)}${etSuffix()}</span><span>${b.type==='virtual'?'Video call':'In person'}</span></div>
       ${isCancelling ? `
@@ -1787,10 +1981,14 @@ function renderPortal(){
           <button class="ghost small" data-abort-cancel="1" ${portalCancelBusy?'disabled':''}>Never mind</button>
         </div>
         ${portalCancelError?`<div class="card-error">${portalCancelError}</div>`:''}
-      ` : b.cancellable ? `
-        <button class="ghost small" data-start-cancel="${b.id}" style="margin-top:8px;">Cancel session</button>
+      ` : isMoving ? portalMovePickerHtml(b)
+      : b.cancellable ? `
+        <div style="display:flex;gap:8px;margin-top:8px;">
+          <button class="ghost small" data-start-move="${b.id}">Move to another time</button>
+          <button class="ghost small" data-start-cancel="${b.id}">Cancel session</button>
+        </div>
       ` : `
-        <div class="note" style="margin-top:8px;">Within ${portalClient.cancelCutoffHours} hours of your session &mdash; please contact Heshy directly to cancel.</div>
+        <div class="note" style="margin-top:8px;">Within ${portalClient.cancelCutoffHours} hours of your session &mdash; please contact Heshy directly to move or cancel it.</div>
       `}
     </div>`;
   });
@@ -1840,6 +2038,7 @@ function renderPortal(){
     </div>
     <h1>Hi ${esc(portalClient.name.split(' ')[0])}</h1>
     <div class="btn-row" style="margin-top:0;margin-bottom:32px;"><button class="primary small" id="portal-book-again">Book another session</button></div>
+    ${portalMoveNotice ? `<div class="note" style="margin-bottom:18px;color:#2E5B27;">${esc(portalMoveNotice)}</div>` : ''}
     <div class="section-title">Upcoming</div>
     ${upHtml}
     <div class="section-title" style="margin-top:32px;">Past sessions</div>
@@ -2244,10 +2443,14 @@ function renderAdmin(){
   const todayDs = (()=>{ const d=new Date(); return d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')+'-'+String(d.getDate()).padStart(2,'0'); })();
   let rulesHtml = (state.availability[adminType]||[]).length===0 ? `<div class="empty">No weekly pattern set.</div>` : '';
   (state.availability[adminType]||[]).forEach(r=>{
+    const beingEdited = editingRuleId === r.id;
     rulesHtml += `
-      <div class="row">
-        <div><div class="main">${daysLabel(r.days)}</div><div class="sub">${fmtTimeShort(r.start)} &ndash; ${fmtTimeShort(r.end)}${r.generalArea?' &middot; '+r.generalArea:''}</div></div>
-        <button class="ghost small" data-remove-rule="${r.id}">Remove</button>
+      <div class="row"${beingEdited?' style="background:#FBF6EA;border-radius:6px;padding-left:10px;padding-right:10px;"':''}>
+        <div><div class="main">${daysLabel(r.days)}</div><div class="sub">${fmtTimeShort(r.start)} &ndash; ${fmtTimeShort(r.end)}${r.generalArea?' &middot; '+r.generalArea:''}${beingEdited?' &middot; editing below':''}</div></div>
+        <div style="display:flex;gap:8px;">
+          <button class="ghost small" data-edit-rule="${r.id}">${beingEdited?'Cancel':'Edit'}</button>
+          <button class="ghost small" data-remove-rule="${r.id}">Remove</button>
+        </div>
       </div>`;
   });
   const upcomingOverrides = (state.overrides||[]).filter(o=>o.type===adminType && o.date>=todayDs).sort((a,b)=>a.date.localeCompare(b.date));
@@ -2527,6 +2730,7 @@ function renderAdmin(){
           <div class="section-title">Weekly pattern</div>
           <p class="note" style="margin:0 0 14px;">Open windows that repeat every week. Clients pick their own session length within whatever's open \u2014 set the session lengths you offer in Settings.</p>
           ${rulesHtml}
+          ${editingRuleId ? `<div class="note" style="margin-top:14px;color:#8A6D2F;"><strong>Editing the pattern above.</strong> Change anything below and save.</div>` : ''}
           <div class="day-toggle-row" style="margin-top:14px;">
             ${DOW.map((d,i)=>`<div class="day-toggle ${newRule.days.includes(i)?'active':''}" data-rule-day="${i}">${d[0]}</div>`).join('')}
           </div>
@@ -2538,7 +2742,11 @@ function renderAdmin(){
           <div style="margin-top:10px;"><label>General area <span class="note" style="display:inline;">(shown to clients before they book)</span></label><input type="text" id="nr-area" value="${newRule.generalArea}" placeholder="e.g. Boro Park"></div>
           <div style="margin-top:10px;"><label>Full address &amp; instructions <span class="note" style="display:inline;">(sent after booking)</span></label><textarea id="nr-address" placeholder="Address, parking, floor, buzzer code, etc.">${newRule.address}</textarea></div>
           ` : ''}
-          <div style="margin-top:14px;"><button class="ghost small" id="addRuleBtn" ${(newRule.days.length && newRule.start && newRule.end) ? '' : 'disabled'}>Add pattern</button>${!newRule.days.length ? '<span class="note" style="margin-left:10px;">Pick at least one day above first</span>' : (!newRule.start || !newRule.end ? '<span class="note" style="margin-left:10px;">Set a start and end time</span>' : '')}</div>
+          <div style="margin-top:14px;display:flex;gap:10px;align-items:center;flex-wrap:wrap;">
+            <button class="${editingRuleId?'primary':'ghost'} small" id="addRuleBtn" ${(newRule.days.length && newRule.start && newRule.end) ? '' : 'disabled'}>${editingRuleId?'Save changes':'Add pattern'}</button>
+            ${editingRuleId ? `<button class="ghost small" id="cancelEditRuleBtn">Cancel</button>` : ''}
+            ${!newRule.days.length ? '<span class="note">Pick at least one day above first</span>' : (!newRule.start || !newRule.end ? '<span class="note">Set a start and end time</span>' : '')}
+          </div>
         </div>
         <div style="margin-top:24px;padding-top:20px;border-top:1px solid var(--line);">
           <div class="section-title">Upcoming one-off dates</div>
@@ -3086,6 +3294,20 @@ function attachHandlers(){
   document.querySelectorAll('[data-start-cancel]').forEach(el=>{ el.onclick = ()=>{ portalCancellingId = el.getAttribute('data-start-cancel'); portalCancelError=''; render(); }; });
   document.querySelectorAll('[data-abort-cancel]').forEach(el=>{ el.onclick = ()=>{ portalCancellingId = null; portalCancelError=''; render(); }; });
   document.querySelectorAll('[data-confirm-cancel]').forEach(el=>{ el.onclick = ()=>{ submitPortalCancel(el.getAttribute('data-confirm-cancel')); }; });
+  document.querySelectorAll('[data-start-move]').forEach(el=>{ el.onclick = ()=>{ startPortalMove(el.getAttribute('data-start-move')); }; });
+  document.querySelectorAll('[data-abort-move]').forEach(el=>{ el.onclick = ()=>{ cancelPortalMove(); }; });
+  document.querySelectorAll('[data-confirm-move]').forEach(el=>{ el.onclick = ()=>{ submitPortalMove(); }; });
+  document.querySelectorAll('[data-move-day]').forEach(el=>{ el.onclick = ()=>{ portalMoveDay = el.getAttribute('data-move-day'); portalMoveTime = null; portalMoveError=''; render(); }; });
+  document.querySelectorAll('[data-move-time]').forEach(el=>{ el.onclick = ()=>{
+    // The day strip defaults to the first open date without writing it down, so pin it here —
+    // otherwise a time picked on that default day would be submitted against a null date.
+    if(!portalMoveDay){
+      const strip = el.closest('.portal-move');
+      const active = strip && strip.querySelector('.portal-move-day.selected');
+      if(active) portalMoveDay = active.getAttribute('data-move-day');
+    }
+    portalMoveTime = el.getAttribute('data-move-time'); portalMoveError=''; render();
+  }; });
   const portalSaveCardBtn = $('portal-save-card-btn'); if(portalSaveCardBtn) portalSaveCardBtn.onclick = savePortalCard;
   mountPortalCardElementIfNeeded();
 
@@ -3123,6 +3345,8 @@ function attachHandlers(){
       el.onclick = ()=>{ adminView = 'client-detail'; viewingClientId = el.getAttribute('data-view-client'); render(); };
     });
     document.querySelectorAll('[data-rule-day]').forEach(el=>{ el.onclick = ()=>toggleRuleDay(Number(el.getAttribute('data-rule-day'))); });
+    document.querySelectorAll('[data-edit-rule]').forEach(el=>{ el.onclick = ()=>startEditRule(el.getAttribute('data-edit-rule')); });
+    const cancelEditRuleBtn = $('cancelEditRuleBtn'); if(cancelEditRuleBtn) cancelEditRuleBtn.onclick = cancelEditRule;
     document.querySelectorAll('[data-remove-rule]').forEach(el=>{ el.onclick = ()=>removeRule(el.getAttribute('data-remove-rule')); });
     const nrStart=$('nr-start'), nrEnd=$('nr-end'), nrArea=$('nr-area'), nrAddress=$('nr-address');
     if(nrStart) nrStart.oninput = e=> newRule.start = e.target.value;

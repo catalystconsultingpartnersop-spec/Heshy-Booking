@@ -94,9 +94,11 @@ function fmtEt(date, time) {
   };
 }
 
-// Sent to the client when Heshy moves a session. Until this existed, a rescheduled session
-// was never communicated by the app at all.
-export function rescheduledEmail(booking, previous, settings) {
+// Sent to the client when a session moves. Until this existed, a rescheduled session was never
+// communicated by the app at all. `how.by` is 'heshy' (the default) or 'client' — a client who
+// moved their own session is being confirmed, not informed, and should not be told Heshy did it.
+export function rescheduledEmail(booking, previous, settings, how = {}) {
+  const byClient = how.by === 'client';
   const now = fmtEt(booking.date, booking.time);
   const was = fmtEt(previous.date, previous.time);
   const firstName = esc((booking.clientName || '').split(' ')[0]);
@@ -105,11 +107,15 @@ export function rescheduledEmail(booking, previous, settings) {
     ? factRow('Join link', meetLink ? `<a href="${esc(meetLink)}">${esc(meetLink)}</a>` : 'Sent before the session')
     : factRow('Location', esc(booking.location || settings.location || 'Sent before the session').replace(/\n/g, '<br>'));
   return {
-    subject: `Your session has moved — now ${now.date} at ${now.time}`,
+    subject: byClient
+      ? `Moved — your session is now ${now.date} at ${now.time}`
+      : `Your session has moved — now ${now.date} at ${now.time}`,
     html: wrap(`
       <div style="font-size:22px;font-family:Georgia,serif;margin-bottom:8px;">Your session has moved.</div>
       <div style="font-size:14px;font-family:Arial,sans-serif;color:#6E6E6E;margin-bottom:20px;">
-        Hi ${firstName || 'there'} &mdash; Heshy has moved your session. Here are the new details.
+        Hi ${firstName || 'there'} &mdash; ${byClient
+          ? 'this confirms your session has moved, as you asked. Here are the new details.'
+          : 'Heshy has moved your session. Here are the new details.'}
       </div>
       <table style="width:100%;border-collapse:collapse;font-family:Arial,sans-serif;">
         ${factRow('New time', `<strong>${now.date}, ${now.time}</strong>`)}
@@ -123,6 +129,32 @@ export function rescheduledEmail(booking, previous, settings) {
       <div style="margin-top:18px;font-size:13px;color:#6E6E6E;font-family:Arial,sans-serif;">
         If the new time doesn't work, just reply to this email.
       </div>
+    `)
+  };
+}
+
+/** Tells Heshy when a client moves their own session from the portal. */
+export function clientRescheduledAlertEmail(booking, previous) {
+  const now = fmtEt(booking.date, booking.time);
+  const was = fmtEt(previous.date, previous.time);
+  const baseUrl = process.env.SITE_URL || 'https://heshy-booking.vercel.app';
+  return {
+    subject: `${booking.clientName || 'A client'} moved their session — now ${now.date}, ${now.time}`,
+    html: wrap(`
+      <div style="font-size:22px;font-family:Georgia,serif;margin-bottom:8px;">A client moved their session.</div>
+      <table style="width:100%;border-collapse:collapse;font-family:Arial,sans-serif;">
+        ${factRow('Client', esc(booking.clientName || '') || esc(booking.clientEmail || ''))}
+        ${factRow('Now', `<strong>${now.date}, ${now.time}</strong>`)}
+        ${factRow('Was', `<span style="color:#6E6E6E;text-decoration:line-through;">${was.date}, ${was.time}</span>`)}
+        ${factRow('Length', `${booking.durationMin || 60} min`)}
+        ${factRow('Format', booking.durationMin === 15 ? 'Phone call' : (booking.type === 'virtual' ? 'Video call' : 'In person'))}
+      </table>
+      <div style="margin-top:18px;font-family:Arial,sans-serif;font-size:13.5px;color:#6E6E6E;">
+        The calendar event has been moved to the new time, and the old slot is free again.
+      </div>
+      ${booking.clientId ? `<div style="margin-top:16px;font-family:Arial,sans-serif;font-size:13.5px;">
+        <a href="${baseUrl}/#manage/client/${encodeURIComponent(booking.clientId)}" style="color:#111111;text-decoration:underline;">Open their profile</a>
+      </div>` : ''}
     `)
   };
 }
