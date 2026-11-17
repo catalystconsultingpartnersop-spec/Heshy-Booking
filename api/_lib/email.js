@@ -328,7 +328,7 @@ export function chargeDeclinedEmail(booking, decline, settings = {}, payUrl = ''
         <a href="${baseUrl}/#portal" style="display:inline-block;padding:12px 22px;background:#111111;color:#ffffff;text-decoration:none;border-radius:6px;font-size:14px;">Update your card</a>
       </div>`}
       <div style="font-family:Arial,sans-serif;font-size:13.5px;color:#6E6E6E;line-height:1.7;">
-        Nothing has been taken from your account yet. Reply to this email if you'd rather settle it another way.
+        Reply to this email if you'd rather pay another way.
       </div>
     `)
   };

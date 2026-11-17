@@ -118,12 +118,14 @@ check('...and does not point "below" at something that is not there', !/differen
 // He requires invoices paid on receipt. The app must not undercut that on his behalf.
 check('...and does not tell the client there is no rush',
       !/nothing urgent/i.test(dnhMail.html) && !/whenever you get to it/i.test(dnhMail.html), dnhMail.html.slice(-400));
-check('...while still making clear no money has moved', /Nothing has been taken/i.test(dnhMail.html));
+// "Nothing has been taken from your account yet" said nothing the headline hadn't already said,
+// and "yet" read like a threat. The offer to pay another way is the only part that did work.
+check('...and does not restate what the headline already said', !/Nothing has been taken/i.test(dnhMail.html));
+check('...while still offering another route', /pay another way/i.test(dnhMail.html));
 check('the subject says plainly what happened', /didn't go through/.test(dnhMail.subject), dnhMail.subject);
 check('...and carries the amount, so it is actionable from the inbox', /\$500\.00/.test(dnhMail.subject), dnhMail.subject);
 check('...and gives one clear action', /Update your card/.test(dnhMail.html));
 check('...linking to the portal', /#portal/.test(dnhMail.html));
-check('...reassures them nothing was taken', /Nothing has been taken/i.test(dnhMail.html));
 check('the subject does not call the client out', !/declined|refused|overdue/i.test(dnhMail.subject), dnhMail.subject);
 
 // Each reason gets its own advice, written for the client rather than for Heshy.
