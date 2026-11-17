@@ -6,103 +6,70 @@ let pass = 0, fail = 0; const failures = [];
 function check(name, cond, detail='') { if (cond) pass++; else { fail++; failures.push(name + (detail ? '\n    ' + detail : '')); } }
 
 // --- shape of the questionnaire -----------------------------------------------------------------
-check('24 rating statements', a.ITEMS.length === 24, String(a.ITEMS.length));
-check('9 forced choices', a.PAIRS.length === 9, String(a.PAIRS.length));
-check('up to 10 follow-ups', a.MAX_EXTRA === 10);
-check('43 questions in all', a.ITEMS.length + a.PAIRS.length + a.MAX_EXTRA === 43);
-check('each kind of work is asked about four times',
-      a.LETTERS.every(k => a.ITEMS.filter(q => q.key === k).length === 4),
-      JSON.stringify(a.LETTERS.map(k => k + ':' + a.ITEMS.filter(q => q.key === k).length)));
-check('each kind of work appears three times in the forced choices',
-      a.LETTERS.every(k => a.PAIRS.filter(p => p.a === k || p.b === k).length === 3));
-check('every question has a unique id', new Set(a.ITEMS.map(q => q.id)).size === 24);
-check('no statement is blank', a.ITEMS.every(q => q.text.trim().length > 5));
-check('six short phrasings for each kind of work',
-      a.LETTERS.every(k => a.SNIPPETS[k]?.length === 6));
+check('30 main questions', a.ITEMS.length === 30, String(a.ITEMS.length));
+check('60 questions in the bank (a backup for each)', a.QUESTIONS.length === 60);
+check('up to 13 backups', a.MAX_EXTRA === 13);
+check('43 questions at most', a.TOTAL_MAX === 43);
+check('five angles', a.LENSES.length === 5);
+check('every angle has five answers', a.LENSES.every(l => l.scale.length === 5));
+check('each kind of work is asked from all five angles',
+      a.LETTERS.every(k => new Set(a.ITEMS.filter(q => q.key === k).map(q => q.lens)).size === 5));
+check('the same kind of work is never asked twice in a row',
+      a.ITEMS.every((q, i) => i === 0 || a.ITEMS[i - 1].key !== q.key));
+check('every question has a unique id', new Set(a.QUESTIONS.map(q => q.id)).size === 60);
+check('no question is blank', a.QUESTIONS.every(q => q.text.trim().length > 5));
+check('no either/or questions left', !('PAIRS' in a) && !('SNIPPETS' in a));
 check('every top-two combination has result wording', Object.keys(a.TYPES).length === 15);
 check('every trait has a label', a.LETTERS.every(k => a.TRAITS[k]?.label));
 
-// --- scoring --------------------------------------------------------------------------------
-function answersFavouring(best, worst) {
-  const items = {};
-  for (const q of a.ITEMS) items[q.id] = q.key === best ? 5 : q.key === worst ? 1 : 3;
-  const pairs = {};
-  for (const p of a.PAIRS) pairs[p.id] = (p.a === best || p.b === worst) ? p.a : p.b;
-  return { items, pairs, extra: [] };
+// Answers the main 30, then keeps answering backups the same way until the assessment stops.
+function run(rate) {
+  const ans = { items: {}, extra: [] };
+  for (const q of a.ITEMS) ans.items[q.id] = rate(q);
+  let id;
+  while ((id = a.nextExtra(ans))) { ans.extra.push(id); ans.items[id] = rate(a.questionById(id)); }
+  return ans;
 }
+const favouring = (best, worst) => run(q => q.key === best ? 5 : q.key === worst ? 1 : 3);
+
+// --- scoring --------------------------------------------------------------------------------
 for (const [best, worst] of [['W','T'], ['T','W'], ['I','E'], ['G','D'], ['E','I'], ['D','G']]) {
-  const r = a.score(answersFavouring(best, worst));
+  const r = a.score(favouring(best, worst));
   check(`someone who loves ${best} ranks it first`, r.order[0] === best, r.letters);
   check(`someone who hates ${worst} ranks it last`, r.order[5] === worst, r.letters);
 }
-
-// Someone who loves everything still gets a real answer — scores are measured against their own
-// average, not an absolute scale. This is the detail that makes the thing work.
-const loveAll = { items: Object.fromEntries(a.ITEMS.map(q => [q.id, q.key === 'D' ? 5 : 4])), pairs: {}, extra: [] };
-// Choose D wherever it's offered, so the ratings and the choices agree.
-for (const p of a.PAIRS) loveAll.pairs[p.id] = (p.b === 'D' ? p.b : p.a);
+const loveAll = run(q => q.key === 'D' ? 5 : 4);
 const r = a.score(loveAll);
-check('someone who rates everything highly still gets a ranked result',
-      r.order.length === 6 && new Set(r.order).size === 6, r.letters);
+check('someone who rates everything highly still gets a ranked result', new Set(r.order).size === 6, r.letters);
 check('...and the one they rated highest comes out on top', r.order[0] === 'D', r.letters);
 
-// Ratings alone must still separate people, even with the forced choices pulling the other way.
-const ratingsOnly = { items: Object.fromEntries(a.ITEMS.map(q => [q.id, q.key === 'E' ? 5 : 2])), pairs: {}, extra: [] };
-for (const p of a.PAIRS) ratingsOnly.pairs[p.id] = (p.a === 'E' ? p.b : p.a); // never pick E
-const ro = a.score(ratingsOnly);
-check('strong ratings still register even when every choice went the other way',
-      ro.order.indexOf('E') <= 2, ro.letters);
+const clear = run(q => ({ W: 5, D: 5, G: 3, E: 3, I: 1, T: 1 })[q.key]);
+check('a clear-cut person needs no backups', clear.extra.length === 0, String(clear.extra.length));
+check('...and gets the right result', a.score(clear).letters.slice(0, 2).split('').sort().join('') === 'DW' && a.score(clear).clear);
 
-const flat = { items: Object.fromEntries(a.ITEMS.map(q => [q.id, 3])), pairs: {}, extra: [] };
-for (const p of a.PAIRS) flat.pairs[p.id] = p.a;
-const flatResult = a.score(flat);
-check('completely flat ratings still return all six letters', flatResult.letters.length === 6);
-check('...and report whether the result settled', typeof flatResult.clear === 'boolean');
+const flat = run(() => 3);
+check('completely flat answers still return all six letters', a.score(flat).letters.length === 6);
+check('...use every backup', flat.extra.length === 13, String(flat.extra.length));
+check('...and are reported as a close call', a.score(flat).clear === false && !!a.closeCall(flat));
+check('backups never repeat', new Set(flat.extra).size === flat.extra.length);
+check('backups are real backup questions', flat.extra.every(id => a.questionById(id)?.backup));
 
-const r2 = a.score(answersFavouring('W', 'T'));
+const r2 = a.score(favouring('W', 'T'));
 check('scores are 0-100', a.LETTERS.every(k => r2.scores[k] >= 0 && r2.scores[k] <= 100), JSON.stringify(r2.scores));
 check('the letters string matches the order', r2.letters === r2.order.join(''));
-check('scoring is deterministic', a.score(answersFavouring('W','T')).letters === r2.letters);
-
-// --- the adaptive follow-ups ------------------------------------------------------------------
-const close = { items: Object.fromEntries(a.ITEMS.map(q => [q.id, 3])), pairs: {}, extra: [] };
-for (const p of a.PAIRS) close.pairs[p.id] = p.a;
-let nx = a.nextExtra(close);
-check('a close result produces a follow-up question', !!nx);
-check('...comparing two different kinds of work', nx && nx.a !== nx.b);
-check('...using real phrasings', nx && a.SNIPPETS[nx.a][nx.ai] && a.SNIPPETS[nx.b][nx.bi]);
-
-// Walk all ten follow-ups through and make sure it terminates and stays valid.
-const walk = { items: close.items, pairs: close.pairs, extra: [] };
-let steps = 0;
-while (steps < 20) {
-  const q = a.nextExtra(walk);
-  if (!q) break;
-  walk.extra.push({ a: q.a, ai: q.ai, b: q.b, bi: q.bi, pick: q.a });
-  steps++;
-}
-check('the follow-ups stop after ten', steps === 10, String(steps));
-check('no eleventh follow-up is offered', a.nextExtra(walk) === null);
-check('the answers it collected are valid', a.validExtra(walk.extra));
-check('a completed run scores cleanly', a.score(walk).letters.length === 6);
+check('scoring is deterministic', a.score(favouring('W','T')).letters === r2.letters);
+check('no more than 43 questions ever', [flat, clear, loveAll].every(x => a.ITEMS.length + x.extra.length <= 43));
 
 // --- what the server will and won't accept -----------------------------------------------------
-const good = answersFavouring('W', 'T');
-check('a complete set of answers is accepted', a.validAnswers(good));
-check('missing a rating is rejected', !a.validAnswers({ ...good, items: { ...good.items, q1: undefined } }));
-check('a rating outside 1-5 is rejected', !a.validAnswers({ ...good, items: { ...good.items, q1: 9 } }));
-check('a missing forced choice is rejected', !a.validAnswers({ ...good, pairs: { ...good.pairs, p1: undefined } }));
-check('a forced choice naming a letter that was not offered is rejected',
-      !a.validAnswers({ ...good, pairs: { ...good.pairs, p1: 'Z' } }));
+const good = flat;
+check('a complete set of answers is accepted', a.validAnswers(good) && a.validAnswers(clear));
+check('missing a main answer is rejected', !a.validAnswers({ ...good, items: { ...good.items, [a.ITEMS[0].id]: undefined } }));
+check('an answer outside 1-5 is rejected', !a.validAnswers({ ...good, items: { ...good.items, [a.ITEMS[0].id]: 9 } }));
+check('stopping before the backups are done is rejected', !a.validAnswers({ ...good, extra: good.extra.slice(0, 3) }));
+check('backups in the wrong order are rejected', !a.validAnswers({ ...good, extra: [...good.extra].reverse() }));
+check('an unanswered backup is rejected', !a.validAnswers({ ...good, items: { ...good.items, [good.extra[0]]: undefined } }));
+check('made-up backups are rejected', !a.validAnswers({ ...clear, extra: ['day.W1'], items: { ...clear.items, 'day.W1': 5 } }));
 check('nothing at all is rejected', !a.validAnswers(null) && !a.validAnswers({}) && !a.validAnswers('WIDGET'));
-check('more than ten follow-ups is rejected',
-      !a.validExtra(Array.from({ length: 11 }, () => ({ a:'W', ai:0, b:'T', bi:0, pick:'W' }))));
-check('a follow-up picking a third letter is rejected',
-      !a.validExtra([{ a:'W', ai:0, b:'T', bi:0, pick:'D' }]));
-check('a follow-up comparing a letter with itself is rejected',
-      !a.validExtra([{ a:'W', ai:0, b:'W', bi:1, pick:'W' }]));
-check('an out-of-range phrasing index is rejected',
-      !a.validExtra([{ a:'W', ai:99, b:'T', bi:0, pick:'W' }]));
 
 // --- existing Working Genius letters carry across ------------------------------------------------
 check('plain letters parse', a.parseLetters('GTDEIW').join('') === 'GTDEIW');
@@ -131,7 +98,7 @@ check('a full result is marked complete', a.profileOf('WDGEIT').complete === tru
 check('an empty result has no type', a.profileOf('').type === null);
 
 // A scored run always produces a displayable profile.
-const scored = a.score(answersFavouring('G', 'W'));
+const scored = a.score(favouring('G', 'W'));
 const prof = a.profileOf(scored.letters);
 check('a freshly scored run produces a complete profile', prof.complete && !!prof.type, scored.letters);
 
