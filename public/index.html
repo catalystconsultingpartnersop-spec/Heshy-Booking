@@ -1719,7 +1719,10 @@ function goToPortal(){
 function renderPortal(){
   if(!portalClient){
     return `
-      <div class="topbar"><div class="brand" id="brand-home-link" style="cursor:pointer;">Clarity Session w/ Heshy</div></div>
+      <div class="topbar">
+      <div class="brand" id="brand-home-link" style="cursor:pointer;">Clarity Session w/ Heshy</div>
+      <a href="#portal" class="manage-link" data-go-portal="1">My sessions</a>
+    </div>
       <div class="portal-box">
         <h1>My sessions</h1>
         ${portalNotice ? `<div class="note" style="margin-bottom:14px;color:#2E5B27;">${esc(portalNotice)}</div>` : ''}
@@ -1831,7 +1834,10 @@ function renderPortal(){
     `}
   ` : '';
   return `
-    <div class="topbar"><div class="brand" id="brand-home-link" style="cursor:pointer;">Clarity Session w/ Heshy</div></div>
+    <div class="topbar">
+      <div class="brand" id="brand-home-link" style="cursor:pointer;">Clarity Session w/ Heshy</div>
+      <a href="#portal" class="manage-link" data-go-portal="1">My sessions</a>
+    </div>
     <h1>Hi ${esc(portalClient.name.split(' ')[0])}</h1>
     <div class="btn-row" style="margin-top:0;margin-bottom:32px;"><button class="primary small" id="portal-book-again">Book another session</button></div>
     <div class="section-title">Upcoming</div>
@@ -1852,7 +1858,9 @@ function renderClient(){
   let inner = '';
   if(bookingStep===1){
     inner += `<h1>Book a session</h1>`;
-    inner += `<div class="note" style="margin-bottom:20px;">Already a client? <a href="#" data-go-portal="1" style="color:var(--ink);text-decoration:underline;">View your sessions</a></div>`;
+    // The way back in used to be only this line, on step 1, gone as soon as a date was picked.
+    // A client who booked weeks ago and wants to cancel had to land here and spot it. It's now a
+    // "My sessions" link in the header of every client screen instead.
     inner += `<div class="type-toggle">
       <div class="type-btn ${selectedType==='virtual'?'active':''}" data-type="virtual">Online</div>
       <div class="type-btn ${selectedType==='in-person'?'active':''}" data-type="in-person">In person</div>
@@ -2029,7 +2037,10 @@ function renderClient(){
   }
 
   return `
-    <div class="topbar"><div class="brand" id="brand-home-link" style="cursor:pointer;">Clarity Session w/ Heshy</div></div>
+    <div class="topbar">
+      <div class="brand" id="brand-home-link" style="cursor:pointer;">Clarity Session w/ Heshy</div>
+      <a href="#portal" class="manage-link" data-go-portal="1">My sessions</a>
+    </div>
     <div class="step-label">Step ${bookingStep} of 3</div>
     <div class="step-line" style="--pct:${pct}%"></div>
     ${inner}

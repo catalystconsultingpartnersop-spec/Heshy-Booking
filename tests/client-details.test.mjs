@@ -85,6 +85,17 @@ check('...and collapses again when switching away from online', /if\(t !== 'virt
 check('the details form sets expectations', /two short questions follow/.test(html));
 check('...and greets returning clients differently', /Welcome back/.test(html));
 
+// --- getting back into the portal ---------------------------------------------------------------
+// The only way in used to be one grey line on step 1 of booking, which disappeared as soon as a
+// date was picked. A client who booked weeks ago and wanted to cancel had to find that.
+check('every client screen has a My sessions link',
+      (html.match(/<a href="#portal" class="manage-link" data-go-portal="1">My sessions<\/a>/g) || []).length >= 2,
+      String((html.match(/data-go-portal="1">My sessions/g) || []).length));
+check('it sits in the header, not in the page body', /<div class="topbar">[\s\S]{0,220}?data-go-portal/.test(html));
+check('the old step-1-only link is gone', !/Already a client\?/.test(html));
+check('the link is wired up', /querySelectorAll\('\[data-go-portal\]'\)/.test(html));
+check('...and it is a real link, so it works without script too', /<a href="#portal"/.test(html));
+
 console.log(`\n${pass} passed, ${fail} failed`);
 if (fail) { console.log('\nFAILURES:\n' + failures.map(f => '  ' + f).join('\n')); process.exit(1); }
 
