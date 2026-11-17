@@ -425,6 +425,16 @@
 
   /* Moving a session: a compact day strip and a time grid, in the same shapes the booking page
      uses, so it reads as the familiar picker rather than a second, different one. */
+  /* A declined charge, stated on the booking rather than in an alert box that takes the reason
+     away with it when dismissed. */
+  .charge-problem{
+    margin-top:12px;padding:12px 14px;border:1px solid #D9B3B3;border-left:3px solid #B3261E;
+    border-radius:6px;background:#FCF6F5;
+  }
+  .charge-problem-title{font-size:10.5px;font-weight:600;letter-spacing:0.07em;text-transform:uppercase;color:#B3261E;margin-bottom:5px;}
+  .charge-problem-msg{font-size:14px;font-weight:500;line-height:1.5;}
+  .charge-problem-next{font-size:13px;color:var(--muted);line-height:1.6;margin-top:6px;}
+
   .portal-move{margin-top:10px;padding:14px;border:1px solid var(--line);border-radius:8px;background:var(--paper);}
   .portal-move-days{display:flex;gap:6px;overflow-x:auto;padding-bottom:6px;-webkit-overflow-scrolling:touch;}
   .portal-move-day{
@@ -730,6 +740,9 @@ let viewingClientId = null;
 let editingClientContact = false;
 let clientSearch = '';
 let reschedulingId = null;
+// The last failed charge, shown on the booking it belongs to. A decline used to appear in an
+// alert box, which took the reason with it the moment it was dismissed.
+let chargeProblem = null;
 let billingBasisChoice = {}; // bookingId -> 'actual' | 'minimum', overrides the global default per session
 let rescheduleType = {};
 let runningTimer = {};
@@ -1537,7 +1550,12 @@ async function chargeAndReceipt(id){
   const overrideAmount = amountInput ? parseFloat(amountInput.value) : null;
   const overrideHours = hoursInput ? parseFloat(hoursInput.value) : null;
   const overrideMinutes = (overrideHours!=null && !isNaN(overrideHours)) ? Math.round(overrideHours*60) : null;
+  // The label has to be put back on every exit path, not just the happy one. It used to be left
+  // reading "Charging…" after a decline, so a button that was perfectly usable looked dead.
+  const wasLabelled = btn ? btn.textContent : '';
+  const restore = () => { if(btn){ btn.disabled = false; btn.textContent = wasLabelled; } };
   if(btn){ btn.disabled = true; btn.textContent = 'Charging…'; }
+  chargeProblem = null;
   try{
     const res = await fetch('/api/charge-booking', {
       method: 'POST',
@@ -1549,12 +1567,17 @@ async function chargeAndReceipt(id){
       })
     });
     const data = await res.json();
-    if(data.error){ alert('Charge failed: ' + data.error); if(btn){ btn.disabled=false; } return; }
+    if(data.error){
+      // Shown on the booking itself and left there, rather than in an alert box that vanishes
+      // the moment it's dismissed and takes the reason with it.
+      chargeProblem = { id, message: data.error, next: data.next || '', retryable: data.retryable !== false };
+      restore(); render(); return;
+    }
     await loadAdminState();
     render();
   }catch(e){
-    alert('Charge failed: ' + e.message);
-    if(btn){ btn.disabled = false; }
+    chargeProblem = { id, message: 'Could not reach the server: ' + e.message, next: 'Check your connection and try again. Nothing was charged.', retryable: true };
+    restore(); render();
   }
 }
 async function skipCharge(id){
@@ -2666,7 +2689,14 @@ function renderAdmin(){
             <div><label>Hours to bill</label><input type="text" value="${hours}" data-actual-hours="${b.id}"></div>
             <div><label>Amount to charge</label><input type="text" value="${amt.toFixed(2)}" data-amount="${b.id}"></div>
           </div>
-          <div style="margin-top:12px;"><button class="primary small" data-charge="${b.id}">Charge and send receipt</button></div>
+          ${chargeProblem && chargeProblem.id===b.id ? `
+            <div class="charge-problem">
+              <div class="charge-problem-title">Not charged</div>
+              <div class="charge-problem-msg">${esc(chargeProblem.message)}</div>
+              ${chargeProblem.next?`<div class="charge-problem-next">${esc(chargeProblem.next)}</div>`:''}
+              <div class="note" style="margin-top:8px;">Nothing was taken from the card, and this session is still unbilled.</div>
+            </div>` : ''}
+          <div style="margin-top:12px;"><button class="primary small" data-charge="${b.id}">${chargeProblem && chargeProblem.id===b.id ? (chargeProblem.retryable ? 'Try the card again' : 'Charge anyway') : 'Charge and send receipt'}</button></div>
           <button class="ghost small danger-ghost" data-skip-charge="${b.id}" style="margin-top:8px;">Mark complete, don't charge</button>
         </div>`;
       }

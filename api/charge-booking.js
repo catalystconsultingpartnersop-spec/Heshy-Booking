@@ -6,6 +6,76 @@ import { logError } from './_lib/errorlog.js';
 import { stripe, defaultCardFor } from './_lib/stripecustomer.js';
 import { computeCharge } from './_lib/billing.js';
 
+// Turns a Stripe card error into something Heshy can act on. Each case says what happened and
+// what to do about it, because "declined" alone leaves him with no next step.
+//
+// `retryable: false` means the same card will keep failing — retrying is a waste of a call to
+// the bank and, on repeated attempts, counts against the card. Those cases need a new card or
+// the client's involvement, not another press of the button.
+export function explainDecline(err) {
+  const code = err?.code === 'authentication_required'
+    ? 'authentication_required'
+    : (err?.decline_code || err?.code || 'generic_decline');
+
+  const CASES = {
+    // Not really a decline: the bank wants the cardholder present to approve it (3-D Secure).
+    // Charging off-session can never satisfy that, so retrying is pointless.
+    authentication_required: {
+      message: "The client's bank wants them to approve this payment themselves.",
+      next: 'Ask them to update their card in the portal — confirming it there authorises future charges.',
+      retryable: false
+    },
+    insufficient_funds: {
+      message: 'The card was declined: not enough available funds.',
+      next: 'Worth trying again in a day or two, or ask them for a different card.',
+      retryable: true
+    },
+    expired_card: {
+      message: 'The card on file has expired.',
+      next: 'Ask them to update their card in the portal.',
+      retryable: false
+    },
+    incorrect_cvc: {
+      message: "The card's security code was rejected.",
+      next: 'Ask them to re-enter the card in the portal.',
+      retryable: false
+    },
+    card_velocity_exceeded: {
+      message: 'The card has hit its limit on recent transactions.',
+      next: 'Try again tomorrow, or ask them for a different card.',
+      retryable: true
+    },
+    lost_card:   { message: 'The bank has reported this card lost.',   next: 'Ask them for a different card.', retryable: false },
+    stolen_card: { message: 'The bank has reported this card stolen.', next: 'Ask them for a different card.', retryable: false },
+    pickup_card: { message: 'The bank has blocked this card.',         next: 'Ask them for a different card.', retryable: false },
+    do_not_honor: {
+      message: "The card was declined by the client's bank, without a reason given.",
+      next: "This usually means the bank blocked it, not that anything is wrong on your side. Ask them to call their bank, or for a different card.",
+      retryable: true
+    },
+    transaction_not_allowed: {
+      message: "The card doesn't allow this kind of payment.",
+      next: 'Ask them for a different card.',
+      retryable: false
+    },
+    currency_not_supported: {
+      message: "The card doesn't support charges in US dollars.",
+      next: 'Ask them for a different card.',
+      retryable: false
+    }
+  };
+
+  const hit = CASES[code];
+  if (hit) return { code, ...hit };
+  return {
+    code,
+    // Stripe's own wording is better than a guess for anything not listed above.
+    message: err?.message || 'The card was declined.',
+    next: "Ask the client to check with their bank, or to add a different card in the portal.",
+    retryable: true
+  };
+}
+
 export default async function handler(req, res) {
   if (req.method !== 'POST') return res.status(405).json({ error: 'Method not allowed' });
   try {
@@ -108,10 +178,19 @@ export default async function handler(req, res) {
     res.status(200).json({ ok: true, amount: amountCents / 100 });
   } catch (err) {
     console.error('Charge error:', err);
-    await logError('charge-booking', err, { bookingId: req.body?.bookingId, amount: req.body?.amount });
+    await logError('charge-booking', err, {
+      bookingId: req.body?.bookingId, amount: req.body?.amount,
+      // Recorded so a decline can be looked into afterwards, rather than only being seen once
+      // in an alert box that nobody wrote down.
+      declineCode: err?.decline_code || err?.code || undefined
+    });
     // Surface Stripe's card-decline reason (safe, user-facing) but nothing internal.
+    // "The card was declined" on its own is useless: an expired card, a card over its limit and
+    // a card whose bank wants the cardholder present are three different problems with three
+    // different fixes, and Stripe tells us which one it is.
     if (err && err.type === 'StripeCardError') {
-      return res.status(402).json({ error: 'The card was declined.' });
+      const d = explainDecline(err);
+      return res.status(402).json({ error: d.message, reason: d.code, next: d.next, retryable: d.retryable });
     }
     res.status(500).json({ error: 'Something went wrong processing the charge. Please try again.' });
   }
