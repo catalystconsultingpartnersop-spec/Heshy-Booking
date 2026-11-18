@@ -563,10 +563,18 @@ let cardErrorMsg = '';
 function isCurrentEmailBlocked(){
   return clientForm.checkedEmail === clientForm.email && !!clientForm.blocked;
 }
+// The bank is given the billing address along with the card, so all three parts have to be there
+// before the card can be saved.
+function addressComplete(){
+  return !!(clientForm.addrLine1.trim() && clientForm.addrCity.trim() && clientForm.addrZip.trim());
+}
+function bookingFormReady(){
+  return !!(clientForm.name && clientForm.email && clientForm.phone && addressComplete() && cardComplete);
+}
 function updateConfirmButtonState(){
   const btn = document.getElementById('confirmBtn');
   if(!btn) return;
-  btn.disabled = !(clientForm.name && clientForm.email && clientForm.phone && cardComplete) || submitting || isCurrentEmailBlocked();
+  btn.disabled = !bookingFormReady() || submitting || isCurrentEmailBlocked();
 }
 cardElement.on('change', (e)=>{
   cardComplete = e.complete;
@@ -671,7 +679,7 @@ function scheduleCouponCheck(){
   }, 500);
 }
 let selectedType = 'virtual';
-let clientForm = { name:'', email:'', phone:'', intakeAnswers:[], wgPdfName:'', wgPdfData:'', checkedEmail:'', isNew:false, blocked:false, couponCode:'' };
+let clientForm = { name:'', email:'', phone:'', addrLine1:'', addrCity:'', addrZip:'', intakeAnswers:[], wgPdfName:'', wgPdfData:'', checkedEmail:'', isNew:false, blocked:false, couponCode:'' };
 let confirmedMeetLink = '';
 let confirmedLocation = '';
 let confirmedComped = false;
@@ -694,6 +702,10 @@ let portalClient = null;
 let portalError = '';
 let portalToken = (typeof localStorage !== 'undefined' && localStorage.getItem('heshyPortalToken')) || '';
 let portalShowCardForm = false;
+let portalCardAddr = { line1:'', city:'', zip:'' };
+function portalCardAddrComplete(){
+  return !!(portalCardAddr.line1.trim() && portalCardAddr.city.trim() && portalCardAddr.zip.trim());
+}
 let portalCardError = '';
 let portalCardSaving = false;
 let portalCancellingId = null;
@@ -1329,7 +1341,15 @@ async function confirmBooking(){
     const result = await stripe.confirmCardSetup(setupData.clientSecret, {
       payment_method: {
         card: cardElement,
-        billing_details: { name: clientForm.name, email: clientForm.email, phone: clientForm.phone }
+        billing_details: {
+          name: clientForm.name, email: clientForm.email, phone: clientForm.phone,
+          address: {
+            line1: clientForm.addrLine1.trim(),
+            city: clientForm.addrCity.trim(),
+            postal_code: clientForm.addrZip.trim(),
+            country: 'US'
+          }
+        }
       }
     });
     if(result.error){ throw new Error(result.error.message); }
@@ -2128,7 +2148,9 @@ function portalLogout(){
 function portalBookAgain(){
   view = 'client'; history.replaceState(null, '', '#');
   bookingStep = 1; selectedStartTime = null;
-  clientForm = { name: portalClient.name, email: portalEmail, phone: portalClient.phone||'', intakeAnswers: [], wgPdfName:'', wgPdfData:'', checkedEmail:'', isNew:false, blocked:false };
+  clientForm = { name: portalClient.name, email: portalEmail, phone: portalClient.phone||'',
+                 addrLine1:'', addrCity:'', addrZip:'',
+                 intakeAnswers: [], wgPdfName:'', wgPdfData:'', checkedEmail:'', isNew:false, blocked:false, couponCode:'' };
   render();
 }
 function goToPortal(){
@@ -2323,8 +2345,15 @@ function renderPortal(){
     ` : `
       <div id="portal-card-element" style="padding:12px;border:1px solid var(--line-strong);border-radius:6px;"></div>
       <div class="card-error" id="portal-card-error">${portalCardError}</div>
+      <!-- Sent to the bank with the card, same as at booking. Someone replacing a card here has
+           usually just had one declined, so the address check matters more, not less. -->
+      <input type="text" id="p-addr1" placeholder="Street address" autocomplete="billing address-line1" style="margin-top:10px;" value="${esc(portalCardAddr.line1)}">
+      <div class="row2" style="margin-top:10px;">
+        <input type="text" id="p-city" placeholder="City" autocomplete="billing address-level2" value="${esc(portalCardAddr.city)}">
+        <input type="text" id="p-zip" placeholder="ZIP" autocomplete="billing postal-code" value="${esc(portalCardAddr.zip)}">
+      </div>
       <div style="display:flex;gap:8px;margin-top:12px;">
-        <button class="primary small" id="portal-save-card-btn" ${portalCardSaving?'disabled':''}>${portalCardSaving?'Saving…':'Save new card'}</button>
+        <button class="primary small" id="portal-save-card-btn" ${(portalCardSaving || !portalCardAddrComplete())?'disabled':''}>${portalCardSaving?'Saving…':'Save new card'}</button>
         <button class="ghost small" id="portal-cancel-card-btn">Cancel</button>
       </div>
     `}
@@ -2482,15 +2511,25 @@ function renderClient(){
         <label>Card</label>
         <div id="card-element" class="stripe-el"></div>
         <div id="card-error" class="card-error"></div>
+        <!-- The billing address is sent to the bank with the card. Without a street line the
+             address check can only ever half-match, which counts against a large charge later. -->
+        <label>Billing address <span class="required-mark">*</span></label>
+        <input type="text" id="f-addr1" placeholder="Street address" autocomplete="billing address-line1" value="${esc(clientForm.addrLine1)}">
+        <div class="row2" style="margin-top:10px;">
+          <input type="text" id="f-city" placeholder="City" autocomplete="billing address-level2" value="${esc(clientForm.addrCity)}">
+          <input type="text" id="f-zip" placeholder="ZIP" autocomplete="billing postal-code" value="${esc(clientForm.addrZip)}">
+        </div>
+        <div class="note" style="margin-top:7px;">The address your card is registered to. Your bank checks it against the card.</div>
       </div>
       <div style="font-size:12.5px;color:var(--muted);margin-top:18px;line-height:1.6;">
         Sessions are sometimes recorded so Heshy can focus on the conversation and send you a written recap &mdash;
         he'll always tell you first, and you can say no.
         <a href="/privacy.html" target="_blank" rel="noopener" style="color:var(--ink);">How your information is handled</a>.
+        <div style="margin-top:8px;">Booking a session means you accept the <a href="/terms.html" target="_blank" rel="noopener" style="color:var(--ink);">terms</a>.</div>
       </div>
       <div class="btn-row">
         <button class="ghost" id="backTo1" ${submitting?'disabled':''}>Back</button>
-        <button class="primary" id="confirmBtn" ${(clientForm.name && clientForm.email && clientForm.phone && cardComplete && !submitting && !isCurrentEmailBlocked()) ? '' : 'disabled'}>${submitting?'Booking…':'Book session'}</button>
+        <button class="primary" id="confirmBtn" ${(bookingFormReady() && !submitting && !isCurrentEmailBlocked()) ? '' : 'disabled'}>${submitting?'Booking…':'Book session'}</button>
       </div>
     `;
   } else {
@@ -3631,9 +3670,28 @@ function mountPortalCardElementIfNeeded(){
     });
   }
 }
+// Same rule as submitPayment(): no render() while the Stripe card field is mounted.
+//
+// mountPortalCardElementIfNeeded() builds a NEW element whenever the host node is empty, so a
+// render() here threw away the field the client had filled in and handed Stripe the fresh empty
+// one in its place. Saving a new card could never work — which is exactly what the decline email
+// tells a client to come here and do.
+function setPortalCardSaving(on){
+  portalCardSaving = on;
+  const btn = document.getElementById('portal-save-card-btn');
+  if(!btn) return;
+  btn.disabled = on || !portalCardAddrComplete();
+  btn.textContent = on ? 'Saving…' : 'Save new card';
+}
+function showPortalCardError(msg){
+  portalCardError = msg;
+  const el = document.getElementById('portal-card-error');
+  if(el) el.textContent = msg;
+}
+
 async function savePortalCard(){
   if(!portalCardElement) return;
-  portalCardSaving = true; portalCardError = ''; render();
+  setPortalCardSaving(true); showPortalCardError('');
   try{
     // The portal session identifies who this is, so the server makes the SetupIntent against
     // their own Stripe customer. The page never sees or sends a customer id.
@@ -3643,21 +3701,37 @@ async function savePortalCard(){
       body: JSON.stringify({ action: 'start-card-update', token: portalToken })
     });
     const setupData = await setupRes.json();
-    if(setupData.error){ portalCardError = setupData.error; portalCardSaving = false; render(); return; }
-    const result = await stripe.confirmCardSetup(setupData.clientSecret, { payment_method: { card: portalCardElement } });
-    if(result.error){ portalCardError = result.error.message; portalCardSaving = false; render(); return; }
+    if(setupData.error){ showPortalCardError(setupData.error); setPortalCardSaving(false); return; }
+    const result = await stripe.confirmCardSetup(setupData.clientSecret, {
+      payment_method: {
+        card: portalCardElement,
+        billing_details: {
+          name: portalClient?.name || undefined,
+          email: portalEmail || undefined,
+          address: {
+            line1: portalCardAddr.line1.trim(),
+            city: portalCardAddr.city.trim(),
+            postal_code: portalCardAddr.zip.trim(),
+            country: 'US'
+          }
+        }
+      }
+    });
+    if(result.error){ showPortalCardError(result.error.message); setPortalCardSaving(false); return; }
     const confirmRes = await fetch('/api/portal-lookup', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ action: 'confirm-card-update', token: portalToken, paymentMethodId: result.setupIntent.payment_method })
     });
     const confirmData = await confirmRes.json();
-    if(confirmData.error){ portalCardError = confirmData.error; portalCardSaving = false; render(); return; }
+    if(confirmData.error){ showPortalCardError(confirmData.error); setPortalCardSaving(false); return; }
+    // Safe to re-render now: the card field has done its job and is being thrown away.
     portalCardSaving = false; portalShowCardForm = false; portalCardError = '';
+    portalCardAddr = { line1:'', city:'', zip:'' };
     render();
   }catch(e){
-    portalCardError = 'Something went wrong. Please try again.';
-    portalCardSaving = false; render();
+    showPortalCardError('Something went wrong. Please try again.');
+    setPortalCardSaving(false);
   }
 }
 
@@ -3753,8 +3827,19 @@ function attachHandlers(){
   if(portalStartStrengths) portalStartStrengths.onclick = ()=> openStrengths('portal', null);
   const portalRetakeStrengths = $('portal-retake-strengths');
   if(portalRetakeStrengths) portalRetakeStrengths.onclick = ()=> openStrengths('portal', null);
-  const portalUpdateCardBtn = $('portal-update-card-btn'); if(portalUpdateCardBtn) portalUpdateCardBtn.onclick = ()=>{ portalShowCardForm = true; portalCardError=''; render(); };
-  const portalCancelCardBtn = $('portal-cancel-card-btn'); if(portalCancelCardBtn) portalCancelCardBtn.onclick = ()=>{ portalShowCardForm = false; portalCardError=''; render(); };
+  const portalUpdateCardBtn = $('portal-update-card-btn'); if(portalUpdateCardBtn) portalUpdateCardBtn.onclick = ()=>{ portalShowCardForm = true; portalCardError=''; portalCardAddr = { line1:'', city:'', zip:'' }; render(); };
+  const portalCancelCardBtn = $('portal-cancel-card-btn'); if(portalCancelCardBtn) portalCancelCardBtn.onclick = ()=>{ portalShowCardForm = false; portalCardError=''; portalCardAddr = { line1:'', city:'', zip:'' }; render(); };
+  // Typing the address must not re-render, or the Stripe card element would be torn off its
+  // mount and whatever they had typed into it would be lost.
+  const pAddrMap = {'p-addr1':'line1','p-city':'city','p-zip':'zip'};
+  Object.keys(pAddrMap).forEach(id=>{
+    const el = $(id);
+    if(el) el.oninput = e=>{
+      portalCardAddr[pAddrMap[id]] = e.target.value;
+      const save = $('portal-save-card-btn');
+      if(save && !portalCardSaving) save.disabled = !portalCardAddrComplete();
+    };
+  });
   document.querySelectorAll('[data-start-cancel]').forEach(el=>{ el.onclick = ()=>{ portalCancellingId = el.getAttribute('data-start-cancel'); portalCancelError=''; render(); }; });
   document.querySelectorAll('[data-abort-cancel]').forEach(el=>{ el.onclick = ()=>{ portalCancellingId = null; portalCancelError=''; render(); }; });
   document.querySelectorAll('[data-confirm-cancel]').forEach(el=>{ el.onclick = ()=>{ submitPortalCancel(el.getAttribute('data-confirm-cancel')); }; });
@@ -3793,7 +3878,8 @@ function attachHandlers(){
     const clientCalShowFewer = $('clientCalShowFewer'); if(clientCalShowFewer) clientCalShowFewer.onclick = ()=>{ clientCalWeeksShown = 2; selectedDay = null; render(); };
     const to2 = $('toStep2'); if(to2) to2.onclick = ()=>goStep(2);
     const back1 = $('backTo1'); if(back1) back1.onclick = ()=>goStep(1);
-    const map = {'f-name':'name','f-email':'email','f-phone':'phone'};
+    const map = {'f-name':'name','f-email':'email','f-phone':'phone',
+                 'f-addr1':'addrLine1','f-city':'addrCity','f-zip':'addrZip'};
     Object.keys(map).forEach(id=>{
       const el = $(id);
       if(el) el.oninput = e=>{
@@ -4420,16 +4506,37 @@ function mountPayCard(){
   });
 }
 
+// NOTE: nothing in here may call render() while the card field is mounted.
+//
+// render() rebuilds the whole page, which destroys the iframe the client typed their card into.
+// mountPayCard() then put a brand-new EMPTY field in its place and pointed `payCard` at it — so
+// the card handed to Stripe was the empty one, not the one they filled in, and paying was
+// impossible. The busy state and the error line are therefore written straight into the existing
+// DOM, and the page is only re-rendered once the card field is finished with.
+function setPayBusy(on){
+  payBusy = on;
+  const btn = document.getElementById('pay-submit');
+  if(!btn) return;
+  btn.disabled = on;
+  const amt = payInfo && payInfo.amount != null ? money(payInfo.amount) : '';
+  btn.textContent = on ? 'Paying…' : 'Pay ' + amt;
+}
+function showPayError(msg){
+  payError = msg;
+  const el = document.getElementById('pay-error');
+  if(el) el.textContent = msg;
+}
+
 async function submitPayment(){
   if(payBusy || !payCard) return;
-  payBusy = true; payError = ''; render(); mountPayCard();
+  setPayBusy(true); showPayError('');
   try{
     const r = await fetch('/api/create-setup-intent', {
       method:'POST', headers:{'Content-Type':'application/json'},
       body: JSON.stringify({ action:'pay-intent', token: payToken })
     });
     const data = await r.json();
-    if(data.error){ payError = data.error; payBusy = false; render(); mountPayCard(); return; }
+    if(data.error){ showPayError(data.error); setPayBusy(false); return; }
 
     // The cardholder is here, so the bank may ask them to confirm — which is the entire reason
     // this link exists. confirmCardPayment handles that step.
@@ -4437,8 +4544,9 @@ async function submitPayment(){
       payment_method: { card: payCard }
     });
     if(result.error){
-      payError = result.error.message || 'That payment did not go through.';
-      payBusy = false; render(); mountPayCard(); return;
+      showPayError(result.error.message || 'That payment did not go through.');
+      setPayBusy(false);
+      return;
     }
     // Reported to the server, which re-reads the payment from Stripe rather than taking the
     // browser's word for it.
@@ -4446,10 +4554,11 @@ async function submitPayment(){
       method:'POST', headers:{'Content-Type':'application/json'},
       body: JSON.stringify({ action:'pay-confirm', token: payToken, paymentIntentId: result.paymentIntent.id })
     });
-    payStage = 'done'; payBusy = false; payCard = null; payElements = null; render();
+    // Safe to re-render now: the card field has done its job and is being thrown away.
+    payStage = 'done'; payBusy = false; payError = ''; payCard = null; payElements = null; render();
   }catch(e){
-    payError = 'Something went wrong. Nothing has been charged — please try again.';
-    payBusy = false; render(); mountPayCard();
+    showPayError('Something went wrong. Nothing has been charged — please try again.');
+    setPayBusy(false);
   }
 }
 
@@ -4483,7 +4592,8 @@ function renderPay(){
       <label style="margin-top:20px;display:block;">Card details</label>
       <div id="pay-card" class="card-box"></div>
       <div id="pay-card-error" class="card-error"></div>
-      ${payError?`<div class="card-error">${esc(payError)}</div>`:''}
+      <!-- Always present so showPayError() can write into it without a re-render. -->
+      <div id="pay-error" class="card-error">${esc(payError)}</div>
       <button class="primary" id="pay-submit" style="margin-top:16px;width:100%;" ${payBusy?'disabled':''}>${payBusy?'Paying…':'Pay '+amt}</button>
       <div class="note" style="margin-top:12px;text-align:center;">Your bank may ask you to confirm this payment. Payments are handled by Stripe; the card details never reach this site.</div>`;
   }

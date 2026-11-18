@@ -351,9 +351,13 @@ async function handleStartCardUpdate(req, res) {
         c.stripeCustomerId = customer.id;
       });
     }
+    // Same as the booking form: the card is being saved for charges run later, when the client
+    // isn't there, so say so. 3-D Secure is deliberately not forced here either — see the note in
+    // create-setup-intent.js.
     const setupIntent = await stripe.setupIntents.create({
       customer: customer.id,
-      payment_method_types: ['card']
+      payment_method_types: ['card'],
+      usage: 'off_session'
     });
     res.status(200).json({ clientSecret: setupIntent.client_secret });
   } catch (err) {

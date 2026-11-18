@@ -164,9 +164,22 @@ export default async function handler(req, res) {
     const data = (await kv.get('app-data')) || { clients: [] };
     const { customer } = await resolveCustomer(data, { name, email, phone });
 
+    // `usage: 'off_session'` states outright that this card is being kept for charges Heshy runs
+    // later, when the client isn't present. It is what the card is actually for, and saying so
+    // is free.
+    //
+    // Forcing 3-D Secure here — payment_method_options: { card: { request_three_d_secure: 'any' } }
+    // — was considered and deliberately left off. It would make the bank verify the cardholder at
+    // booking, so later charges reference an authenticated mandate. But US issuers rarely require
+    // it, almost no US site asks for it, and it costs every client an extra step at the moment
+    // they are trying to book. The do_not_honor declines that prompted it turned out to be a
+    // first-time-merchant fraud flag the cardholder cleared himself, on top of a pay page that
+    // couldn't take a payment at all. Fix the real faults first. If declines continue once clients
+    // can actually pay, add that one line.
     const setupIntent = await stripe.setupIntents.create({
       customer: customer.id,
-      payment_method_types: ['card']
+      payment_method_types: ['card'],
+      usage: 'off_session'
     });
     const setupToken = await issueSetupToken(customer.id, email);
 
