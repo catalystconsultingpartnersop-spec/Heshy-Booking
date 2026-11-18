@@ -522,6 +522,27 @@
     border-radius:3px;padding:2px 6px;margin-left:6px;vertical-align:1px;}
   .pay-pill.paid{background:#EAF4EC;color:#196F3D;}
   .pay-pill.owed{background:#FBF0D9;color:#8A6300;}
+  .pay-pill.off{background:#F0F0F0;color:#5A5A5A;}
+  .pay-main{flex:1;min-width:0;}
+  .pay-right{display:flex;align-items:center;gap:10px;flex-shrink:0;}
+  .pay-who.struck, .pay-amt.struck{color:var(--muted);}
+  .pay-dots{border:1px solid var(--line-strong);background:none;border-radius:5px;width:30px;height:28px;
+    font-size:14px;line-height:1;color:var(--muted);font-family:inherit;cursor:pointer;}
+  .pay-dots:hover{border-color:var(--ink);color:var(--ink);}
+  .pay-menu{position:relative;}
+  .pay-menu-pop{position:absolute;right:0;top:32px;background:var(--paper);border:1px solid var(--line-strong);
+    border-radius:7px;box-shadow:0 6px 22px rgba(0,0,0,.10);width:230px;padding:5px;z-index:20;text-align:left;}
+  .pay-menu-pop > div{padding:9px 11px;font-size:13.5px;border-radius:5px;cursor:pointer;}
+  .pay-menu-pop > div:hover{background:#F4F4F2;}
+  .pay-menu-pop .pay-menu-sep{height:1px;background:var(--line);margin:4px 2px;padding:0;cursor:default;}
+  .pay-menu-pop .pay-menu-sep:hover{background:var(--line);}
+  .pay-menu-pop .danger{color:#8C2F27;}
+  .pay-note{margin-top:7px;font-size:12.5px;color:#5C5244;background:#FAF9F6;
+    border-left:3px solid #C9A961;border-radius:4px;padding:7px 10px;line-height:1.5;white-space:pre-wrap;}
+  .pay-note-edit{margin-top:9px;}
+  .pay-note-input{width:100%;min-height:62px;padding:9px 11px;border:1px solid var(--line-strong);
+    border-radius:5px;font-family:inherit;font-size:13.5px;line-height:1.5;resize:vertical;
+    background:var(--paper);color:var(--ink);}
 
   /* The confirmation after a charge goes through */
   .charged-banner{border:1px solid #BFE0C7;background:#F4FAF5;border-radius:8px;
@@ -867,6 +888,10 @@ let resendState = null;   // { id, busy, ok, message }
 // The confirmation shown after a charge goes through. A charge used to succeed silently: the
 // session left the list and nothing said it had worked.
 let chargeDone = null;    // { id, amount, name, email }
+// Payments rows: which row's menu is open, and the note being written.
+let payMenuOpen = null;    // booking id
+let payNoteEditing = null; // booking id
+let payNoteDraft = '';
 // Hours typed into the billing box, kept here so a re-render doesn't throw them away. Typing
 // "2" and then touching anything else used to reset the box to whatever the timer had recorded,
 // which for an in-person session was usually nonsense or nothing.
@@ -3357,7 +3382,14 @@ function renderAdmin(){
     const hasHappened = b => b.date < todayDs ||
       (b.date === todayDs && (timeToMinC(b.time) + (b.durationMin||60)) <= nowMins);
     const owing = state.bookings
-      .filter(b => !b.cancelled && b.status!=='charged' && !b.comped && hasHappened(b))
+      .filter(b => !b.cancelled && b.status!=='charged' && !b.comped && !b.writtenOff && hasHappened(b))
+      .sort((a,b) => b.date.localeCompare(a.date) || b.time.localeCompare(a.time));
+
+    // Written off: still on the page, still in the records, just not money anyone is waiting for.
+    // Test bookings from building the app were sitting in Awaiting payment permanently, adding
+    // $155 to what Heshy was owed.
+    const writtenOff = state.bookings
+      .filter(b => b.writtenOff && b.status!=='charged')
       .sort((a,b) => b.date.localeCompare(a.date) || b.time.localeCompare(a.time));
 
     const owedAmount = owing.reduce((sum,b) => {
@@ -3370,6 +3402,38 @@ function renderAdmin(){
 
     const monthName = ds => new Date(ds+'T00:00:00').toLocaleDateString('en-US',{ month:'long', year:'numeric' });
 
+    // The menu and the note, shared by every kind of row. Opening the menu or editing a note must
+    // not fall through to the row's own click, which would navigate away mid-edit.
+    const dueFor = b => {
+      const mins = b.actualMinutes || b.durationMin || 60;
+      const hrs = Math.round((mins/60)*100)/100;
+      return Math.round(hrs * (state.settings.hourlyRate||500) * 100)/100;
+    };
+    const rowExtras = (b, kind) => {
+      const menu = payMenuOpen === b.id ? `
+        <div class="pay-menu-pop">
+          <div data-pay-note="${b.id}">${b.payNote ? 'Edit the note' : 'Add a note'}</div>
+          <div data-pay-open="${b.id}">Open the session</div>
+          ${kind === 'owing' ? `<div class="pay-menu-sep"></div><div class="danger" data-pay-writeoff="${b.id}">Write off &mdash; not billable</div>` : ''}
+          ${kind === 'written' ? `<div class="pay-menu-sep"></div><div data-pay-restore="${b.id}">Put back in awaiting payment</div>` : ''}
+          ${b.payNote ? `<div class="pay-menu-sep"></div><div class="danger" data-pay-note-clear="${b.id}">Remove the note</div>` : ''}
+        </div>` : '';
+      return `<div class="pay-menu"><button class="pay-dots" data-pay-menu="${b.id}" aria-label="More">&middot;&middot;&middot;</button>${menu}</div>`;
+    };
+    const noteFor = b => {
+      if(payNoteEditing === b.id){
+        return `
+          <div class="pay-note-edit">
+            <textarea class="pay-note-input" data-pay-note-input="${b.id}" placeholder="A note for yourself. The client never sees this.">${esc(payNoteDraft)}</textarea>
+            <div style="margin-top:8px;display:flex;gap:8px;">
+              <button class="primary small" data-pay-note-save="${b.id}">Save note</button>
+              <button class="ghost small" data-pay-note-cancel="1">Cancel</button>
+            </div>
+          </div>`;
+      }
+      return b.payNote ? `<div class="pay-note">${esc(b.payNote)}</div>` : '';
+    };
+
     let rows = '';
     if(owing.length){
       rows += `<div class="pay-month">Awaiting payment</div>`;
@@ -3379,12 +3443,13 @@ function renderAdmin(){
         const due = Math.round(hrs * (state.settings.hourlyRate||500) * 100)/100;
         const told = b.declineEmail && b.declineEmail.sentAt;
         rows += `
-          <div class="pay-row" data-view-booking="${b.id}">
-            <div>
+          <div class="pay-row">
+            <div class="pay-main" data-view-booking="${b.id}">
               <div class="pay-who">${esc(b.clientName||'Client')} ${b.lastDeclineCode?`<span class="pay-pill owed">${told?'Link sent':'Card declined'}</span>`:`<span class="pay-pill owed">Not charged</span>`}</div>
               <div class="pay-sub">${fmtDate(b.date)} &middot; ${mins} min &middot; ${b.type==='virtual'?'online':'in person'}${told?` &middot; emailed ${fmtStamp(b.declineEmail.sentAt)}`:''}</div>
+              ${noteFor(b)}
             </div>
-            <div class="pay-amt">${money(due)}</div>
+            <div class="pay-right"><span class="pay-amt">${money(due)}</span>${rowExtras(b,'owing')}</div>
           </div>`;
       });
     }
@@ -3395,14 +3460,31 @@ function renderAdmin(){
       if(m !== lastMonth){ lastMonth = m; rows += `<div class="pay-month">${monthName(b.date)}</div>`; }
       const mins = b.actualMinutes || b.durationMin || 60;
       rows += `
-        <div class="pay-row" data-view-booking="${b.id}">
-          <div>
+        <div class="pay-row">
+          <div class="pay-main" data-view-booking="${b.id}">
             <div class="pay-who">${esc(b.clientName||'Client')} <span class="pay-pill paid">Paid</span></div>
             <div class="pay-sub">${fmtDate(b.date)}${b.chargedAt?`, ${fmtStamp(b.chargedAt)}`:''} &middot; ${mins} min${b.amountOverridden?' &middot; amount edited':''}${b.couponCode?` &middot; ${esc(b.couponCode)}`:''}</div>
+            ${noteFor(b)}
           </div>
-          <div class="pay-amt">${money(b.amount||0)}</div>
+          <div class="pay-right"><span class="pay-amt">${money(b.amount||0)}</span>${rowExtras(b,'paid')}</div>
         </div>`;
     });
+
+    if(writtenOff.length){
+      rows += `<div class="pay-month">Written off</div>`;
+      writtenOff.forEach(b => {
+        const mins = b.actualMinutes || b.durationMin || 60;
+        rows += `
+          <div class="pay-row">
+            <div class="pay-main" data-view-booking="${b.id}">
+              <div class="pay-who struck">${esc(b.clientName||'Client')} <span class="pay-pill off">Written off</span></div>
+              <div class="pay-sub">${fmtDate(b.date)} &middot; ${mins} min &middot; ${b.type==='virtual'?'online':'in person'}</div>
+              ${noteFor(b)}
+            </div>
+            <div class="pay-right"><span class="pay-amt struck">${money(dueFor(b))}</span>${rowExtras(b,'written')}</div>
+          </div>`;
+      });
+    }
 
     if(!rows) rows = `<div class="note" style="padding:24px 0;">Nothing billed yet. Charges will appear here as you make them.</div>`;
 
@@ -4405,6 +4487,70 @@ function attachHandlers(){
     document.querySelectorAll('[data-resend-decline]').forEach(el=>{ el.onclick = ()=>resendDeclineEmail(el.getAttribute('data-resend-decline')); });
     document.querySelectorAll('[data-dismiss-charged]').forEach(el=>{ el.onclick = ()=>{ chargeDone = null; render(); }; });
     document.querySelectorAll('[data-go-payments]').forEach(el=>{ el.onclick = ev=>{ ev.preventDefault(); chargeDone = null; adminView = 'payments'; render(); }; });
+    // --- Payments row menu ---------------------------------------------------------------------
+    // Clicking anywhere else closes an open menu, the way a menu is expected to behave.
+    if(payMenuOpen){
+      document.addEventListener('click', function closePayMenu(){
+        document.removeEventListener('click', closePayMenu);
+        if(payMenuOpen){ payMenuOpen = null; render(); }
+      }, { once: false });
+    }
+    document.querySelectorAll('[data-pay-menu]').forEach(el=>{ el.onclick = ev=>{
+      ev.stopPropagation();
+      const id = el.getAttribute('data-pay-menu');
+      payMenuOpen = (payMenuOpen === id) ? null : id;
+      payNoteEditing = null;
+      render();
+    }; });
+    document.querySelectorAll('[data-pay-note]').forEach(el=>{ el.onclick = ev=>{
+      ev.stopPropagation();
+      const id = el.getAttribute('data-pay-note');
+      const b = state.bookings.find(x=>x.id===id);
+      payNoteDraft = (b && b.payNote) || '';
+      payNoteEditing = id; payMenuOpen = null;
+      render();
+      const input = document.querySelector(`[data-pay-note-input="${id}"]`);
+      if(input){ input.focus(); input.setSelectionRange(input.value.length, input.value.length); }
+    }; });
+    document.querySelectorAll('[data-pay-note-input]').forEach(el=>{ el.oninput = e=>{ payNoteDraft = e.target.value; }; });
+    document.querySelectorAll('[data-pay-note-save]').forEach(el=>{ el.onclick = async ev=>{
+      ev.stopPropagation();
+      const id = el.getAttribute('data-pay-note-save');
+      const text = payNoteDraft.trim();
+      payNoteEditing = null; payNoteDraft = '';
+      await updateBooking(id, { payNote: text || undefined });
+    }; });
+    document.querySelectorAll('[data-pay-note-cancel]').forEach(el=>{ el.onclick = ev=>{
+      ev.stopPropagation(); payNoteEditing = null; payNoteDraft = ''; render();
+    }; });
+    document.querySelectorAll('[data-pay-note-clear]').forEach(el=>{ el.onclick = async ev=>{
+      ev.stopPropagation();
+      const id = el.getAttribute('data-pay-note-clear');
+      payMenuOpen = null;
+      await updateBooking(id, { payNote: undefined });
+    }; });
+    // Writing off never deletes anything: the session keeps its record and moves to its own
+    // heading, and stops being counted as money owed.
+    document.querySelectorAll('[data-pay-writeoff]').forEach(el=>{ el.onclick = async ev=>{
+      ev.stopPropagation();
+      const id = el.getAttribute('data-pay-writeoff');
+      payMenuOpen = null;
+      await updateBooking(id, { writtenOff: true, writtenOffAt: Date.now() });
+    }; });
+    document.querySelectorAll('[data-pay-restore]').forEach(el=>{ el.onclick = async ev=>{
+      ev.stopPropagation();
+      const id = el.getAttribute('data-pay-restore');
+      payMenuOpen = null;
+      await updateBooking(id, { writtenOff: undefined, writtenOffAt: undefined });
+    }; });
+    document.querySelectorAll('[data-pay-open]').forEach(el=>{ el.onclick = ev=>{
+      ev.stopPropagation();
+      const id = el.getAttribute('data-pay-open');
+      payMenuOpen = null;
+      const main = document.querySelector(`[data-view-booking="${id}"]`);
+      if(main) main.click();
+    }; });
+
     // A row in Payments opens the session it belongs to, so a figure can always be traced back.
     document.querySelectorAll('[data-view-booking]').forEach(el=>{ el.onclick = ()=>{
       const id = el.getAttribute('data-view-booking');
