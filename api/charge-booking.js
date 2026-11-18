@@ -277,6 +277,11 @@ export default async function handler(req, res) {
       // this; sessions charged before it existed fall back to their own date.
       b.chargedAt = chargedAt;
       if (overridden) b.amountOverridden = true;
+      // The session is paid, so an earlier decline is history rather than an outstanding
+      // problem. Left in place, it kept a red "card was declined" flag on a session that had
+      // just been paid for. Kept for the record under a different name.
+      if (b.lastDeclineCode) { b.clearedDeclineCode = b.lastDeclineCode; delete b.lastDeclineCode; }
+      if (b.declineEmail) { b.declineEmail.problem = false; }
     });
 
     try {

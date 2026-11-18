@@ -534,6 +534,8 @@
   .charged-banner-links a{color:#146034;}
   .charged-banner-x{position:absolute;top:10px;right:12px;background:none;border:none;
     font-size:19px;line-height:1;color:#6E8C76;cursor:pointer;font-family:inherit;padding:2px 5px;}
+  /* The same confirmation, on the session itself where the button was pressed. */
+  .charged-inline{border:1px solid #BFE0C7;background:#F4FAF5;border-radius:7px;padding:14px 16px;}
   .charge-hint{
     margin-bottom:10px;padding:10px 13px;background:#FAF9F6;border-left:3px solid #C9A961;
     border-radius:4px;font-size:13px;line-height:1.6;color:var(--muted);
@@ -1828,8 +1830,13 @@ async function chargeAndReceipt(id){
       email: charged ? (charged.clientEmail || '') : ''
     };
     resendState = null;
+    // Keep the session open and in view. Re-rendering otherwise jumped the page, leaving the old
+    // red decline box on screen and the confirmation somewhere above it.
+    expandedSessions[id] = true;
     await loadAdminState();
     render();
+    const node = document.querySelector(`[data-toggle-session="${id}"]`);
+    if(node) node.scrollIntoView({ block:'center', behavior:'smooth' });
   }catch(e){
     chargeProblem = { id, message: 'Could not reach the server: ' + e.message, next: 'Check your connection and try again. Nothing was charged.', retryable: true };
     restore(); render();
@@ -2990,7 +2997,18 @@ function renderAdmin(){
         </div>
     `;
     let action = '';
-    if(b.status!=='charged' && !b.cancelled){
+    // The confirmation belongs where the button was pressed. It also appears as a banner at the
+    // top of Manage, but Heshy is looking at the session, and after a charge the page had only
+    // the old red decline box in view while the good news sat off-screen above.
+    if(chargeDone && chargeDone.id === b.id){
+      action = `
+        <div class="charged-inline">
+          <div class="charged-banner-top"><span class="charged-tick">&#10003;</span> Charged ${money(chargeDone.amount)}</div>
+          <div class="charged-banner-line">${chargeDone.email?`Receipt emailed to ${esc(chargeDone.email)}`:'Charged successfully.'}</div>
+          <div class="charged-banner-links"><a href="#" data-go-payments="1">See it in Payments</a></div>
+        </div>`;
+    }
+    else if(b.status!=='charged' && !b.cancelled){
       const actualMins = b.actualMinutes || b.durationMin;
       // A comped session never gets charge controls. It used to show the normal amount box and
       // a Charge button, so one wrong click billed a free session in full.
@@ -3101,7 +3119,16 @@ function renderAdmin(){
     // buried in the middle of it. Collapsed now, with whatever needs him stated on the closed row.
     const open = expandedSessions[b.id] === true;
     const needsBilling = !b.cancelled && b.status === 'scheduled' && b.date < dateStr(new Date());
-    const flag = b.declineEmail && b.declineEmail.problem
+    // Once a session has been paid, nothing about an earlier decline is still a problem. The
+    // red "card was declined" flag used to survive a successful charge, so a retry that worked
+    // still looked like a failure on the session itself.
+    // chargeDone is included deliberately: a session just charged in this session of Manage is
+    // settled whatever the reloaded record says. Relying on the reload alone meant a slow or
+    // failed refresh left the red flag sitting on a session that had in fact been paid.
+    const settled = b.status === 'charged' || b.cancelled || (chargeDone && chargeDone.id === b.id);
+    const flag = settled
+        ? null
+      : b.declineEmail && b.declineEmail.problem
         ? { bad: true, text: `Payment email ${String(b.declineEmail.status).toLowerCase()} \u2014 they never got it` }
       : b.lastDeclineCode
         ? { bad: true, text: 'Card was declined \u2014 not charged' }
