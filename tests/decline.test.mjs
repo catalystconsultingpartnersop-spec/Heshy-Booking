@@ -151,9 +151,32 @@ check('Manage is told what actually happened to that email', /clientEmailed: ema
 check('...rather than assuming it went', /return 'no-email'/.test(srv) && /return 'failed'/.test(srv));
 
 const page = readFileSync(new URL('../public/index.html', import.meta.url), 'utf8');
-check('Manage says when the client has been told', /The client has been emailed about it/.test(page));
+check('Manage says when the client has been told', /has been emailed about it/.test(page));
 check('...and says so plainly when they have not', /couldn't be told automatically/.test(page));
-check('...and does not claim a second email was sent', /already emailed about this/.test(page));
+check('...and does not claim a second email was sent', /was not emailed this time/.test(page));
+// The suppression is right by default and wrong when Heshy actually wants them chased, so the
+// override has to exist and has to be reachable from the decline itself.
+check('...and offers to send it again anyway', /data-resend-decline/.test(page));
+check('...which clears the once-per-reason block', /decline-notified:\$\{resendFor\}:\$\{code\}/.test(srv));
+check('...and refuses to chase a session that is already paid', /already been paid/.test(srv));
+
+// --- retrying a declined charge must actually reach the bank -------------------------------------
+//
+// This was live and serious. Stripe caches an idempotent response for 24 hours, so a key of
+// booking + amount + card meant pressing Charge again replayed the stored decline without
+// contacting the issuer: same red error, nothing new in Stripe's dashboard, and a card the
+// client had since cleared with their bank looked dead for a day. Retrying the NEXT day worked,
+// which is what made it look like the card rather than the code.
+check('the idempotency key counts the attempt', /idempotencyKey: `charge-\$\{booking\.id\}-\$\{amountCents\}-\$\{paymentMethodId\}-\$\{booking\.chargeAttempt \|\| 0\}`/.test(srv));
+check('...and the count moves on only after a decline',
+      /b\.chargeAttempt = \(b\.chargeAttempt \|\| 0\) \+ 1/.test(srv) &&
+      srv.indexOf('b.chargeAttempt = (b.chargeAttempt || 0) + 1') > srv.indexOf("err.type === 'StripeCardError'"));
+check('...so a charge that succeeded but was not recorded is never charged twice',
+      !/chargeAttempt[^\n]*\+ 1/.test(srv.slice(0, srv.indexOf('paymentIntents.create'))));
+check('Manage is told which attempt this was', /attempts/.test(srv) && /chargeProblem\.attempts/.test(page));
+
+// The link a client is sent must be on Heshy's own domain, not the deploy host.
+check('emails link to the real site', !/heshy-booking\.vercel\.app/.test(srv));
 
 console.log(`\n${pass} passed, ${fail} failed`);
 if (fail) { console.log('\nFAILURES:\n' + failures.map(f => '  ' + f).join('\n')); process.exit(1); }

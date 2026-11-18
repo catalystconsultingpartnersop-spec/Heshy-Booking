@@ -146,7 +146,7 @@ export function rescheduledEmail(booking, previous, settings, how = {}) {
 export function clientRescheduledAlertEmail(booking, previous) {
   const now = fmtEt(booking.date, booking.time);
   const was = fmtEt(previous.date, previous.time);
-  const baseUrl = process.env.SITE_URL || 'https://heshy-booking.vercel.app';
+  const baseUrl = process.env.SITE_URL || 'https://book.catalystconsultingnyc.com';
   return {
     subject: `${booking.clientName || 'A client'} moved their session — now ${now.date}, ${now.time}`,
     html: wrap(`
@@ -192,12 +192,12 @@ export function bookingConfirmationEmail(booking, settings) {
       <div style="margin-top:20px;font-family:Arial,sans-serif;font-size:13.5px;">
         <a href="${googleCalendarAddLink(booking, settings)}" style="color:#111111;text-decoration:underline;">Add to calendar</a>
         &middot;
-        <a href="${(process.env.SITE_URL || 'https://heshy-booking.vercel.app')}/#portal" style="color:#111111;text-decoration:underline;">View my sessions</a>
+        <a href="${(process.env.SITE_URL || 'https://book.catalystconsultingnyc.com')}/#portal" style="color:#111111;text-decoration:underline;">View my sessions</a>
       </div>
       <div style="margin-top:22px;padding-top:16px;border-top:1px solid #E6E6E6;font-family:Arial,sans-serif;font-size:12.5px;color:#6E6E6E;line-height:1.6;">
         Sessions are sometimes recorded so Heshy can focus on the conversation and send you a written recap.
         He'll always tell you first, and you can say no.
-        <a href="${(process.env.SITE_URL || 'https://heshy-booking.vercel.app')}/privacy.html" style="color:#111111;">How your information is handled</a>.
+        <a href="${(process.env.SITE_URL || 'https://book.catalystconsultingnyc.com')}/privacy.html" style="color:#111111;">How your information is handled</a>.
       </div>
     `)
   };
@@ -232,7 +232,7 @@ export function newBookingAlertEmail(booking, settings, client) {
       ? `Older Working Genius PDF on file: ${esc(wgPdfName)} &mdash; no strengths result entered yet (open the client to add them)`
       : `No strengths assessment on file for this client yet.`;
   const wgBlock = `<div style="margin-top:14px;font-family:Arial,sans-serif;font-size:13px;color:#6E6E6E;">${wgText}</div>`;
-  const baseUrl = process.env.SITE_URL || 'https://heshy-booking.vercel.app';
+  const baseUrl = process.env.SITE_URL || 'https://book.catalystconsultingnyc.com';
   const profileBlock = (client && client.id)
     ? `<div style="margin-top:18px;font-family:Arial,sans-serif;font-size:13.5px;">
          <a href="${baseUrl}/#manage/client/${encodeURIComponent(client.id)}" style="color:#111111;text-decoration:underline;">Open ${esc((booking.clientName || '').split(' ')[0] || 'client')}&rsquo;s profile</a>
@@ -284,7 +284,7 @@ export function receiptEmail(booking) {
  */
 export function chargeDeclinedEmail(booking, decline, settings = {}, payUrl = '') {
   const firstName = esc((booking.clientName || '').split(' ')[0]);
-  const baseUrl = process.env.SITE_URL || 'https://heshy-booking.vercel.app';
+  const baseUrl = process.env.SITE_URL || 'https://book.catalystconsultingnyc.com';
   const amount = '$' + (Number(decline.amount) || 0).toFixed(2);
   const mins = booking.actualMinutes || booking.durationMin || 60;
 
@@ -364,7 +364,7 @@ export function reminderEmail(booking, settings) {
       <div style="margin-top:20px;font-family:Arial,sans-serif;font-size:13.5px;">
         <a href="${googleCalendarAddLink(booking, settings)}" style="color:#111111;text-decoration:underline;">Add to calendar</a>
         &middot;
-        <a href="${(process.env.SITE_URL || 'https://heshy-booking.vercel.app')}/#portal" style="color:#111111;text-decoration:underline;">View my sessions</a>
+        <a href="${(process.env.SITE_URL || 'https://book.catalystconsultingnyc.com')}/#portal" style="color:#111111;text-decoration:underline;">View my sessions</a>
       </div>
     `)
   };
@@ -398,7 +398,7 @@ export function dailyDigestEmail(todayBookings, tomorrowBookings) {
  * client's invite token in it, so they can start without signing in or typing anything.
  */
 export function strengthsInviteEmail(client, token) {
-  const baseUrl = process.env.SITE_URL || 'https://heshy-booking.vercel.app';
+  const baseUrl = process.env.SITE_URL || 'https://book.catalystconsultingnyc.com';
   const link = `${baseUrl}/?strengths=${encodeURIComponent(token)}`;
   const firstName = (client.name || '').split(' ')[0];
   return {
@@ -444,7 +444,7 @@ export function cancellationEmail(booking, settings, how = {}) {
   const firstName = (booking.clientName || '').split(' ')[0];
   const byHeshy = how.by === 'heshy';
   const reason = (how.reason || '').trim();
-  const baseUrl = process.env.SITE_URL || 'https://heshy-booking.vercel.app';
+  const baseUrl = process.env.SITE_URL || 'https://book.catalystconsultingnyc.com';
   return {
     subject: `Cancelled — your session on ${when.date}`,
     html: wrap(`
@@ -482,7 +482,7 @@ export function cancellationEmail(booking, settings, how = {}) {
 /** Tells Heshy when a client cancels from their portal — otherwise he'd only find out by looking. */
 export function clientCancelledAlertEmail(booking) {
   const when = fmtEt(booking.date, booking.time);
-  const baseUrl = process.env.SITE_URL || 'https://heshy-booking.vercel.app';
+  const baseUrl = process.env.SITE_URL || 'https://book.catalystconsultingnyc.com';
   return {
     subject: `${booking.clientName || 'A client'} cancelled — ${when.date}, ${when.time}`,
     html: wrap(`
@@ -526,7 +526,7 @@ export function portalCodeEmail(client, code) {
 
 /** The one-time link that lets a client set or reset their portal password. */
 export function passwordSetupEmail(client, token, isReset) {
-  const baseUrl = process.env.SITE_URL || 'https://heshy-booking.vercel.app';
+  const baseUrl = process.env.SITE_URL || 'https://book.catalystconsultingnyc.com';
   const link = `${baseUrl}/?setpassword=${encodeURIComponent(token)}`;
   const firstName = (client.name || '').split(' ')[0];
   return {

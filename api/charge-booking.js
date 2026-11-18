@@ -97,12 +97,18 @@ async function notifyClientOfDecline(bookingId, d, err) {
     const first = await kv.set(seenKey, Date.now(), { nx: true, ex: 60 * 60 * 24 * 14 });
     if (!first) return 'already-sent';
 
-    const amountCents = err?.payment_intent?.amount ?? err?.raw?.payment_intent?.amount ?? null;
+    // The amount Stripe tried to take. When this is a deliberate re-send there is no Stripe error
+    // to read it from, so fall back to what the session is actually worth — never booking.amount,
+    // which is only set once something has been charged and would put $0.00 in the email.
+    let amountCents = err?.payment_intent?.amount ?? err?.raw?.payment_intent?.amount ?? null;
+    if (amountCents == null) {
+      try { amountCents = computeCharge(booking, data?.settings || {}).cents; } catch (e) { amountCents = null; }
+    }
     // A link the client can pay through themselves. For the declines this app actually sees —
     // a bank refusing a charge that arrives with no cardholder attached — this is the thing
     // that clears it, so the email leads with it rather than only offering a card swap.
     const payToken = await issuePayToken(bookingId).catch(() => null);
-    const baseUrl = process.env.SITE_URL || 'https://heshy-booking.vercel.app';
+    const baseUrl = process.env.SITE_URL || 'https://book.catalystconsultingnyc.com';
     const payUrl = payToken ? `${baseUrl}/#pay/${payToken}` : '';
     const mail = chargeDeclinedEmail(
       booking,
@@ -146,6 +152,29 @@ export default async function handler(req, res) {
   if (req.method !== 'POST') return res.status(405).json({ error: 'Method not allowed' });
   try {
     if (!(await verifyAdminToken(req))) return res.status(401).json({ error: 'Unauthorized' });
+
+    // Sending the decline email again, on purpose.
+    //
+    // The automatic one is capped at one per session per reason for a fortnight, so a client
+    // isn't emailed the same warning every time Heshy retries. That cap is right by default and
+    // wrong when he actually wants them chased, so this clears it and sends. No new serverless
+    // function: Vercel's Hobby plan allows twelve and the app is at twelve.
+    if (req.body?.action === 'resend-decline-email') {
+      const resendFor = req.body?.bookingId;
+      const data0 = await kv.get('app-data');
+      const b0 = (data0?.bookings || []).find(b => b.id === resendFor);
+      if (!b0) return res.status(404).json({ error: 'Booking not found' });
+      if (!b0.clientEmail) return res.status(400).json({ error: 'No email address on file for this client.' });
+      if (b0.status === 'charged') return res.status(400).json({ error: 'This session has already been paid.' });
+      const code = b0.lastDeclineCode || 'generic_decline';
+      await kv.del(`decline-notified:${resendFor}:${code}`);
+      const sent = await notifyClientOfDecline(resendFor, explainDecline({ decline_code: code }), null);
+      if (sent !== 'sent') {
+        return res.status(502).json({ error: "That email couldn't be sent. Try again in a moment.", state: sent });
+      }
+      return res.status(200).json({ ok: true, to: b0.clientEmail });
+    }
+
     const { bookingId, amount, actualMinutes } = req.body;
     const data = await kv.get('app-data');
     if (!data) return res.status(404).json({ error: 'No data found' });
@@ -211,11 +240,20 @@ export default async function handler(req, res) {
       receipt_email: booking.clientEmail,
       description: `Clarity session, ${mins} min, ${booking.date}`
     }, {
-      // Idempotency key tied to booking + amount + the specific card: an accidental double-submit
-      // (same card, same amount) can never double-charge, but if a charge is declined and the
-      // client saves a NEW card, the key changes and the retry genuinely attempts the new card
-      // instead of replaying Stripe's cached decline from the old one.
-      idempotencyKey: `charge-${booking.id}-${amountCents}-${paymentMethodId}`
+      // Idempotency key tied to booking + amount + card + which attempt this is.
+      //
+      // The attempt number is the part that was missing, and its absence was serious: Stripe
+      // caches an idempotent response for 24 hours, so pressing Charge again on the same session
+      // for the same amount on the same card replayed the stored decline WITHOUT CONTACTING THE
+      // BANK AT ALL. Heshy saw the identical red error, Stripe's dashboard showed no second
+      // attempt, and a card that had since been cleared with the issuer looked dead for a day.
+      // It also explains why a retry the following day worked: by then the key had expired.
+      //
+      // `chargeAttempt` only moves forward when an attempt is known to have been DECLINED (see
+      // the catch below). That keeps the protection the stable key was there for: if a charge
+      // succeeds at Stripe but recording it here fails, nothing increments, so a retry replays
+      // the success and records it rather than charging a second time.
+      idempotencyKey: `charge-${booking.id}-${amountCents}-${paymentMethodId}-${booking.chargeAttempt || 0}`
     });
 
     // The charge has already gone through at Stripe, so this must record it. Written under the
@@ -256,11 +294,26 @@ export default async function handler(req, res) {
     // different fixes, and Stripe tells us which one it is.
     if (err && err.type === 'StripeCardError') {
       const d = explainDecline(err);
+      // This attempt is spent. Moving the counter on is what lets the next press of Charge reach
+      // the bank instead of replaying this decline out of Stripe's idempotency cache.
+      let attempts = 1;
+      await mutate(fresh => {
+        const b = (fresh.bookings || []).find(x => x.id === req.body?.bookingId);
+        if (!b) return SKIP_WRITE;
+        b.chargeAttempt = (b.chargeAttempt || 0) + 1;
+        b.lastDeclineCode = d.code;
+        b.lastDeclineAt = Date.now();
+        attempts = b.chargeAttempt;
+      }).catch(() => {});
       // Tell the client themselves, rather than leaving Heshy to write that message. He asked
       // for this to be automatic; chasing payments is the part of the job he doesn't do.
       const emailed = await notifyClientOfDecline(req.body?.bookingId, d, err);
       return res.status(402).json({
-        error: d.message, reason: d.code, next: d.next, retryable: d.retryable, clientEmailed: emailed
+        error: d.message, reason: d.code, next: d.next, retryable: d.retryable,
+        clientEmailed: emailed,
+        // So Manage can say "2nd time" rather than showing an identical message twice, and can
+        // offer to email the client again when the automatic one was suppressed.
+        attempts
       });
     }
     res.status(500).json({ error: 'Something went wrong processing the charge. Please try again.' });

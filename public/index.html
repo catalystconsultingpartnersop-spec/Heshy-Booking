@@ -832,6 +832,9 @@ let reschedulingId = null;
 // The last failed charge, shown on the booking it belongs to. A decline used to appear in an
 // alert box, which took the reason with it the moment it was dismissed.
 let chargeProblem = null;
+// The result of a deliberate "email them again", kept per booking so the answer appears on the
+// session it belongs to rather than as an alert that vanishes.
+let resendState = null;   // { id, busy, ok, message }
 // Hours typed into the billing box, kept here so a re-render doesn't throw them away. Typing
 // "2" and then touching anything else used to reset the box to whatever the timer had recorded,
 // which for an in-person session was usually nonsense or nothing.
@@ -1050,6 +1053,22 @@ function fmtDate(d){
 function fmtDateLong(d){
   const dt = new Date(d+'T00:00:00');
   return dt.toLocaleDateString('en-US',{weekday:'long', month:'long', day:'numeric'});
+}
+// A moment in time, for things that happened rather than things that are scheduled: "18 Nov at
+// 1:52 PM". Takes a timestamp, where fmtDateLong above takes a YYYY-MM-DD string.
+function fmtStamp(ms){
+  const dt = new Date(ms);
+  if(isNaN(dt.getTime())) return '';
+  return dt.toLocaleDateString('en-US',{ month:'short', day:'numeric' })
+       + ' at ' + dt.toLocaleTimeString('en-US',{ hour:'numeric', minute:'2-digit' });
+}
+// Clients are referred to by first name in the places Heshy is reading quickly.
+function firstName(n){ return String(n||'').trim().split(/\s+/)[0] || 'the client'; }
+function ordinal(n){
+  const v = Number(n) || 0;
+  const tens = v % 100;
+  if(tens >= 11 && tens <= 13) return v + 'th';
+  return v + ({1:'st', 2:'nd', 3:'rd'}[v % 10] || 'th');
 }
 // Every time on this site is New York time. A client in another timezone had no way to know
 // that, so an 11:00 session could be read as 11:00 wherever they happened to be.
@@ -1757,7 +1776,9 @@ async function chargeAndReceipt(id){
     if(data.error){
       // Shown on the booking itself and left there, rather than in an alert box that vanishes
       // the moment it's dismissed and takes the reason with it.
-      chargeProblem = { id, message: data.error, next: data.next || '', retryable: data.retryable !== false, emailed: data.clientEmailed };
+      chargeProblem = { id, message: data.error, next: data.next || '', retryable: data.retryable !== false, emailed: data.clientEmailed, attempts: data.attempts || 1 };
+      // A fresh decline is its own event; whatever an earlier re-send said no longer applies.
+      resendState = null;
       restore(); render(); return;
     }
     // Only once it has actually been charged is the typed length no longer needed.
@@ -1769,6 +1790,30 @@ async function chargeAndReceipt(id){
     restore(); render();
   }
 }
+// Send the decline email again, on purpose.
+//
+// The automatic one is deliberately capped at one per session per reason, so retrying a charge
+// doesn't email the client every time. When Heshy does want them chased, this is the override.
+async function resendDeclineEmail(id){
+  if(resendState && resendState.busy) return;
+  resendState = { id, busy:true, ok:false, message:'' };
+  render();
+  try{
+    const res = await fetch('/api/charge-booking', {
+      method:'POST',
+      headers:{ 'Content-Type':'application/json', 'X-Admin-Token': adminToken },
+      body: JSON.stringify({ action:'resend-decline-email', bookingId: id })
+    });
+    const data = await res.json();
+    resendState = data && data.ok
+      ? { id, busy:false, ok:true,  message:`Sent to ${data.to}.` }
+      : { id, busy:false, ok:false, message: (data && data.error) || "That email couldn't be sent." };
+  }catch(e){
+    resendState = { id, busy:false, ok:false, message:'Could not reach the server: ' + e.message };
+  }
+  render();
+}
+
 async function skipCharge(id){
   if(!confirm('Mark this session complete without charging the card?')) return;
   await updateBooking(id, { status:'charged', amount:0 });
@@ -2967,14 +3012,19 @@ function renderAdmin(){
           <div class="note" style="margin-top:6px;">${isNaN(draftNum) ? 'Enter hours as 1.5 or 1:30.' : `Billing <strong>${minsShown} ${minsShown===1?'minute':'minutes'}</strong> at ${money(rate)}/hour.`}</div>
           ${chargeProblem && chargeProblem.id===b.id ? `
             <div class="charge-problem">
-              <div class="charge-problem-title">Not charged</div>
+              <div class="charge-problem-title">Not charged${chargeProblem.attempts>1?` &mdash; ${ordinal(chargeProblem.attempts)} time`:''}</div>
               <div class="charge-problem-msg">${esc(chargeProblem.message)}</div>
               ${chargeProblem.next?`<div class="charge-problem-next">${esc(chargeProblem.next)}</div>`:''}
-              ${b.declineEmail ? ''
-                : chargeProblem.emailed==='sent' ? `<div class="charge-problem-sent">The client has been emailed about it, with a link to update their card. You don't need to chase this.</div>`
-                : chargeProblem.emailed==='already-sent' ? `<div class="charge-problem-sent">The client was already emailed about this, so they haven't been emailed again.</div>`
+              <!-- Whether the client was told is always stated. It used to be hidden the moment a
+                   decline email existed on the booking, so a second decline showed an identical
+                   red box and no word about who, if anyone, had been contacted. -->
+              ${chargeProblem.emailed==='sent' ? `<div class="charge-problem-sent">${esc(firstName(b.clientName))} has been emailed about it, with a link to pay. You don't need to chase this.</div>`
+                : chargeProblem.emailed==='already-sent' ? `
+                    <div class="charge-problem-next"><strong>${esc(firstName(b.clientName))} was not emailed this time.</strong> Already told once${b.declineEmail&&b.declineEmail.sentAt?`, on ${fmtStamp(b.declineEmail.sentAt)}`:''} &mdash; the same warning isn't sent twice.</div>`
                 : chargeProblem.emailed==='no-email' ? `<div class="charge-problem-next">No email address on file for this client, so they couldn't be told automatically.</div>`
                 : chargeProblem.emailed==='failed' ? `<div class="charge-problem-next">The client could not be emailed about it &mdash; you may want to tell them yourself.</div>` : ''}
+              ${b.clientEmail ? `<div style="margin-top:10px;"><button class="ghost small" data-resend-decline="${b.id}">${resendState && resendState.id===b.id && resendState.busy ? 'Sending…' : `Email ${esc(firstName(b.clientName))} the pay link again`}</button></div>` : ''}
+              ${resendState && resendState.id===b.id && resendState.message ? `<div class="${resendState.ok?'charge-problem-sent':'charge-problem-next'}" style="margin-top:8px;">${esc(resendState.message)}</div>` : ''}
               <div class="note" style="margin-top:8px;">Nothing was taken from the card, and this session is still unbilled.</div>
             </div>` : ''}
           ${emailStatusHtml(b)}
@@ -4186,6 +4236,7 @@ function attachHandlers(){
 
     document.querySelectorAll('[data-mark-complete]').forEach(el=>{ el.onclick = ()=>markComplete(el.getAttribute('data-mark-complete')); });
     document.querySelectorAll('[data-charge]').forEach(el=>{ el.onclick = ()=>chargeAndReceipt(el.getAttribute('data-charge')); });
+    document.querySelectorAll('[data-resend-decline]').forEach(el=>{ el.onclick = ()=>resendDeclineEmail(el.getAttribute('data-resend-decline')); });
     document.querySelectorAll('[data-actual-hours]').forEach(el=>{
       el.oninput = ()=>{
         const id = el.getAttribute('data-actual-hours');
