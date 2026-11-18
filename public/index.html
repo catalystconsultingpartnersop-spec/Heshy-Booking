@@ -507,6 +507,33 @@
   .actual-entry label{display:block;font-size:12.5px;font-weight:600;margin-bottom:8px;}
 
   /* Said where the timer's number would be, when there is no number because nobody ran it. */
+  /* Payments */
+  .pay-list{margin-top:4px;}
+  .pay-month{font-size:11.5px;font-weight:700;letter-spacing:.7px;text-transform:uppercase;
+    color:var(--muted);margin:22px 0 4px;}
+  .pay-row{display:flex;align-items:baseline;justify-content:space-between;gap:14px;
+    padding:12px 0;border-bottom:1px solid var(--line);cursor:pointer;}
+  .pay-row:last-child{border-bottom:none;}
+  .pay-row:hover .pay-who{text-decoration:underline;text-underline-offset:3px;}
+  .pay-who{font-weight:500;font-size:14px;}
+  .pay-sub{color:var(--muted);font-size:12.5px;margin-top:2px;}
+  .pay-amt{font-weight:600;font-size:14.5px;white-space:nowrap;}
+  .pay-pill{font-size:10.5px;font-weight:700;letter-spacing:.4px;text-transform:uppercase;
+    border-radius:3px;padding:2px 6px;margin-left:6px;vertical-align:1px;}
+  .pay-pill.paid{background:#EAF4EC;color:#196F3D;}
+  .pay-pill.owed{background:#FBF0D9;color:#8A6300;}
+
+  /* The confirmation after a charge goes through */
+  .charged-banner{border:1px solid #BFE0C7;background:#F4FAF5;border-radius:8px;
+    padding:15px 17px;margin-bottom:22px;position:relative;}
+  .charged-banner-top{display:flex;align-items:center;gap:9px;font-weight:600;font-size:15px;color:#146034;}
+  .charged-tick{width:19px;height:19px;border-radius:50%;background:#196F3D;color:#fff;
+    display:flex;align-items:center;justify-content:center;font-size:11px;}
+  .charged-banner-line{font-size:13px;color:#2F5B38;margin-top:6px;line-height:1.55;}
+  .charged-banner-links{margin-top:9px;font-size:12.5px;}
+  .charged-banner-links a{color:#146034;}
+  .charged-banner-x{position:absolute;top:10px;right:12px;background:none;border:none;
+    font-size:19px;line-height:1;color:#6E8C76;cursor:pointer;font-family:inherit;padding:2px 5px;}
   .charge-hint{
     margin-bottom:10px;padding:10px 13px;background:#FAF9F6;border-left:3px solid #C9A961;
     border-radius:4px;font-size:13px;line-height:1.6;color:var(--muted);
@@ -835,6 +862,9 @@ let chargeProblem = null;
 // The result of a deliberate "email them again", kept per booking so the answer appears on the
 // session it belongs to rather than as an alert that vanishes.
 let resendState = null;   // { id, busy, ok, message }
+// The confirmation shown after a charge goes through. A charge used to succeed silently: the
+// session left the list and nothing said it had worked.
+let chargeDone = null;    // { id, amount, name, email }
 // Hours typed into the billing box, kept here so a re-render doesn't throw them away. Typing
 // "2" and then touching anything else used to reset the box to whatever the timer had recorded,
 // which for an in-person session was usually nonsense or nothing.
@@ -1103,7 +1133,12 @@ function fmtTime(t){
   const h12 = h%12===0?12:h%12;
   return h12+':'+String(m).padStart(2,'0')+' '+ampm;
 }
-function money(n){ return '$'+n.toFixed(2); }
+function money(n){
+  const v = Number(n) || 0;
+  const neg = v < 0;
+  const [whole, cents] = Math.abs(v).toFixed(2).split('.');
+  return (neg?'-$':'$') + whole.replace(/\B(?=(\d{3})+(?!\d))/g, ',') + '.' + cents;
+}
 
 let calendarBusy = [];
 let jewishHolidayDates = new Set();
@@ -1783,6 +1818,16 @@ async function chargeAndReceipt(id){
     }
     // Only once it has actually been charged is the typed length no longer needed.
     delete billedHoursDraft[id];
+    // Say so. The session is about to leave whichever list it was in, and without this the
+    // whole thing happened in silence.
+    const charged = state.bookings.find(x => x.id === id);
+    chargeDone = {
+      id,
+      amount: (data && data.amount != null) ? data.amount : (charged ? charged.amount : 0),
+      name: charged ? (charged.clientName || 'Client') : 'Client',
+      email: charged ? (charged.clientEmail || '') : ''
+    };
+    resendState = null;
     await loadAdminState();
     render();
   }catch(e){
@@ -3098,9 +3143,23 @@ function renderAdmin(){
       <button class="admin-nav-btn ${adminView==='dashboard'?'active':''}" data-admin-view="dashboard">Dashboard</button>
       <button class="admin-nav-btn ${adminView==='schedule'?'active':''}" data-admin-view="schedule">Schedule</button>
       <button class="admin-nav-btn ${(adminView==='clients'||adminView==='client-detail')?'active':''}" data-admin-view="clients">Clients</button>
+      <button class="admin-nav-btn ${adminView==='payments'?'active':''}" data-admin-view="payments">Payments</button>
       <button class="admin-nav-btn ${adminView==='settings'?'active':''}" data-admin-view="settings">Settings</button>
     </div>
   `;
+
+  // A charge used to succeed in silence: the session dropped off the list and nothing said it
+  // had worked. This stays up until it is dismissed or the page is left, and survives the
+  // session leaving whichever list it was in.
+  const doneBanner = chargeDone ? `
+    <div class="charged-banner">
+      <div class="charged-banner-top"><span class="charged-tick">&#10003;</span> Charged ${money(chargeDone.amount)}</div>
+      <div class="charged-banner-line">${esc(chargeDone.name)}${chargeDone.email?` &middot; receipt emailed to ${esc(chargeDone.email)}`:''}</div>
+      <div class="charged-banner-links">
+        <a href="#" data-go-payments="1">See it in Payments</a>
+        <button class="charged-banner-x" data-dismiss-charged="1" aria-label="Dismiss">&times;</button>
+      </div>
+    </div>` : '';
 
   let body = '';
 
@@ -3251,6 +3310,83 @@ function renderAdmin(){
         </div>
         ` : ''}
       </div>
+    `;
+  }
+
+  // --- Payments ---------------------------------------------------------------------------------
+  // Everything the app has billed, in one place. Before this there was nowhere at all to see
+  // money received: a charge went through and the session simply left the screen.
+  if(adminView==='payments'){
+    const todayDs = dateStr(new Date());
+    const thisMonth = todayDs.slice(0,7);
+    const thisYear = todayDs.slice(0,4);
+
+    const paid = state.bookings
+      .filter(b => b.status==='charged' && (b.amount||0) > 0)
+      .sort((a,b) => (b.chargedAt||0) - (a.chargedAt||0) || b.date.localeCompare(a.date) || b.time.localeCompare(a.time));
+
+    // Sessions that have happened and still owe something, newest first — the ones to chase.
+    const nowMins = (() => { const n = new Date(); return n.getHours()*60 + n.getMinutes(); })();
+    const hasHappened = b => b.date < todayDs ||
+      (b.date === todayDs && (timeToMinC(b.time) + (b.durationMin||60)) <= nowMins);
+    const owing = state.bookings
+      .filter(b => !b.cancelled && b.status!=='charged' && !b.comped && hasHappened(b))
+      .sort((a,b) => b.date.localeCompare(a.date) || b.time.localeCompare(a.time));
+
+    const owedAmount = owing.reduce((sum,b) => {
+      const mins = b.actualMinutes || b.durationMin || 60;
+      const hrs = Math.round((mins/60)*100)/100;
+      return sum + Math.round(hrs * (state.settings.hourlyRate||500) * 100)/100;
+    }, 0);
+    const paidMonth = paid.filter(b => b.date.slice(0,7)===thisMonth).reduce((s,b)=> s + (b.amount||0), 0);
+    const paidYear  = paid.filter(b => b.date.slice(0,4)===thisYear ).reduce((s,b)=> s + (b.amount||0), 0);
+
+    const monthName = ds => new Date(ds+'T00:00:00').toLocaleDateString('en-US',{ month:'long', year:'numeric' });
+
+    let rows = '';
+    if(owing.length){
+      rows += `<div class="pay-month">Awaiting payment</div>`;
+      owing.forEach(b => {
+        const mins = b.actualMinutes || b.durationMin || 60;
+        const hrs = Math.round((mins/60)*100)/100;
+        const due = Math.round(hrs * (state.settings.hourlyRate||500) * 100)/100;
+        const told = b.declineEmail && b.declineEmail.sentAt;
+        rows += `
+          <div class="pay-row" data-view-booking="${b.id}">
+            <div>
+              <div class="pay-who">${esc(b.clientName||'Client')} ${b.lastDeclineCode?`<span class="pay-pill owed">${told?'Link sent':'Card declined'}</span>`:`<span class="pay-pill owed">Not charged</span>`}</div>
+              <div class="pay-sub">${fmtDate(b.date)} &middot; ${mins} min &middot; ${b.type==='virtual'?'online':'in person'}${told?` &middot; emailed ${fmtStamp(b.declineEmail.sentAt)}`:''}</div>
+            </div>
+            <div class="pay-amt">${money(due)}</div>
+          </div>`;
+      });
+    }
+
+    let lastMonth = '';
+    paid.forEach(b => {
+      const m = b.date.slice(0,7);
+      if(m !== lastMonth){ lastMonth = m; rows += `<div class="pay-month">${monthName(b.date)}</div>`; }
+      const mins = b.actualMinutes || b.durationMin || 60;
+      rows += `
+        <div class="pay-row" data-view-booking="${b.id}">
+          <div>
+            <div class="pay-who">${esc(b.clientName||'Client')} <span class="pay-pill paid">Paid</span></div>
+            <div class="pay-sub">${fmtDate(b.date)}${b.chargedAt?`, ${fmtStamp(b.chargedAt)}`:''} &middot; ${mins} min${b.amountOverridden?' &middot; amount edited':''}${b.couponCode?` &middot; ${esc(b.couponCode)}`:''}</div>
+          </div>
+          <div class="pay-amt">${money(b.amount||0)}</div>
+        </div>`;
+    });
+
+    if(!rows) rows = `<div class="note" style="padding:24px 0;">Nothing billed yet. Charges will appear here as you make them.</div>`;
+
+    body = `
+      <div class="dash-stats">
+        <div class="dash-stat"><div class="dash-stat-num">${money(paidMonth)}</div><div class="dash-stat-label">Paid in ${new Date(todayDs+'T00:00:00').toLocaleDateString('en-US',{month:'long'})}</div></div>
+        <div class="dash-stat ${owedAmount>0?'dash-stat-alert':''}"><div class="dash-stat-num">${money(owedAmount)}</div><div class="dash-stat-label">Still owed</div></div>
+        <div class="dash-stat"><div class="dash-stat-num">${money(paidYear)}</div><div class="dash-stat-label">Paid in ${thisYear}</div></div>
+      </div>
+      <div class="pay-list">${rows}</div>
+      <div class="note" style="margin-top:18px;line-height:1.55;">Every charge this app has made, newest first. These are the amounts clients were billed &mdash; Stripe's fees come off separately.</div>
     `;
   }
 
@@ -3686,9 +3822,12 @@ function renderAdmin(){
     `;
   }
 
+  // The banner goes in here rather than at the top of `body`, because each view below assigns to
+  // `body` wholesale and would wipe it.
   return `
     <div class="topbar"><div class="brand">Heshy — Manage</div><div style="display:flex;gap:16px;align-items:center;"><button class="manage-link" id="backToClientBtn">Back to booking</button><button class="manage-link" id="adminLogoutBtn">Log out</button></div></div>
     ${nav}
+    ${doneBanner}
     ${body}
   `;
 }
@@ -4237,6 +4376,22 @@ function attachHandlers(){
     document.querySelectorAll('[data-mark-complete]').forEach(el=>{ el.onclick = ()=>markComplete(el.getAttribute('data-mark-complete')); });
     document.querySelectorAll('[data-charge]').forEach(el=>{ el.onclick = ()=>chargeAndReceipt(el.getAttribute('data-charge')); });
     document.querySelectorAll('[data-resend-decline]').forEach(el=>{ el.onclick = ()=>resendDeclineEmail(el.getAttribute('data-resend-decline')); });
+    document.querySelectorAll('[data-dismiss-charged]').forEach(el=>{ el.onclick = ()=>{ chargeDone = null; render(); }; });
+    document.querySelectorAll('[data-go-payments]').forEach(el=>{ el.onclick = ev=>{ ev.preventDefault(); chargeDone = null; adminView = 'payments'; render(); }; });
+    // A row in Payments opens the session it belongs to, so a figure can always be traced back.
+    document.querySelectorAll('[data-view-booking]').forEach(el=>{ el.onclick = ()=>{
+      const id = el.getAttribute('data-view-booking');
+      const b = state.bookings.find(x => x.id === id);
+      if(!b) return;
+      adminView = 'dashboard';
+      // The dashboard's selected-day block lists that date's sessions whatever their status, so
+      // picking the date is enough — the stat filter above it is left alone.
+      selectedDashboardDate = b.date;
+      expandedSessions[id] = true;
+      render();
+      const node = document.querySelector(`[data-toggle-session="${id}"]`);
+      if(node) node.scrollIntoView({ block:'center' });
+    }; });
     document.querySelectorAll('[data-actual-hours]').forEach(el=>{
       el.oninput = ()=>{
         const id = el.getAttribute('data-actual-hours');

@@ -259,10 +259,12 @@ export default async function handler(req, res) {
     // The charge has already gone through at Stripe, so this must record it. Written under the
     // lock against a fresh read, so a booking saved elsewhere in the meantime isn't erased by
     // writing back the copy this request loaded a few seconds ago.
+    const chargedAt = Date.now();
     booking.status = 'charged';
     booking.amount = amountCents / 100;
     booking.actualMinutes = mins;
     booking.stripePaymentIntentId = paymentIntent.id;
+    booking.chargedAt = chargedAt;
     if (overridden) booking.amountOverridden = true;
     await mutate(fresh => {
       const b = (fresh.bookings || []).find(x => x.id === bookingId);
@@ -271,6 +273,9 @@ export default async function handler(req, res) {
       b.amount = amountCents / 100;
       b.actualMinutes = mins;
       b.stripePaymentIntentId = paymentIntent.id;
+      // When the money actually moved, as opposed to when the session was. Payments sorts on
+      // this; sessions charged before it existed fall back to their own date.
+      b.chargedAt = chargedAt;
       if (overridden) b.amountOverridden = true;
     });
 
