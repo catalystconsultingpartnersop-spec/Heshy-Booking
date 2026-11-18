@@ -117,8 +117,12 @@ check('a problem is marked differently from a reminder', /session-flag\.bad/.tes
 // --- the three other Manage tabs, and the holidays ----------------------------------------------
 // Clients: the list took the latest booking by date and called it "last met", so a session that
 // hadn't happened yet showed as a past one — and counted towards how often they'd met.
+// Dates alone were not enough: a session that ran this morning still counted as "to come", so a
+// client seen and billed today read "not met yet - next today". Split on the clock instead.
 check('a session that has not happened is not counted as one you have had',
-      /const past = clientBookings\.filter\(b=>b\.date < todayStr\)/.test(html));
+      /const past = clientBookings\.filter\(isDone\)/.test(html));
+check('...and one that finished earlier today counts as met',
+      /b\.date === todayStr && \(timeToMinC\(b\.time\) \+ \(b\.durationMin\|\|60\)\) <= nowMinsList/.test(html));
 check('...and an upcoming one is labelled as next, not last', /'next ' \+ fmtDate\(nextDate\)/.test(html));
 check('...someone you have never met says so', /not met yet/.test(html));
 check('...and cancelled sessions do not count', /b\.clientId===c\.id && !b\.cancelled/.test(html));

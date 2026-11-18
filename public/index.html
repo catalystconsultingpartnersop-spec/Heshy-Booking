@@ -1033,10 +1033,15 @@ async function stopDictate(){
       // focus out of the box he is about to carry on typing in.
       const field = key.slice(0, key.indexOf(':'));
       const id = key.slice(key.indexOf(':') + 1);
-      const rec = state.bookings.find(x => x.id === id);
-      if(rec){
-        if(field === 'summary') rec.summary = box.value; else rec.clientSummary = box.value;
-        await saveState();
+      if(field === 'client-notes'){
+        const client = state.clients.find(x => x.id === id);
+        if(client){ client.notes = box.value; await saveState(); }
+      } else {
+        const rec = state.bookings.find(x => x.id === id);
+        if(rec){
+          if(field === 'summary') rec.summary = box.value; else rec.clientSummary = box.value;
+          await saveState();
+        }
       }
     }
     setDictateUi(key, { status: data.polished === false ? 'Written down (tidying failed, so these are the raw words).' : 'Written down and tidied up.', busy:false });
@@ -3695,8 +3700,14 @@ function renderAdmin(){
     const todayStr = dateStr(new Date());
     const clientsWithMeta = state.clients.map(c=>{
       const clientBookings = state.bookings.filter(b=>b.clientId===c.id && !b.cancelled);
-      const past = clientBookings.filter(b=>b.date < todayStr).sort((a,b)=>(b.date+b.time).localeCompare(a.date+a.time));
-      const future = clientBookings.filter(b=>b.date >= todayStr).sort((a,b)=>(a.date+a.time).localeCompare(b.date+b.time));
+      // Split on the clock, not the date. On dates alone a session that ran this morning counted
+      // as still to come, so a client he had seen and billed today read "not met yet · next
+      // today" — and the session never showed as unbilled either.
+      const nowMinsList = (() => { const n = new Date(); return n.getHours()*60 + n.getMinutes(); })();
+      const isDone = b => b.date < todayStr ||
+        (b.date === todayStr && (timeToMinC(b.time) + (b.durationMin||60)) <= nowMinsList);
+      const past = clientBookings.filter(isDone).sort((a,b)=>(b.date+b.time).localeCompare(a.date+a.time));
+      const future = clientBookings.filter(b=>!isDone(b)).sort((a,b)=>(a.date+a.time).localeCompare(b.date+b.time));
       // What he's owed: a session that has happened and hasn't been charged or comped.
       const owing = past.filter(b=>b.status === 'scheduled');
       return {
@@ -3822,6 +3833,7 @@ function renderAdmin(){
         <div class="admin-block">
           <h2 class="sect">My notes</h2>
           <div class="note" style="margin-bottom:8px;">Private &mdash; only you see this. Never shown to the client.</div>
+          ${dictateBarHtml(c.id, 'client-notes')}
           <textarea id="client-notes-${c.id}" data-client-notes="${c.id}" placeholder="Anything you want to remember about this client&hellip;" style="min-height:100px;">${esc(c.notes)}</textarea>
           <div id="client-notes-saved-${c.id}" style="font-size:12px;color:var(--muted);margin-top:4px;"></div>
         </div>
