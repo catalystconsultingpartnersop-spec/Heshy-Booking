@@ -697,6 +697,84 @@ export default async function handler(req, res) {
       }
     }
 
+    // --- Dictating a note ---------------------------------------------------------------------
+    //
+    // Heshy talks into the notes box and gets back tidy prose. Two steps, both through the
+    // OpenAI key the app already uses for session transcripts: Whisper turns the audio into
+    // words, then a second pass cleans it up.
+    //
+    // The cleanup is deliberately conservative. He asked for his words polished, not rewritten:
+    // grammar, punctuation and the debris of speech, and nothing else. No summarising, no
+    // reorganising, no adding a point he did not make.
+    if (req.method === 'POST' && req.body?.action === 'dictate') {
+      if (!process.env.OPENAI_API_KEY) {
+        return res.status(503).json({ error: 'Dictation is not set up on this app yet.' });
+      }
+      const b64 = String(req.body.audio || '');
+      if (!b64) return res.status(400).json({ error: 'No audio arrived.' });
+      // Vercel caps a request body at 4.5MB. At the bitrate the recorder uses that is many
+      // minutes of speech, but a clear message beats a generic 413 if it is ever hit.
+      if (b64.length > 5_500_000) {
+        return res.status(413).json({ error: 'That recording is too long to send in one go. Try again in shorter pieces.' });
+      }
+      const mime = String(req.body.mimeType || 'audio/webm').split(';')[0];
+      const ext = mime.includes('mp4') ? 'mp4' : mime.includes('ogg') ? 'ogg' : mime.includes('mpeg') ? 'mp3' : 'webm';
+      try {
+        const audio = Buffer.from(b64, 'base64');
+        if (!audio.length) return res.status(400).json({ error: 'That recording came through empty.' });
+
+        const form = new FormData();
+        form.append('file', new Blob([audio], { type: mime }), 'note.' + ext);
+        form.append('model', 'whisper-1');
+        const wr = await fetch('https://api.openai.com/v1/audio/transcriptions', {
+          method: 'POST',
+          headers: { Authorization: `Bearer ${process.env.OPENAI_API_KEY}` },
+          body: form
+        });
+        if (!wr.ok) {
+          const t = await wr.text().catch(() => '');
+          await logError('dictate-transcribe', new Error(t.slice(0, 300)), {});
+          return res.status(502).json({ error: "That didn't come through. Try again." });
+        }
+        const raw = ((await wr.json()).text || '').trim();
+        if (!raw) return res.status(200).json({ ok: true, text: '', empty: true });
+
+        const polishPrompt = `You tidy up notes that someone has just dictated out loud. You are a copy editor, not a writer.
+
+Do: fix grammar, punctuation, capitalisation and sentence breaks; remove filler ("um", "uh", "like", "you know"), false starts and repeated words; fix obvious speech-to-text mishearings where the intended word is clear from context; start a new paragraph where the speaker clearly moved to a new subject.
+
+Never: add any information, detail, example or conclusion that was not said; remove any point that was said; summarise, shorten or condense; turn prose into bullet points unless the speaker was plainly dictating a list; change terminology, names or figures; make the tone more formal or more corporate; add a greeting, heading, preamble or sign-off.
+
+Keep the speaker's own words, phrasing and voice. The dictation may mix English and Yiddish or Hebrew; keep those words as they were spoken rather than translating them.
+
+Return only the tidied text, with nothing else around it.`;
+        const gr = await fetch('https://api.openai.com/v1/chat/completions', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${process.env.OPENAI_API_KEY}` },
+          body: JSON.stringify({
+            model: 'gpt-4o-mini',
+            messages: [
+              { role: 'system', content: polishPrompt },
+              { role: 'user', content: raw }
+            ],
+            temperature: 0.2
+          })
+        });
+        if (!gr.ok) {
+          // The words are worth more than the polish, so hand back the raw transcript rather
+          // than losing what he said.
+          const t = await gr.text().catch(() => '');
+          await logError('dictate-polish', new Error(t.slice(0, 300)), {});
+          return res.status(200).json({ ok: true, text: raw, polished: false });
+        }
+        const polished = ((await gr.json()).choices?.[0]?.message?.content || '').trim();
+        return res.status(200).json({ ok: true, text: polished || raw, polished: !!polished });
+      } catch (err) {
+        await logError('dictate', err, {});
+        return res.status(500).json({ error: 'Something went wrong with that recording. Try again.' });
+      }
+    }
+
     // Registers the webhook with Stripe using the secret key the app already holds, and stores
     // the signing secret Stripe returns. Nothing to do in the Stripe dashboard.
     if (req.method === 'POST' && req.body?.action === 'setup-stripe-webhook') {

@@ -507,6 +507,19 @@
   .actual-entry label{display:block;font-size:12.5px;font-weight:600;margin-bottom:8px;}
 
   /* Said where the timer's number would be, when there is no number because nobody ran it. */
+  /* Dictating a note */
+  .dictate-bar{display:flex;align-items:center;gap:10px;margin-bottom:8px;flex-wrap:wrap;}
+  .dictate-btn{display:inline-flex;align-items:center;gap:7px;background:none;color:var(--ink);
+    border:1px solid var(--line-strong);border-radius:5px;padding:7px 13px;font-family:inherit;
+    font-size:13px;font-weight:500;cursor:pointer;}
+  .dictate-btn:hover{border-color:var(--ink);}
+  .dictate-btn:disabled{opacity:.55;cursor:not-allowed;}
+  .dictate-btn.recording{background:#A5433A;border-color:#A5433A;color:#fff;}
+  .dictate-btn.recording .dictate-ico{animation:dictate-pulse 1.1s ease-in-out infinite;}
+  @keyframes dictate-pulse{0%,100%{opacity:1;}50%{opacity:.35;}}
+  .dictate-ico{font-size:13px;line-height:1;}
+  .dictate-status{font-size:12.5px;color:var(--muted);line-height:1.45;}
+
   /* Payments */
   .pay-list{margin-top:4px;}
   .pay-month{font-size:11.5px;font-weight:700;letter-spacing:.7px;text-transform:uppercase;
@@ -888,6 +901,151 @@ let resendState = null;   // { id, busy, ok, message }
 // The confirmation shown after a charge goes through. A charge used to succeed silently: the
 // session left the list and nothing said it had worked.
 let chargeDone = null;    // { id, amount, name, email }
+// --- Dictating a note -----------------------------------------------------------------------
+// Heshy talks, the app writes it down and tidies it up. One recorder at a time, keyed by which
+// box it is filling, so the two notes fields can't both be listening at once.
+//
+// Nothing in here re-renders while a recording is running or a transcript is being inserted.
+// Re-rendering rebuilds the textarea from state, which would throw away anything typed since
+// the last save — the same trap that made the pay page impossible to use. The button's label
+// and the status line are written straight into the DOM instead.
+let dictating = null;   // { key, recorder, stream, chunks, startedAt, timer }
+let dictateBusy = null; // key of the box waiting on a transcript
+
+function dictateKey(id, field){ return `${field}:${id}`; }
+
+function dictateBarHtml(id, field){
+  const key = dictateKey(id, field);
+  return `
+    <div class="dictate-bar">
+      <button type="button" class="dictate-btn" data-dictate="${key}" aria-label="Dictate this note">
+        <span class="dictate-ico">&#127908;</span><span class="dictate-label">Dictate</span>
+      </button>
+      <span class="dictate-status" data-dictate-status="${key}"></span>
+    </div>`;
+}
+
+function dictateEls(key){
+  return {
+    btn: document.querySelector(`[data-dictate="${key}"]`),
+    status: document.querySelector(`[data-dictate-status="${key}"]`),
+    box: (() => {
+      const [field, id] = [key.slice(0, key.indexOf(':')), key.slice(key.indexOf(':')+1)];
+      return document.querySelector(`[data-${field}="${id}"]`);
+    })()
+  };
+}
+function setDictateUi(key, { label, status, recording, busy }){
+  const { btn, status: st } = dictateEls(key);
+  if(btn){
+    const lab = btn.querySelector('.dictate-label');
+    if(lab && label != null) lab.textContent = label;
+    btn.classList.toggle('recording', !!recording);
+    btn.disabled = !!busy;
+  }
+  if(st && status != null) st.textContent = status;
+}
+
+async function toggleDictate(key){
+  if(dictateBusy) return;
+  if(dictating && dictating.key === key){ await stopDictate(); return; }
+  if(dictating){ await stopDictate(); }
+
+  if(!navigator.mediaDevices || !window.MediaRecorder){
+    setDictateUi(key, { status: "This browser can't record audio. Type the note instead." });
+    return;
+  }
+  let stream;
+  try{
+    stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+  }catch(e){
+    setDictateUi(key, { status: 'No microphone access. Allow the mic for this site and try again.' });
+    return;
+  }
+  const mimeType = ['audio/webm;codecs=opus','audio/webm','audio/mp4','audio/ogg']
+    .find(t => MediaRecorder.isTypeSupported && MediaRecorder.isTypeSupported(t)) || '';
+  const recorder = mimeType ? new MediaRecorder(stream, { mimeType, audioBitsPerSecond: 32000 })
+                            : new MediaRecorder(stream);
+  const chunks = [];
+  recorder.ondataavailable = e => { if(e.data && e.data.size) chunks.push(e.data); };
+  recorder.start();
+
+  const startedAt = Date.now();
+  const timer = setInterval(() => {
+    const s = Math.floor((Date.now() - startedAt)/1000);
+    setDictateUi(key, { status: `Listening — ${String(Math.floor(s/60)).padStart(2,'0')}:${String(s%60).padStart(2,'0')}. Press Stop when you're done.` });
+  }, 500);
+
+  dictating = { key, recorder, stream, chunks, startedAt, timer };
+  setDictateUi(key, { label: 'Stop', status: 'Listening…', recording: true });
+}
+
+async function stopDictate(){
+  if(!dictating) return;
+  const { key, recorder, stream, chunks, timer } = dictating;
+  dictating = null;
+  clearInterval(timer);
+
+  await new Promise(resolve => {
+    recorder.onstop = resolve;
+    try{ recorder.stop(); }catch(e){ resolve(); }
+  });
+  stream.getTracks().forEach(t => t.stop());
+
+  if(!chunks.length){
+    setDictateUi(key, { label: 'Dictate', status: 'Nothing was recorded.', recording: false });
+    return;
+  }
+  dictateBusy = key;
+  setDictateUi(key, { label: 'Dictate', status: 'Writing it up…', recording: false, busy: true });
+
+  try{
+    const blob = new Blob(chunks, { type: recorder.mimeType || 'audio/webm' });
+    const b64 = await new Promise((resolve, reject) => {
+      const fr = new FileReader();
+      fr.onload = () => resolve(String(fr.result).split(',')[1] || '');
+      fr.onerror = reject;
+      fr.readAsDataURL(blob);
+    });
+    const r = await fetch('/api/admin-data', {
+      method:'POST',
+      headers:{ 'Content-Type':'application/json', 'X-Admin-Token': adminToken },
+      body: JSON.stringify({ action:'dictate', audio: b64, mimeType: recorder.mimeType || 'audio/webm' })
+    });
+    const data = await r.json();
+    if(data.error){ setDictateUi(key, { status: data.error, busy:false }); dictateBusy = null; return; }
+    if(data.empty || !data.text){ setDictateUi(key, { status: "Didn't catch any words there.", busy:false }); dictateBusy = null; return; }
+
+    // Added to whatever is already in the box, at the cursor if there is one, rather than
+    // replacing what he has written.
+    const { box } = dictateEls(key);
+    if(box){
+      const existing = box.value;
+      const endsClean = /\s$/.test(existing);
+      const endsSentence = /[.!?]$/.test(existing.trim());
+      const sep = !existing ? '' : endsClean ? '' : (endsSentence ? ' ' : '\n\n');
+      box.value = existing + sep + data.text;
+      box.focus();
+      box.setSelectionRange(box.value.length, box.value.length);
+      box.scrollTop = box.scrollHeight;
+      // Saved WITHOUT a re-render. Firing the box's change handler would call updateBooking,
+      // which renders, which rebuilds this whole block — wiping the status line and yanking the
+      // focus out of the box he is about to carry on typing in.
+      const field = key.slice(0, key.indexOf(':'));
+      const id = key.slice(key.indexOf(':') + 1);
+      const rec = state.bookings.find(x => x.id === id);
+      if(rec){
+        if(field === 'summary') rec.summary = box.value; else rec.clientSummary = box.value;
+        await saveState();
+      }
+    }
+    setDictateUi(key, { status: data.polished === false ? 'Written down (tidying failed, so these are the raw words).' : 'Written down and tidied up.', busy:false });
+  }catch(e){
+    setDictateUi(key, { status: 'That recording could not be sent. Try again.', busy:false });
+  }
+  dictateBusy = null;
+}
+
 // Payments rows: which row's menu is open, and the note being written.
 let payMenuOpen = null;    // booking id
 let payNoteEditing = null; // booking id
@@ -3015,9 +3173,11 @@ function renderAdmin(){
           ${!b.cancelled ? meetBlock : ''}
           ${(!b.cancelled && b.type==='virtual' && (b.calendarEventId || b.meetLink)) ? `<button class="ghost small" data-fetch-gemini="${b.id}" style="margin-bottom:14px;">Fetch notes &amp; duration</button><span id="gemini-msg-${b.id}" style="font-size:12.5px;margin-left:10px;"></span>` : ''}
           <label>Internal notes <span class="note" style="display:inline;">(private &mdash; only you see this)</span></label>
+          ${dictateBarHtml(b.id, 'summary')}
           <textarea class="notes-textarea" data-summary="${b.id}">${esc(b.summary)}</textarea>
           <label style="margin-top:14px;display:block;">Client-facing summary <span class="note" style="display:inline;">(shown to the client in their portal)</span></label>
           <button class="ghost small" data-copy-to-client="${b.id}" style="margin-bottom:8px;">Copy internal notes here</button>
+          ${dictateBarHtml(b.id, 'clientsummary')}
           <textarea class="notes-textarea" data-clientsummary="${b.id}">${esc(b.clientSummary)}</textarea>
         </div>
     `;
@@ -3220,10 +3380,27 @@ function renderAdmin(){
     if(!selectedDashboardDate) selectedDashboardDate = todayDs;
     const weekAheadDs = dateStr(new Date(Date.now() + 7*86400000));
 
+    // "Upcoming" means still to come. It used to mean any date from today onward, so a session
+    // that finished this morning — charged, paid, done — was still counted among the sessions
+    // ahead of him, on the dashboard and in the Next 7 days figure.
+    //
+    // Judged on the clock, not on whether it has been billed: a session paid for in advance is
+    // still coming up, and one that ran this morning is over whether or not it has been charged.
+    const nowMinsDash = (() => { const n = new Date(); return n.getHours()*60 + n.getMinutes(); })();
+    const stillToCome = b => !b.cancelled && (
+      b.date > todayDs ||
+      (b.date === todayDs && (timeToMinC(b.time) + (b.durationMin||60)) > nowMinsDash)
+    );
+
     const todayBookings = state.bookings.filter(b=>b.date===todayDs && !b.cancelled).sort((a,b)=>a.time.localeCompare(b.time));
-    const upcomingBookings = state.bookings.filter(b=>b.date>=todayDs && !b.cancelled).sort((a,b)=> a.date===b.date ? a.time.localeCompare(b.time) : a.date.localeCompare(b.date));
-    const thisWeekBookings = state.bookings.filter(b=>b.date>=todayDs && b.date<=weekAheadDs && !b.cancelled).sort((a,b)=> a.date===b.date ? a.time.localeCompare(b.time) : a.date.localeCompare(b.date));
-    const unbilledBookings = state.bookings.filter(b=>b.date<todayDs && b.status==='scheduled' && !b.cancelled).sort((a,b)=> a.date===b.date ? a.time.localeCompare(b.time) : a.date.localeCompare(b.date));
+    const upcomingBookings = state.bookings.filter(stillToCome).sort((a,b)=> a.date===b.date ? a.time.localeCompare(b.time) : a.date.localeCompare(b.date));
+    const thisWeekBookings = state.bookings.filter(b=> stillToCome(b) && b.date<=weekAheadDs).sort((a,b)=> a.date===b.date ? a.time.localeCompare(b.time) : a.date.localeCompare(b.date));
+    // A session that ran this morning and hasn't been billed needs billing today, not tomorrow.
+    // This used to require the date to be strictly in the past, so same-day work — the normal
+    // case — never appeared here at all.
+    const unbilledBookings = state.bookings
+      .filter(b => !b.cancelled && b.status === 'scheduled' && !b.writtenOff && !stillToCome(b))
+      .sort((a,b) => a.date===b.date ? a.time.localeCompare(b.time) : a.date.localeCompare(b.date));
 
     if(!dashboardStatFilter) dashboardStatFilter = 'today';
 
@@ -3252,17 +3429,28 @@ function renderAdmin(){
       today:    { title: 'Today',          caption: '', list: todayBookings },
       week:     { title: 'Next 7 days',    caption: '', list: thisWeekBookings },
       billing:  { title: 'Needs billing',  caption: 'Sessions whose date has already passed, that you haven\u2019t charged or marked complete yet. Charging or comping a session removes it from this list.', list: unbilledBookings },
-      upcoming: { title: 'Upcoming total', caption: 'Every session booked from today onward.', list: upcomingBookings }
+      upcoming: { title: 'Upcoming total', caption: 'Every session still to come. Sessions that have already finished drop off, whether or not they have been billed.', list: upcomingBookings }
     };
     const active = filterMeta[dashboardStatFilter];
     const filteredListHtml = active.list.length===0
-      ? `<div class="empty">Nothing here.</div>`
-      : active.list.map(b=>sessionCardHtml(b)).join('');
+      ? `<div class="empty" data-dash-list="1">Nothing here.</div>`
+      : `<div data-dash-list="1">${active.list.map(b=>sessionCardHtml(b)).join('')}</div>`;
 
     // Exclude cancelled, matching the "Today" counter above — the two used to disagree, so a
     // cancelled session still appeared in this list while the number said otherwise.
-    const todayOnlyBookings = state.bookings.filter(b=>b.date===todayDs && !b.cancelled).sort((a,b)=>a.time.localeCompare(b.time));
-    const todayOnlyHtml = todayOnlyBookings.length===0 ? `<div class="empty">No sessions today.</div>` : todayOnlyBookings.map(b=>sessionCardHtml(b)).join('');
+    // Only the filters OTHER than "today" draw a list above this block — see the assembly at the
+    // end of this view. Deduplicating against a list that isn't on the page would empty the Today
+    // block for no reason, which is exactly what it did for a moment.
+    const shownAbove = dashboardStatFilter !== 'today'
+      ? new Set(active.list.map(b => b.id))
+      : new Set();
+    const todayOnlyBookings = state.bookings
+      .filter(b => b.date===todayDs && !b.cancelled && !shownAbove.has(b.id))
+      .sort((a,b)=>a.time.localeCompare(b.time));
+    const todayCount = state.bookings.filter(b => b.date===todayDs && !b.cancelled).length;
+    const todayOnlyHtml = todayOnlyBookings.length===0
+      ? `<div class="empty">${todayCount ? 'Every session today is in the list above.' : 'No sessions today.'}</div>`
+      : todayOnlyBookings.map(b=>sessionCardHtml(b)).join('');
     const fixedTodayBlock = `
       <div class="admin-block">
         <h2 class="sect">Today</h2>
@@ -3564,7 +3752,12 @@ function renderAdmin(){
       const nowDs = dateStr(new Date());
       const nowTimeStr = (()=>{ const d=new Date(); return String(d.getHours()).padStart(2,'0')+':'+String(d.getMinutes()).padStart(2,'0'); })();
       const pastBookings = clientBookings.filter(b=> b.date < nowDs || (b.date===nowDs && b.time <= nowTimeStr));
-      const upcomingBookings = clientBookings.filter(b=> b.date > nowDs || (b.date===nowDs && b.time > nowTimeStr));
+      // Same rule as the dashboard: still to come means not finished yet, and never a session
+      // that was cancelled.
+      const nowMinsClient = timeToMinC(nowTimeStr);
+      const upcomingBookings = clientBookings.filter(b => !b.cancelled && (
+        b.date > nowDs || (b.date === nowDs && (timeToMinC(b.time) + (b.durationMin||60)) > nowMinsClient)
+      ));
       const sessionCount = pastBookings.length;
       const firstBooking = pastBookings.slice().sort((a,b)=>(a.date+a.time).localeCompare(b.date+b.time))[0];
       const lastBooking = pastBookings[0];
@@ -4715,6 +4908,7 @@ function attachHandlers(){
       };
     });
     document.querySelectorAll('[data-meet]').forEach(el=>{ el.onchange = ()=>updateBooking(el.getAttribute('data-meet'), { meetLink: el.value }); });
+    document.querySelectorAll('[data-dictate]').forEach(el=>{ el.onclick = ev=>{ ev.preventDefault(); toggleDictate(el.getAttribute('data-dictate')); }; });
     document.querySelectorAll('[data-summary]').forEach(el=>{ el.onchange = ()=>updateBooking(el.getAttribute('data-summary'), { summary: el.value }); });
     document.querySelectorAll('[data-clientsummary]').forEach(el=>{ el.onchange = ()=>updateBooking(el.getAttribute('data-clientsummary'), { clientSummary: el.value }); });
     document.querySelectorAll('[data-copy-to-client]').forEach(el=>{
